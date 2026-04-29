@@ -1,0 +1,109 @@
+{
+  "name": "retail-pos",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "npm run build:main && concurrently \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "build:main": "tsc --project tsconfig.main.json",
+    "build": "npm run build:main && vite build",
+    "dist": "npm run build && electron-builder",
+    "postinstall": "electron-rebuild",
+    "electron:build": "npm run dist",
+    "build:mac": "npm run build && electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.retailpos.app",
+    "productName": "Retail POS",
+    "directories": {
+      "output": "release"
+    },
+    "extraResources": [
+      "softwarelogo.png"
+    ],
+    "files": [
+      "dist/**",
+      "dist-electron/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "softwarelogo.png",
+      "forceCodeSigning": false
+    },
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "softwarelogo.png",
+      "category": "public.app-category.business",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 410,
+          "y": 150,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 130,
+          "y": 150,
+          "type": "file"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "RetailPOS Setup.exe"
+    }
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "better-sqlite3": "^12.8.0",
+    "clsx": "^2.1.1",
+    "crypto": "^1.0.1",
+    "dayjs": "^1.11.20",
+    "lucide-react": "^0.577.0",
+    "next-themes": "^0.4.6",
+    "pdf-parse": "^2.4.5",
+    "pdfkit": "^0.18.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router-dom": "^7.13.1",
+    "sonner": "^2.0.7",
+    "tailwind-merge": "^3.5.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "autoprefixer": "^10.4.27",
+    "concurrently": "^9.2.1",
+    "electron": "^41.0.2",
+    "electron-builder": "^26.8.1",
+    "electron-rebuild": "^3.2.9",
+    "postcss": "^8.5.8",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.0",
+    "wait-on": "^9.0.4"
+  }
+}

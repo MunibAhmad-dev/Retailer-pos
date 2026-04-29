@@ -1,0 +1,95 @@
+export interface SubscriptionState {
+  isActive: boolean;
+  isGracePeriod: boolean;
+  isExpired: boolean;
+  daysRemaining: number;
+  plan: 'monthly' | 'yearly' | 'lifetime' | 'none';
+  expiryDate: string | null;
+}
+
+class SubscriptionService {
+  private state: SubscriptionState | null = null;
+  private readonly GRACE_PERIOD_DAYS = 3;
+
+  public async initialize(): Promise<SubscriptionState> {
+    try {
+      const res = await (window as any).api.isActivated();
+      
+      if (!res.success || !res.activated) {
+        return this.setDefaultState();
+      }
+
+      // Legacy MD5 license logic (No expiry date) -> Lifetime
+      if (!res.license) {
+        this.state = {
+          isActive: true,
+          isGracePeriod: false,
+          isExpired: false,
+          daysRemaining: 9999,
+          plan: 'lifetime',
+          expiryDate: null
+        };
+        return this.state;
+      }
+
+      // JSON Base64 License
+      const { plan, expiry } = res.license;
+      if (!expiry) {
+        return this.setDefaultState();
+      }
+
+      const expiryDate = new Date(expiry);
+      const now = new Date();
+      
+      // Calculate days remaining
+      const msDiff = expiryDate.getTime() - now.getTime();
+      const daysRemaining = Math.ceil(msDiff / (1000 * 60 * 60 * 24));
+
+      const isExpired = daysRemaining < 0;
+      const isGracePeriod = isExpired && daysRemaining >= -this.GRACE_PERIOD_DAYS;
+      const isActive = daysRemaining >= 0 || isGracePeriod;
+
+      this.state = {
+        isActive,
+        isGracePeriod,
+        isExpired: !isActive, // Strictly dead after grace period
+        daysRemaining,
+        plan: plan || 'monthly',
+        expiryDate: expiry
+      };
+
+      return this.state;
+    } catch (e) {
+      console.error("Subscription initialization failed", e);
+      return this.setDefaultState();
+    }
+  }
+
+  public getState(): SubscriptionState {
+    if (!this.state) return this.setDefaultState();
+    return this.state;
+  }
+
+  public canAccess(routeName: string): boolean {
+    const s = this.getState();
+    if (s.isActive || s.isGracePeriod || s.plan === 'lifetime') return true;
+    
+    // If fully expired, only allow critical operational pages to prevent data hostage situations
+    const allowedWhenExpired = ['sales', 'settings', 'subscription', 'about'];
+    return allowedWhenExpired.includes(routeName);
+  }
+
+  private setDefaultState(): SubscriptionState {
+    this.state = {
+      isActive: false,
+      isGracePeriod: false,
+      isExpired: true,
+      daysRemaining: 0,
+      plan: 'none',
+      expiryDate: null
+    };
+    return this.state;
+  }
+}
+
+export const subService = new SubscriptionService();
