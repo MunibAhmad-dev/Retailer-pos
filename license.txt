@@ -1,0 +1,13 @@
+END USER LICENSE AGREEMENT (EULA)
+
+1. PROPRIETARY RIGHTS. The Software is licensed, not sold. This agreement only gives you some rights to use the software.
+
+2. LICENSE. This software license is tied to your business name and activation key. It is valid only for the duration specified in your activation plan.
+
+3. RESTRICTIONS. You may not reverse engineer, decompile, or disassemble the software.
+
+4. EXPIRATION. Upon expiration of your license, access to certain features of the software will be restricted until a new activation key is provided.
+
+5. NO WARRANTY. The software is provided "as is" without any warranty of any kind.
+
+Please check the box below to accept these terms and proceed with installation.

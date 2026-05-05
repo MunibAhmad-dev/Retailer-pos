@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Plus, Minus, Search, ShoppingCart as CartIcon, X,
-  CreditCard, Printer, RefreshCw, PenLine, CheckCircle, Loader2
+  CreditCard, Printer, RefreshCw, PenLine, CheckCircle, Loader2, AlertTriangle, Package, Users
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { cn } from '../lib/utils';
 import { useNotifications } from '../components/NotificationProvider';
 import {
@@ -19,6 +20,7 @@ import {
 import { useLocation } from 'react-router-dom';
 import { usePagination } from '../hooks/usePagination';
 import { LoadMoreButton } from '../components/Pagination';
+import AnimatedList from '../components/AnimatedList';
 
 interface CartItem {
   id: string;
@@ -28,6 +30,8 @@ interface CartItem {
   quantity: number;
   is_custom: boolean;
   stock?: number;
+  metadata?: any;
+  product_type?: string;
 }
 
 interface Product {
@@ -37,6 +41,8 @@ interface Product {
   category: string;
   stock?: number;
   unit?: string;
+  metadata?: any;
+  product_type?: string;
 }
 
 interface Customer {
@@ -48,6 +54,8 @@ interface Customer {
 interface Settings {
   store_name: string; store_phone: string; store_address: string;
   receipt_footer: string; store_logo: string;
+  invoice_style?: string; // 'thermal' | 'formal'
+  invoice_notes?: string;
 }
 
 interface ReceiptData {
@@ -61,6 +69,8 @@ interface ReceiptData {
   date: string;
   customerPhone?: string;
 }
+
+import RegisterManager from '../components/RegisterManager';
 
 const fmtPKR = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
 
@@ -209,6 +219,7 @@ export default function Sales() {
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | ''>('');
+  const [customerSearch, setCustomerSearch] = useState('');
   
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'online'>('cash');
   const [discountValue, setDiscountValue] = useState<string>('');
@@ -218,6 +229,8 @@ export default function Sales() {
   const [amountPaid, setAmountPaid] = useState<string>('');
   
   const [showAddCustomer, setShowAddCustomer] = useState(false);
+  const [currentRegister, setCurrentRegister] = useState<any>(null);
+  const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
 
@@ -239,7 +252,19 @@ export default function Sales() {
     loadProducts(); 
     loadCustomers(); 
     loadSettings(); 
+    checkRegister();
   }, []);
+
+  const checkRegister = async () => {
+    try {
+      const res = await window.api.getCurrentRegister();
+      if (res.success) {
+        setCurrentRegister(res.data);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const loadCustomers = async () => {
     try { 
@@ -250,6 +275,13 @@ export default function Sales() {
         const cid = params.get('customer_id');
         if (cid) {
           setSelectedCustomerId(Number(cid));
+        } else {
+          // Default to Walk-in customer
+          const walkin = res.data.find((c: any) => c.name.toLowerCase().includes('walk-in'));
+          if (walkin) {
+            setSelectedCustomerId(walkin.id);
+            setCustomerSearch(walkin.name);
+          }
         }
       }
     } catch { }
@@ -285,8 +317,12 @@ export default function Sales() {
     (p.barcode || '').toLowerCase().includes(searchTerm.toLowerCase())
   ), [products, searchTerm]);
 
-  // Show 20 initially (fills a POS grid well), then load 10 more at a time
-  const { visible: visibleProducts, hasMore, loadMore, total: prodTotal, showing: prodShowing } = usePagination(filteredProducts, 10, 2);
+  const filteredCustomers = useMemo(() => customers.filter((c) =>
+    c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
+    (c.phone || '').toLowerCase().includes(customerSearch.toLowerCase())
+  ), [customers, customerSearch]);
+
+  const { visible: visibleProducts, hasMore, loadMore, total: prodTotal, showing: prodShowing } = usePagination(filteredProducts, 10, 1);
 
   const addProductToCart = (product: Product) => {
     const key = String(product.id);
@@ -302,7 +338,17 @@ export default function Sales() {
         addNotification("Out of Stock", `${product.name} is out of stock.`, "error");
         return;
       }
-      setCart([...cart, { id: key, product_id: product.id, name: product.name, price: product.price, quantity: 1, is_custom: false, stock: product.stock }]);
+      setCart([...cart, { 
+        id: key, 
+        product_id: product.id, 
+        name: product.name, 
+        price: product.price, 
+        quantity: 1, 
+        is_custom: false, 
+        stock: product.stock,
+        metadata: product.metadata,
+        product_type: product.product_type 
+      }]);
     }
   };
 
@@ -316,8 +362,8 @@ export default function Sales() {
     setShowCustom(false);
   };
 
-  const updateQty = (id: string, qty: number) => {
-    if (isNaN(qty) || qty <= 0) { setCart(cart.filter((i) => i.id !== id)); return; }
+  const updateQty = (id: string, rawValue: string) => {
+    const qty = parseInt(rawValue.replace(/[^0-9]/g, '')) || 0;
     const item = cart.find(i => i.id === id);
     if (item && item.stock !== undefined && qty > item.stock) {
         addNotification("Stock Limit", `Only ${item.stock} units available.`, "warning");
@@ -325,6 +371,12 @@ export default function Sales() {
         return;
     }
     setCart(cart.map((i) => i.id === id ? { ...i, quantity: qty } : i));
+  };
+
+  const updatePrice = (id: string, rawValue: string) => {
+    const val = rawValue.replace(/[^0-9.]/g, '');
+    const price = parseFloat(val) || 0;
+    setCart(cart.map((i) => i.id === id ? { ...i, price } : i));
   };
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0);
@@ -360,7 +412,223 @@ export default function Sales() {
       </div>
     `;
   };
-  //animation code 
+
+  const buildFormalInvoiceHtml = (data: ReceiptData) => {
+    const fmt = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
+    const pkrNum = (n: number) => Math.round(n).toLocaleString('en-PK');
+
+    const rowsHtml = data.items.map((item, idx) => `
+      <tr class="item-row">
+        <td class="center">${idx + 1}</td>
+        <td>${item.name}</td>
+        <td class="center warranty-cell">—</td>
+        <td class="center">${item.quantity}</td>
+        <td class="right">PKR ${pkrNum(item.price)}</td>
+        <td class="right amount-col">PKR ${pkrNum(item.price * item.quantity)}</td>
+      </tr>
+    `).join('');
+
+    const emptyCount = Math.max(0, 10 - data.items.length);
+    const emptyRowsHtml = Array(emptyCount).fill(`
+      <tr class="item-row empty-row">
+        <td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td>
+      </tr>
+    `).join('');
+
+    const notesLines = (data.settings.invoice_notes || data.settings.receipt_footer || '')
+      .split('\n').filter(Boolean)
+      .map(l => `<div class="note-line">${l.replace(/^[•\-]\s*/, '')}</div>`).join('');
+
+    const logoHtml = data.settings.store_logo
+      ? `<img src="${data.settings.store_logo}" class="logo" alt="logo"/>`
+      : '';
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Invoice #${String(data.saleId).padStart(4, '0')}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 210mm;
+    background: #fff;
+    color: #1a1a1a;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 11pt;
+  }
+  .page {
+    width: 210mm;
+    min-height: 297mm;
+    padding: 12mm 14mm 10mm;
+    display: flex;
+    flex-direction: column;
+  }
+  /* ── Header ── */
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding-bottom: 8px;
+    border-bottom: 3px solid #cc0000;
+    margin-bottom: 10px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .logo { height: 52px; object-fit: contain; }
+  .store-name { font-size: 20pt; font-weight: 900; color: #cc0000; line-height: 1.1; }
+  .store-sub { font-size: 8pt; color: #555; margin-top: 3px; line-height: 1.5; }
+  .invoice-meta { text-align: right; }
+  .invoice-title { font-size: 18pt; font-weight: 900; color: #1a1a1a; letter-spacing: 2px; }
+  .meta-row { font-size: 9pt; color: #333; margin-top: 4px; }
+  .meta-row span { font-weight: bold; }
+  /* ── Items Table ── */
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  thead tr { background: #cc0000; color: #fff; }
+  thead th {
+    padding: 7px 6px;
+    font-size: 9pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border: 1px solid #aaa;
+    white-space: nowrap;
+  }
+  .item-row td {
+    border: 1px solid #ccc;
+    padding: 6px 6px;
+    font-size: 9.5pt;
+    vertical-align: middle;
+  }
+  .item-row:nth-child(even) { background: #fafafa; }
+  .empty-row td { height: 22px; }
+  .center { text-align: center; }
+  .right { text-align: right; }
+  .amount-col { font-weight: 700; }
+  .warranty-cell { color: #888; font-size: 8pt; }
+  /* ── Bottom Section ── */
+  .bottom { display: flex; justify-content: space-between; gap: 16px; margin-top: 10px; align-items: flex-start; }
+  /* Notes */
+  .notes-box {
+    flex: 1;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 9px 11px;
+    background: #fffbf8;
+  }
+  .notes-title { font-size: 8pt; font-weight: 700; color: #cc0000; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
+  .note-line { font-size: 8pt; color: #c00; line-height: 1.7; padding-left: 8px; position: relative; }
+  .note-line::before { content: "•"; position: absolute; left: 0; }
+  /* Summary */
+  .summary { min-width: 200px; }
+  .summary table { width: 100%; }
+  .summary td {
+    border: 1px solid #ccc;
+    padding: 5px 9px;
+    font-size: 9.5pt;
+  }
+  .summary .label { color: #333; }
+  .summary .value { text-align: right; font-weight: 600; }
+  .summary .discount-row td { color: #cc0000; }
+  .summary .grand-row td { font-weight: 800; font-size: 10.5pt; background: #f5f5f5; }
+  /* Footer */
+  .footer {
+    margin-top: 14px;
+    border-top: 2px solid #cc0000;
+    padding-top: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    font-size: 8pt;
+    color: #555;
+  }
+  .footer .sign-line { border-bottom: 1px solid #999; width: 160px; margin-top: 14px; }
+  .footer .contact { text-align: right; line-height: 1.7; }
+  @media print {
+    html, body { width: 210mm; }
+    .page { padding: 8mm 12mm; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <!-- Header -->
+  <div class="header">
+    <div class="brand">
+      ${logoHtml}
+      <div>
+        <div class="store-name">${data.settings.store_name || 'Store Name'}</div>
+        <div class="store-sub">
+          ${data.settings.store_address ? `${data.settings.store_address}<br/>` : ''}
+          ${data.settings.store_phone ? `Tel: ${data.settings.store_phone}` : ''}
+        </div>
+      </div>
+    </div>
+    <div class="invoice-meta">
+      <div class="invoice-title">INVOICE</div>
+      <div class="meta-row"><span>No:</span> #${String(data.saleId).padStart(4, '0')}</div>
+      <div class="meta-row"><span>Date:</span> ${data.date}</div>
+    </div>
+  </div>
+
+  <!-- Items Table -->
+  <table>
+    <thead>
+      <tr>
+        <th style="width:36px">S.No</th>
+        <th style="text-align:left">Description</th>
+        <th style="width:68px">Warranty</th>
+        <th style="width:40px">Qty</th>
+        <th style="width:96px">U-Price</th>
+        <th style="width:104px">Amount</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rowsHtml}
+      ${emptyRowsHtml}
+    </tbody>
+  </table>
+
+  <!-- Bottom: Notes + Summary -->
+  <div class="bottom">
+    <div class="notes-box">
+      <div class="notes-title">Terms &amp; Notes</div>
+      ${notesLines || '<div class="note-line" style="color:#aaa;padding-left:0">No notes set. Add them in Settings → Invoice Notes.</div>'}
+    </div>
+    <div class="summary">
+      <table>
+        <tr><td class="label">AMOUNT</td><td class="value">PKR ${pkrNum(data.subtotal)}</td></tr>
+        <tr class="discount-row"><td class="label">DISCOUNT</td><td class="value">${data.discount > 0 ? '- PKR ' + pkrNum(data.discount) : '—'}</td></tr>
+        <tr class="grand-row"><td class="label">GRAND TOTAL</td><td class="value">PKR ${pkrNum(data.total)}</td></tr>
+        <tr><td class="label">PAID</td><td class="value">PKR ${pkrNum(data.total)}</td></tr>
+        <tr><td class="label">BALANCE</td><td class="value">PKR 0</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div>
+      <div style="font-size:8pt;color:#888;margin-bottom:2px">Authorized Signature</div>
+      <div class="sign-line"></div>
+    </div>
+    <div class="contact">
+      ${data.settings.store_name || ''}<br/>
+      ${data.settings.store_address ? data.settings.store_address + '<br/>' : ''}
+      ${data.settings.store_phone ? 'Tel: ' + data.settings.store_phone : ''}
+    </div>
+  </div>
+</div>
+</body>
+</html>`;
+  };
+
+  const buildInvoiceHtml = (data: ReceiptData) => {
+    if (data.settings.invoice_style === 'formal') {
+      return buildFormalInvoiceHtml(data);
+    }
+    return buildReceiptHtml(data);
+  };
 const CATEGORY_COLORS: Record<string, { bg: string, border: string, badge: string }> = {
   'chicken': { bg: 'from-orange-600 to-amber-500', border: 'border-orange-700', badge: 'bg-white/20 text-orange-100' },
   'bottle': { bg: 'from-green-600 to-emerald-500', border: 'border-green-700', badge: 'bg-white/20 text-green-100' },
@@ -385,7 +653,6 @@ const colorForProduct = (product: Product) => {
   if (category && CATEGORY_COLORS[category]) {
     return CATEGORY_COLORS[category];
   }
-  // Fallback to deterministic hash-based color
   return CARD_COLORS[product.id % CARD_COLORS.length];
 };
 
@@ -416,15 +683,16 @@ const colorForProduct = (product: Product) => {
 
   const processPayment = async () => {
     if (cart.length === 0 || isProcessing) return;
+
     setIsProcessing(true);
     
-    const amtPaid = parseFloat(amountPaid);
+    const amtPaid = amountPaid === "" ? (selectedCustomerId ? 0 : total) : parseFloat(amountPaid);
     let paymentStatus = 'Paid';
     if (!isNaN(amtPaid) && amtPaid < total) {
        paymentStatus = 'Partial';
     }
-    if (!isNaN(amtPaid) && amtPaid === 0 && total > 0) {
-       paymentStatus = 'Unpaid';
+    if (!isNaN(amtPaid) && amtPaid <= 0 && total > 0) {
+       paymentStatus = 'Pending';
     }
 
     try {
@@ -435,10 +703,11 @@ const colorForProduct = (product: Product) => {
         total,
         payment_method: paymentMethod,
         payment_status: paymentStatus,
-        amount_paid: isNaN(amtPaid) ? total : amtPaid,
+        amount_paid: isNaN(amtPaid) ? (selectedCustomerId ? 0 : total) : amtPaid,
+        register_id: currentRegister?.id || null,
         items: cart.map((c) => ({
           product_id: c.product_id || undefined,
-          product_name: c.name,
+          product_name: c.name || 'Unknown Item',
           quantity: c.quantity,
           price: c.price,
           is_custom: c.is_custom,
@@ -463,7 +732,6 @@ const colorForProduct = (product: Product) => {
         setAmountPaid('');
         setSelectedCustomerId('');
 
-        // Prevent immediate closing to enforce a cooldown that blocks double clicks
         setTimeout(() => {
             setShowCheckoutModal(false);
             setIsProcessing(false);
@@ -480,12 +748,24 @@ const colorForProduct = (product: Product) => {
 
   const handlePrintReceipt = async () => {
     if (!receiptData) return;
-    await window.api.printInvoice(buildReceiptHtml(receiptData));
+    // Always fetch fresh settings so invoice_style changes are reflected immediately
+    let freshSettings = receiptData.settings;
+    try {
+      const res = await window.api.getSettings();
+      if (res?.success && res.data) freshSettings = res.data;
+    } catch {}
+    await window.api.printInvoice(buildInvoiceHtml({ ...receiptData, settings: freshSettings }));
   };
 
   const handleSavePdf = async () => {
     if (!receiptData) return;
-    await window.api.saveInvoicePdf(buildReceiptHtml(receiptData));
+    // Always fetch fresh settings so invoice_style changes are reflected immediately
+    let freshSettings = receiptData.settings;
+    try {
+      const res = await window.api.getSettings();
+      if (res?.success && res.data) freshSettings = res.data;
+    } catch {}
+    await window.api.saveInvoicePdf(buildInvoiceHtml({ ...receiptData, settings: freshSettings }));
   };
 
   const handleCloseReceipt = () => {
@@ -508,7 +788,6 @@ const colorForProduct = (product: Product) => {
       </header>
 
       <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
-        {/* Products Core Area */}
         <Card className="flex-1 flex flex-col overflow-hidden max-h-full border-border/50 bg-card/50 min-w-0 min-h-0">
           <CardHeader className="p-4 border-b bg-muted/20 pb-4 shrink-0">
             <div className="relative">
@@ -548,100 +827,131 @@ const colorForProduct = (product: Product) => {
               </Button>
             ))}
           </div>
-          <CardContent className="flex-1 p-0 overflow-y-auto w-full min-h-0 custom-scrollbar p-4 xl:p-6 content-start">
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-              {visibleProducts.map((product) => {
-  const col = colorForProduct(product);
-  const isOutOfStock = (product.stock ?? 999) === 0;
-  return (
-    <div
-      key={product.id}
-      onClick={() => !isOutOfStock && addProductToCart(product)}
-      className={cn(
-        // Layout
-        "group relative flex flex-col p-4 rounded-2xl border-2 cursor-pointer overflow-hidden select-none",
-        // Gradient bg
-        `bg-gradient-to-br ${col.bg}`,
-        // Border
-        col.border,
-        // Hover / active transitions
-        "transition-all duration-200 ease-out",
-        isOutOfStock
-          ? "opacity-50 cursor-not-allowed grayscale"
-          : "hover:-translate-y-1.5 hover:scale-[1.03] hover:shadow-2xl active:scale-[1.01] active:-translate-y-0.5",
-      )}
-    >
-      {/* Shimmer sweep on hover */}
-      <div className="
-        pointer-events-none absolute inset-0 -translate-x-full
-        bg-gradient-to-r from-transparent via-white/25 to-transparent
-        skew-x-[-15deg]
-        group-hover:translate-x-[200%] transition-transform duration-700 ease-in-out
-      " />
+          <CardContent className="flex-1 p-0 flex flex-col min-h-0">
+            <div className="bg-muted/30 border-b px-4 py-2 flex text-[10px] font-black uppercase tracking-widest text-muted-foreground/70">
+              <span className="flex-1">Product Details</span>
+              <span className="w-24 text-center">Category</span>
+              <span className="w-20 text-center">Stock</span>
+              <span className="w-24 text-right">Price</span>
+              <span className="w-10"></span>
+            </div>
+            
+            <AnimatedList
+              items={visibleProducts}
+              className="flex-1"
+              maxHeight="none"
+              renderItem={(product: any) => {
+                const isOutOfStock = (product.stock ?? 999) <= 0;
+                const lowStock = !isOutOfStock && (product.stock ?? 999) < 10;
+                
+                return (
+                  <div 
+                    className={cn(
+                      "flex items-center p-3 rounded-xl border border-border/40 bg-card hover:border-primary/30 hover:shadow-md transition-all h-20",
+                      isOutOfStock && "opacity-60 bg-muted/20 grayscale"
+                    )}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex flex-col">
+                        <span className="font-black text-sm text-foreground truncate group-hover:text-primary transition-colors">
+                          {product.name}
+                        </span>
+                        <div className="flex items-center gap-1.5 mt-1 overflow-hidden">
+                           {product.barcode && (
+                             <span className="text-[9px] text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded border border-border/50 shrink-0">
+                               {product.barcode}
+                             </span>
+                           )}
+                           {product.unit && (
+                             <span className="text-[9px] text-primary/80 bg-primary/5 px-1.5 py-0.5 rounded font-bold border border-primary/10 shrink-0">
+                               {product.unit}
+                             </span>
+                           )}
+                           {(() => {
+                              const specEntries = product.metadata ? Object.entries(product.metadata).filter(([k,v]) => k !== 'tags' && v).map(([k,v]) => `${k.replace('_', ' ')}: ${v}`) : [];
+                              const specTags = product.metadata?.tags && Array.isArray(product.metadata.tags) ? product.metadata.tags : [];
+                              const specStr = [...specEntries, ...specTags].join(' • ');
+                              if (!specStr) return null;
+                              return (
+                                <span className="text-[9px] text-muted-foreground truncate capitalize" title={specStr}>
+                                  {specStr}
+                                </span>
+                              );
+                           })()}
+                        </div>
+                      </div>
+                    </div>
 
-      {/* Decorative background ring */}
-      <div className="pointer-events-none absolute -top-5 -right-5 w-20 h-20 rounded-full bg-white/10" />
-      <div className="pointer-events-none absolute bottom-2 left-1 w-10 h-10 rounded-full bg-white/[0.06]" />
+                    <div className="w-24 px-2 flex justify-center">
+                      <Badge variant="secondary" className="text-[9px] h-5 font-bold px-2 rounded-lg bg-slate-100 text-slate-600 border-none">
+                        {product.category || 'General'}
+                      </Badge>
+                    </div>
 
-      {/* Product Name */}
-      <p className="relative z-10 font-bold text-sm leading-tight line-clamp-2 mb-1.5 text-white">
-        {product.name}
-      </p>
+                    <div className="w-20 flex justify-center">
+                      <div className={cn(
+                        "inline-flex flex-col items-center justify-center min-w-[50px] p-1.5 rounded-xl border-2 shadow-sm",
+                        isOutOfStock ? "bg-red-50 text-red-600 border-red-100" :
+                        lowStock ? "bg-amber-50 text-amber-600 border-amber-100 animate-pulse" :
+                        "bg-emerald-50 text-emerald-600 border-emerald-100"
+                      )}>
+                        <span className="text-[11px] font-black leading-none">
+                          {isOutOfStock ? 'OUT' : product.stock}
+                        </span>
+                        <span className="text-[8px] uppercase font-bold tracking-tighter mt-1 opacity-70 leading-none">
+                          Units
+                        </span>
+                      </div>
+                    </div>
 
-      {/* Category + Unit row */}
-      <div className="relative z-10 flex items-center gap-1.5 flex-wrap mb-2">
-        {product.category && (
-          <span className={cn(
-            "text-[10px] px-2 py-0.5 rounded-full font-medium",
-            col.badge
-          )}>
-            {product.category}
-          </span>
-        )}
-        {product.unit && (
-          <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-white/30 text-white">
-            {product.unit}
-          </span>
-        )}
-      </div>
+                    <div className="w-24 text-right px-2 font-black text-sm text-slate-800">
+                      {fmtPKR(product.price)}
+                    </div>
 
-      {/* Price row */}
-      <p className="relative z-10 text-white font-bold text-base tracking-wide mt-auto">
-        {fmtPKR(product.price)}
-      </p>
-
-      {/* Stock badge */}
-      <div className="relative z-10 mt-1.5 flex items-center gap-1">
-        {isOutOfStock ? (
-          <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded-full bg-black/40 text-red-300">
-            Out of Stock
-          </span>
-        ) : (product.stock !== undefined && product.stock <= 10) ? (
-          <span className="text-[9px] font-semibold px-2 py-0.5 rounded-full bg-black/30 text-yellow-200">
-            {product.stock} left
-          </span>
-        ) : product.stock !== undefined ? (
-          <span className="text-[9px] px-2 py-0.5 rounded-full bg-black/20 text-white/70">
-            {product.stock} in stock
-          </span>
-        ) : null}
-      </div>
-    </div>
-  );
-})}
-              {filteredProducts.length === 0 && (
-                <div className="col-span-full py-16 flex flex-col items-center justify-center text-muted-foreground text-sm">
-                  <CartIcon size={48} className="opacity-10 mb-4" />
-                  <p>No products found.</p>
-                  <Button variant="link" onClick={() => setShowCustom(true)} className="mt-2 text-primary">Use custom sale instead?</Button>
-                </div>
+                    <div className="w-10 flex justify-end">
+                      <div className="h-8 w-8 rounded-full flex items-center justify-center bg-primary text-white shadow-lg shadow-primary/20">
+                        <Plus size={16} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              }}
+              onItemSelect={(product) => {
+                const isOutOfStock = (product.stock ?? 999) <= 0;
+                if (!isOutOfStock) addProductToCart(product);
+                else addNotification("Out of Stock", "This item is currently unavailable.", "error");
+              }}
+            />
+            
+            {visibleProducts.length === 0 && (
+              <div className="py-20 flex flex-col items-center justify-center text-muted-foreground bg-muted/5">
+                <Package size={48} className="opacity-10 mb-4" />
+                <p className="text-sm font-medium">No products found</p>
+                <p className="text-xs">Try adjusting your search or category filter</p>
+              </div>
+            )}
+            
+            <div className="p-4 bg-muted/10 border-t flex items-center justify-between">
+              <div className="text-xs text-muted-foreground font-medium">
+                Showing <span className="text-foreground font-bold">{prodShowing}</span> of <span className="text-foreground font-bold">{prodTotal}</span> products
+              </div>
+              {hasMore && (
+                <Button 
+                  size="sm" 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    loadMore();
+                  }}
+                  className="gap-2 shadow-[0_4px_14px_0_rgba(0,118,255,0.39)] hover:shadow-[0_6px_20px_rgba(0,118,255,0.23)] hover:bg-[#0070f3] transition-all px-8 font-black bg-[#0070f3] text-white border-none h-10"
+                >
+                  <RefreshCw size={16} className="animate-spin-slow" /> 
+                  LOAD 10 MORE PRODUCTS
+                </Button>
               )}
             </div>
-            <LoadMoreButton hasMore={hasMore} onLoadMore={loadMore} showing={prodShowing} total={prodTotal} className="col-span-full" />
           </CardContent>
         </Card>
 
-        {/* Current Order Cart */}
         <Card className="flex flex-col lg:w-[380px] min-w-[340px] shrink-0 border-border/60 shadow-lg bg-card max-h-full overflow-hidden">
           <CardHeader className="p-4 py-3 border-b bg-muted/30 flex-row flex justify-between items-center shrink-0">
             <div className="flex items-center gap-2">
@@ -677,25 +987,44 @@ const colorForProduct = (product: Product) => {
                     <p className="text-sm font-semibold truncate leading-tight">{item.name}</p>
                     {item.is_custom && <Badge variant="secondary" className="text-[9px] px-1 h-4 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300">Custom</Badge>}
                   </div>
-                  <p className="text-xs text-primary font-bold">{fmtPKR(item.price)}</p>
+                  {(() => {
+                     const specEntries = item.metadata ? Object.entries(item.metadata).filter(([k,v]) => k !== 'tags' && v).map(([k,v]) => `${k.replace('_', ' ')}: ${v}`) : [];
+                     const specTags = item.metadata?.tags && Array.isArray(item.metadata.tags) ? item.metadata.tags : [];
+                     const specStr = [...specEntries, ...specTags].join(' • ');
+                     if (!specStr) return null;
+                     return (
+                       <div className="text-[9px] text-muted-foreground truncate mb-1 capitalize" title={specStr}>
+                         {specStr}
+                       </div>
+                     );
+                  })()}
                 </div>
 
-                {/* Quantity Control Buttons */}
-                <div className="flex items-center bg-background border rounded-lg overflow-hidden shadow-sm">
-                  <button onClick={() => updateQty(item.id, item.quantity - 1)} className="p-1.5 px-2 hover:bg-muted active:bg-accent transition-colors"><Minus size={12} className="text-foreground/70" /></button>
-                  <input 
-                    type="number"
-                    value={item.quantity}
-                    onChange={(e) => updateQty(item.id, parseInt(e.target.value))}
-                    className="w-10 text-center text-xs font-bold leading-none bg-transparent outline-none p-0 hide-arrows"
-                    onFocus={(e) => e.target.select()}
-                  />
-                  <button onClick={() => updateQty(item.id, item.quantity + 1)} className="p-1.5 px-2 hover:bg-muted active:bg-accent transition-colors"><Plus size={12} className="text-foreground/70" /></button>
+                <div className="flex flex-col items-end gap-2">
+                  <div className="flex items-center bg-background border rounded-lg overflow-hidden shadow-sm">
+                    <button type="button" onClick={() => updateQty(item.id, String(item.quantity - 1))} className="p-1.5 px-2 hover:bg-muted active:bg-accent transition-colors"><Minus size={12} className="text-foreground/70" /></button>
+                    <input 
+                      type="text"
+                      value={item.quantity || ''}
+                      onChange={(e) => updateQty(item.id, e.target.value)}
+                      className="w-10 text-center text-xs font-bold leading-none bg-transparent outline-none p-0 hide-arrows"
+                      onFocus={(e) => e.target.select()}
+                    />
+                    <button type="button" onClick={() => updateQty(item.id, String(item.quantity + 1))} className="p-1.5 px-2 hover:bg-muted active:bg-accent transition-colors"><Plus size={12} className="text-foreground/70" /></button>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] font-bold text-muted-foreground">Rs.</span>
+                    <input 
+                      type="text"
+                      value={item.price || ''}
+                      onChange={(e) => updatePrice(item.id, e.target.value)}
+                      className="w-16 h-5 text-xs font-black text-primary bg-transparent border-b border-primary/20 focus:border-primary outline-none px-0.5"
+                      onFocus={(e) => e.target.select()}
+                    />
+                  </div>
                 </div>
 
-                <p className="text-xs font-bold w-[4.5rem] text-right">{fmtPKR(item.price * item.quantity)}</p>
-
-                <button onClick={() => setCart(cart.filter((i) => i.id !== item.id))} className="text-muted-foreground hover:text-destructive transition-colors shrink-0">
+                <button onClick={() => setCart(cart.filter((i) => i.id !== item.id))} className="text-muted-foreground hover:text-destructive transition-colors shrink-0 ml-1">
                   <X size={14} />
                 </button>
               </div>
@@ -703,7 +1032,6 @@ const colorForProduct = (product: Product) => {
           </CardContent>
 
           <CardFooter className="p-4 border-t flex flex-col bg-muted/20 shrink-0 gap-3">
-            {/* Discount Control */}
             {cart.length > 0 && (
               <div className="w-full bg-background border rounded-xl p-3 shadow-sm focus-within:ring-1 focus-within:ring-primary/50 transition-all">
                 <div className="flex items-center justify-between mb-2">
@@ -721,9 +1049,17 @@ const colorForProduct = (product: Product) => {
                 </div>
                 <Input
                   type="number"
+                  min="0"
+                  max={discountType === 'percentage' ? "100" : subtotal}
                   placeholder={discountType === 'percentage' ? "0%" : "0.00"}
                   value={discountValue}
-                  onChange={(e) => setDiscountValue(e.target.value)}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    if (val < 0) return;
+                    if (discountType === 'percentage' && val > 100) return;
+                    if (discountType === 'fixed' && val > subtotal) return;
+                    setDiscountValue(e.target.value);
+                  }}
                   onKeyDown={(e) => e.stopPropagation()}
                   className="h-8 text-sm"
                 />
@@ -775,7 +1111,6 @@ const colorForProduct = (product: Product) => {
         </Card>
       </div>
 
-      {/* Custom Sale Dialog completely restyled via generic modal div logic to match premium cards */}
       {showCustom && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in">
           <Card className="w-full max-w-sm shadow-2xl animate-in zoom-in-95 duration-200">
@@ -804,16 +1139,16 @@ const colorForProduct = (product: Product) => {
                   <div className="space-y-2">
                     <label className="text-sm font-semibold">Price (PKR) <span className="text-destructive">*</span></label>
                     <Input
-                      type="number" min="1" step="1" required value={customPrice}
-                      onChange={(e) => setCustomPrice(e.target.value)}
+                      type="text" required value={customPrice}
+                      onChange={(e) => setCustomPrice(e.target.value.replace(/[^0-9]/g, ''))}
                       placeholder="0"
                     />
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-semibold">Quantity <span className="text-destructive">*</span></label>
                     <Input
-                      type="number" min="1" required value={customQty}
-                      onChange={(e) => setCustomQty(e.target.value)}
+                      type="text" required value={customQty}
+                      onChange={(e) => setCustomQty(e.target.value.replace(/[^0-9]/g, ''))}
                     />
                   </div>
                 </div>
@@ -873,20 +1208,83 @@ const colorForProduct = (product: Product) => {
                     </div>
                   </div>
                 ) : (
-                  <Select 
-                    value={selectedCustomerId?.toString() || "none"}
-                    onValueChange={(val) => setSelectedCustomerId(val === 'none' ? '' : Number(val))}
-                  >
-                    <SelectTrigger className="h-10 w-full bg-background border-border/50 shadow-sm">
-                      <SelectValue placeholder="Select Customer" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Walk-in Customer (No Account)</SelectItem>
-                      {customers.map(c => (
-                        <SelectItem key={c.id} value={c.id.toString()}>{c.name} {c.phone ? `(${c.phone})` : ''}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="relative space-y-2">
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} />
+                      <Input 
+                        placeholder="Type customer name or phone..." 
+                        value={customerSearch}
+                        onChange={(e) => {
+                          setCustomerSearch(e.target.value);
+                          if (!e.target.value) setSelectedCustomerId('');
+                        }}
+                        onFocus={() => {
+                          if (!customerSearch) setCustomerSearch('');
+                        }}
+                        className="pl-9 h-10 text-sm bg-background border-border/50 shadow-sm"
+                      />
+                      {selectedCustomerId && (
+                        <Button 
+                          variant="ghost" size="icon" 
+                          className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 text-muted-foreground hover:text-foreground"
+                          onClick={() => {
+                            setSelectedCustomerId('');
+                            setCustomerSearch('');
+                          }}
+                        >
+                          <X size={14} />
+                        </Button>
+                      )}
+                    </div>
+
+                    {customerSearch && !selectedCustomerId && (
+                      <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-md shadow-xl max-h-[200px] overflow-y-auto animate-in fade-in zoom-in-95 duration-100">
+                        <div 
+                          className="p-2 text-xs hover:bg-accent cursor-pointer flex items-center justify-between border-b border-border/50"
+                          onClick={() => {
+                            setSelectedCustomerId('');
+                            setCustomerSearch('Walk-in Customer');
+                          }}
+                        >
+                          <span className="font-bold">Walk-in Customer</span>
+                          <Badge variant="outline" className="text-[10px]">Guest</Badge>
+                        </div>
+                        {filteredCustomers.length === 0 ? (
+                          <div className="p-4 text-center text-xs text-muted-foreground italic">No customers found.</div>
+                        ) : (
+                          filteredCustomers.map(c => (
+                            <div 
+                              key={c.id} 
+                              className="p-2.5 hover:bg-accent cursor-pointer border-b border-border/40 last:border-0 transition-colors"
+                              onClick={() => {
+                                setSelectedCustomerId(c.id);
+                                setCustomerSearch(c.name);
+                              }}
+                            >
+                              <div className="font-semibold text-sm">{c.name}</div>
+                              {c.phone && <div className="text-[10px] text-muted-foreground">{c.phone}</div>}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                    
+                    {!customerSearch && !selectedCustomerId && (
+                       <p className="text-[10px] text-muted-foreground ml-1 italic">Type to find or add a customer above.</p>
+                    )}
+                    
+                    {selectedCustomerId && (
+                      <div className="flex items-center gap-2 p-2 bg-primary/5 rounded-lg border border-primary/10 animate-in slide-in-from-top-2">
+                        <div className="bg-primary/20 p-1.5 rounded-full">
+                          <Users size={14} className="text-primary" />
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold leading-none">{customers.find(c => c.id === selectedCustomerId)?.name}</p>
+                          <p className="text-[10px] text-muted-foreground">Linked to this sale</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
                 <p className="text-[10px] text-muted-foreground">Selecting a customer will link this sale to their account history.</p>
               </div>
@@ -900,10 +1298,12 @@ const colorForProduct = (product: Product) => {
                 <div className="space-y-2 mt-4">
                   <label className="text-sm font-semibold">Amount Paid (PKR)</label>
                   <Input 
-                    type="number" 
-                    min="0"
+                    type="text" 
                     value={amountPaid}
-                    onChange={(e) => setAmountPaid(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/[^0-9]/g, '');
+                      setAmountPaid(val);
+                    }}
                     className="text-lg font-bold bg-background"
                   />
                   {selectedCustomerId ? (
@@ -943,6 +1343,11 @@ const colorForProduct = (product: Product) => {
           onClose={handleCloseReceipt}
         />
       )}
+      <RegisterManager 
+        isOpen={isRegisterModalOpen} 
+        onClose={() => setIsRegisterModalOpen(false)}
+        onRegisterStatusChange={setCurrentRegister}
+      />
     </div>
   );
 }

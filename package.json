@@ -1,20 +1,21 @@
 {
   "name": "retail-pos",
   "version": "1.0.0",
-  "description": "",
+  "description": "Professional Retail Point of Sale System with Inventory and Financial Reporting",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "npm run build:main && concurrently \"vite\" \"wait-on tcp:5173 && electron .\"",
     "build:main": "tsc --project tsconfig.main.json",
     "build": "npm run build:main && vite build",
     "dist": "npm run build && electron-builder",
-    "postinstall": "electron-rebuild",
+    "postinstall": "electron-builder install-app-deps",
     "electron:build": "npm run dist",
     "build:mac": "npm run build && electron-builder --mac"
   },
   "build": {
     "appId": "com.retailpos.app",
     "productName": "Retail POS",
+    "copyright": "Copyright © 2026",
     "directories": {
       "output": "release"
     },
@@ -28,7 +29,7 @@
     "win": {
       "target": "nsis",
       "icon": "softwarelogo.png",
-      "forceCodeSigning": false
+      "verifyUpdateCodeSignature": false
     },
     "mac": {
       "target": [
@@ -62,7 +63,11 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "RetailPOS Setup.exe"
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Retail POS",
+      "license": "license.txt",
+      "artifactName": "RetailPOS_Setup_${version}.exe"
     }
   },
   "keywords": [],
@@ -70,14 +75,20 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-tooltip": "^1.2.8",
     "better-sqlite3": "^12.8.0",
+    "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "crypto": "^1.0.1",
     "dayjs": "^1.11.20",
+    "framer-motion": "^12.38.0",
+    "google-auth-library": "^10.6.2",
+    "googleapis": "^171.4.0",
     "lucide-react": "^0.577.0",
     "next-themes": "^0.4.6",
     "pdf-parse": "^2.4.5",
@@ -85,6 +96,7 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.13.1",
+    "recharts": "^3.8.1",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "xlsx": "^0.18.5"

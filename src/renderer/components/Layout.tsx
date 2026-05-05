@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, Link } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingCart, Package, Boxes, Users,
   CreditCard, BarChart3, Settings, User, Moon, Sun, Receipt,
-  Bell, Menu, X, CheckCircle2, AlertCircle, Info, ChevronLeft, ChevronRight, Truck, Key
+  Bell, Menu, X, CheckCircle2, AlertCircle, Info, ChevronLeft, ChevronRight, Truck, Key, TrendingUp, Lock, ShieldAlert, History, Landmark, Wallet, Undo2, CircleDollarSign
 } from 'lucide-react';
 import Logo from '../components/img/yasir_logo_transparent.png';
 import { useTheme } from './ThemeProvider';
@@ -13,6 +13,7 @@ import { Badge } from './ui/badge';
 import { cn } from '../lib/utils';
 import ErrorBoundary from './ErrorBoundary';
 import { subService } from '../services/subscription';
+import { useLanguage } from './LanguageProvider';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -21,6 +22,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
+import { ThemeToggle } from "./ThemeToggle";
+import { NotificationCenter } from "./NotificationCenter";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -30,6 +33,7 @@ export default function Layout({ children }: LayoutProps) {
   const location = useLocation();
   const { theme, setTheme } = useTheme();
   const { addNotification, notifications, unreadCount, markAsRead, markAllAsRead, clearAll } = useNotifications();
+  const { t, language } = useLanguage();
   
   const [logoData, setLogoData] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -60,17 +64,24 @@ export default function Layout({ children }: LayoutProps) {
   const subState = subService.getState();
 
   const navigationItems = [
-    { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
-    { path: '/sales', icon: ShoppingCart, label: 'Sales' },
-    { path: '/products', icon: Package, label: 'Products' },
-    { path: '/vendors', icon: Truck, label: 'Vendors' },
-    { path: '/inventory', icon: Boxes, label: 'Inventory' },
-    { path: '/customers', icon: Users, label: 'Customers' },
-    { path: '/loans', icon: Receipt, label: 'Qaraz/Loans' },
-    { path: '/transactions', icon: CreditCard, label: 'Transactions' },
-    { path: '/reports', icon: BarChart3, label: 'Reports' },
-    { path: '/expenses', icon: Receipt, label: 'Expenses' },
-    { path: '/settings', icon: Settings, label: 'Settings' },
+    { path: '/', icon: LayoutDashboard, label: t('dashboard') },
+    { path: '/sales', icon: ShoppingCart, label: t('sales') },
+    { path: '/products', icon: Package, label: t('products') },
+    { path: '/vendors', icon: Truck, label: t('vendors') },
+    { path: '/purchases', icon: Package, label: 'Purchases / POs' },
+    { path: '/inventory', icon: Boxes, label: t('inventory') },
+    { path: '/customers', icon: Users, label: t('customers') },
+    { path: '/loans', icon: Wallet, label: 'Accounts (AP/AR)' },
+    { path: '/transactions', icon: CreditCard, label: t('transactions') },
+    { path: '/returns', icon: Undo2, label: 'Returns Management' },
+    { path: '/payments', icon: CircleDollarSign, label: 'Payment Ledger' },
+    { path: '/reports', icon: BarChart3, label: t('reports') },
+    { path: '/balance-sheet', icon: TrendingUp, label: t('balance_sheet') },
+    { path: '/expenses', icon: Receipt, label: t('expenses') },
+    { path: '/register', icon: Wallet, label: 'Cash Register' },
+    { path: '/register-history', icon: History, label: 'Register History' },
+    { path: '/financials', icon: Landmark, label: 'Financial Management' },
+    { path: '/settings', icon: Settings, label: t('settings') },
     { path: '/subscription', icon: Key, label: 'Subscription' },
     { path: '/about', icon: Info, label: 'About Software' }
   ];
@@ -121,10 +132,13 @@ export default function Layout({ children }: LayoutProps) {
               return (
                 <div
                   key={item.path}
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground/50 cursor-not-allowed"
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted-foreground/30 cursor-not-allowed group"
                   title="Access restricted due to expired subscription"
                 >
-                  <Icon size={18} className="opacity-50" />
+                  <div className="relative">
+                    <Icon size={18} className="opacity-40" />
+                    <Lock size={10} className="absolute -top-1 -right-1 text-destructive" />
+                  </div>
                   <span className={cn("transition-opacity duration-300", isSidebarCollapsed ? "opacity-0 w-0" : "opacity-100")}>
                     {item.label}
                   </span>
@@ -156,7 +170,21 @@ export default function Layout({ children }: LayoutProps) {
           })}
         </nav>
 
-        {/* Sidebar Footer */}
+        {/* Subscription Status Banner in Sidebar */}
+        {!subState.isActive && subState.plan !== 'lifetime' && !isSidebarCollapsed && (
+          <div className="mx-4 mb-4 p-4 rounded-xl bg-destructive/10 border border-destructive/20 animate-in fade-in slide-in-from-bottom-4 duration-500">
+             <div className="flex items-center gap-2 text-destructive mb-2">
+                <ShieldAlert size={16} />
+                <span className="text-[10px] font-black uppercase tracking-widest">Expired</span>
+             </div>
+             <p className="text-[11px] text-muted-foreground leading-tight mb-3">Your license has ended. Most features are locked.</p>
+             <Link to="/subscription">
+               <Button size="sm" variant="destructive" className="w-full h-8 text-[10px] uppercase font-bold tracking-tighter">Renew Now</Button>
+             </Link>
+          </div>
+        )}
+
+        {/* User Profile */}
         <div className="p-4 border-t border-border mt-auto h-16 flex items-center justify-center">
           {!isSidebarCollapsed ? (
             <span className="text-xs font-medium text-muted-foreground">© 2025 OsaTech POS v1.0</span>
@@ -170,84 +198,16 @@ export default function Layout({ children }: LayoutProps) {
       <main className="flex-1 flex flex-col min-w-0 h-screen transition-all">
         {/* Top Header */}
         <header className="h-20 bg-card/60 backdrop-blur-md border-b border-border flex items-center justify-between px-8 shrink-0 relative z-20">
-          <div className="flex items-center gap-3">
-             <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+          <div className="flex items-center gap-4">
+             <div className="h-6 w-px bg-border mx-1 hidden sm:block"></div>
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
                {navigationItems.find((item) => item.path === location.pathname)?.label || 'Dashboard'}
              </h1>
           </div>
 
           <div className="flex items-center gap-4">
-            <Button
-              variant="outline"
-              size="icon"
-              className="rounded-full h-10 w-10 border-border bg-background"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            >
-               {theme === "dark" ? <Sun size={18} className="text-orange-300" /> : <Moon size={18} className="text-slate-600" />}
-            </Button>
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon" className="rounded-full h-10 w-10 border-border bg-background relative">
-                  <Bell size={18} className="text-foreground" />
-                  {unreadCount > 0 && (
-                    <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-destructive-foreground animate-in zoom-in">
-                      {unreadCount}
-                    </span>
-                  )}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-80 p-0 shadow-2xl rounded-xl">
-                <div className="flex items-center justify-between p-4 border-b">
-                  <DropdownMenuLabel className="p-0 font-semibold text-base">Notifications</DropdownMenuLabel>
-                  <Button variant="ghost" size="sm" onClick={markAllAsRead} className="h-auto p-0 text-xs text-primary hover:bg-transparent hover:text-primary/80">
-                    Mark all read
-                  </Button>
-                </div>
-                
-                <div className="max-h-[300px] overflow-y-auto">
-                  {notifications.length === 0 ? (
-                    <div className="p-8 text-center text-sm text-muted-foreground flex flex-col items-center">
-                      <Bell size={32} className="opacity-20 mb-2"/>
-                      No new notifications
-                    </div>
-                  ) : (
-                    notifications.map((notif) => (
-                      <div 
-                        key={notif.id} 
-                        className={cn(
-                          "p-4 border-b last:border-0 hover:bg-muted/50 cursor-default transition-colors flex gap-3",
-                          !notif.read && "bg-primary/5"
-                        )}
-                        onClick={() => markAsRead(notif.id)}
-                      >
-                         <div className="shrink-0 mt-0.5">
-                           {notif.type === 'success' && <CheckCircle2 size={16} className="text-green-500" />}
-                           {notif.type === 'error' && <AlertCircle size={16} className="text-destructive" />}
-                           {notif.type === 'info' && <Info size={16} className="text-blue-500" />}
-                           {notif.type === 'warning' && <AlertCircle size={16} className="text-orange-500" />}
-                         </div>
-                         <div className="flex-1 space-y-1">
-                           <p className={cn("text-sm font-medium leading-none", !notif.read ? "text-foreground" : "text-muted-foreground")}>{notif.title}</p>
-                           <p className="text-xs text-muted-foreground">{notif.message}</p>
-                           <p className="text-[10px] text-muted-foreground/80 mt-1">
-                             {new Date(notif.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                           </p>
-                         </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-                
-                {notifications.length > 0 && (
-                  <div className="p-2 border-t text-center">
-                    <Button variant="ghost" size="sm" className="w-full text-xs text-muted-foreground h-8" onClick={clearAll}>
-                      Clear All
-                    </Button>
-                  </div>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <ThemeToggle />
+            <NotificationCenter />
           </div>
         </header>
 
@@ -259,26 +219,26 @@ export default function Layout({ children }: LayoutProps) {
             </ErrorBoundary>
           </div>
         </div>
+
+        {/* SUBSCRIPTION WARNING BANNERS */}
+        {subState.isGracePeriod && (
+          <div className="sticky bottom-0 z-50 bg-amber-500 text-white p-3 text-center shadow-[0_-4px_12px_rgba(0,0,0,0.1)] flex items-center justify-center gap-2">
+            <AlertCircle size={18} />
+            <span className="font-medium text-sm">
+              Subscription Expired. You are in a {subState.daysRemaining + 3}-day grace period. Please renew immediately to avoid losing access to all features.
+            </span>
+          </div>
+        )}
+        
+        {subState.isExpired && !subState.isGracePeriod && subState.plan !== 'none' && (
+          <div className="sticky bottom-0 z-50 bg-red-600 text-white p-3 text-center shadow-[0_-4px_12px_rgba(0,0,0,0.1)] flex items-center justify-center gap-2">
+            <AlertCircle size={18} />
+            <span className="font-medium text-sm">
+              Subscription EXPIRED. Access is now restricted to the Sales module only. Please renew to restore full access.
+            </span>
+          </div>
+        )}
       </main>
-      
-      {/* SUBSCRIPTION WARNING BANNERS */}
-      {subState.isGracePeriod && (
-        <div className="fixed bottom-0 left-0 right-0 z-50 bg-amber-500 text-white p-3 text-center shadow-[0_-4px_12px_rgba(0,0,0,0.1)] flex items-center justify-center gap-2">
-          <AlertCircle size={18} />
-          <span className="font-medium text-sm">
-            Subscription Expired. You are in a {subState.daysRemaining + 3}-day grace period. Please renew immediately to avoid losing access to all features.
-          </span>
-        </div>
-      )}
-      
-      {subState.isExpired && !subState.isGracePeriod && subState.plan !== 'none' && (
-        <div className="fixed bottom-0 left-0 right-0 z-50 bg-red-600 text-white p-3 text-center shadow-[0_-4px_12px_rgba(0,0,0,0.1)] flex items-center justify-center gap-2">
-          <AlertCircle size={18} />
-          <span className="font-medium text-sm">
-            Subscription EXPIRED. Access is now restricted to the Sales module only. Please renew to restore full access.
-          </span>
-        </div>
-      )}
     </div>
   );
-}
+};

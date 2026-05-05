@@ -4,6 +4,11 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import crypto from 'crypto';
+import { googleAuthService } from './googleDrive/googleAuth';
+import { driveService } from './googleDrive/driveService';
+import { backupService } from './googleDrive/backupService';
+import { restoreService } from './googleDrive/restoreService';
+import MenuBuilder from './menu';
 
 const isDev = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
@@ -30,7 +35,11 @@ const logger = {
 };
 
 const getLocalSqliteDate = (isoString?: string) => {
-  const d = isoString ? new Date(isoString) : new Date();
+  if (!isoString) return new Date().toISOString().replace('T', ' ').substring(0, 19);
+  // If it's already a local-style string (YYYY-MM-DD HH:mm:ss), just return it
+  if (isoString.includes(' ') && !isoString.includes('T')) return isoString;
+  
+  const d = new Date(isoString);
   const offset = d.getTimezoneOffset() * 60000;
   const local = new Date(d.getTime() - offset);
   return local.toISOString().replace('T', ' ').substring(0, 19);
@@ -48,7 +57,79 @@ process.on('unhandledRejection', (reason, promise) => {
 // Comprehensive migration and schema repair system
 function checkDatabaseSchema(database: Database.Database) {
   try {
-    logger.info('Performing schema verification...');
+    // Robust Schema Repair (Runs every startup to ensure structural integrity)
+    logger.info('Performing structural schema verification...');
+    const repairs = [
+      ["registers", "opened_at", "DATETIME"],
+      ["registers", "closed_at", "DATETIME"],
+      ["registers", "status", "TEXT DEFAULT 'open'"],
+      ["registers", "closed_by", "TEXT"],
+      ["registers", "notes", "TEXT"],
+      ["registers", "actual_cash", "REAL DEFAULT 0"],
+      ["registers", "opening_time", "DATETIME"],
+      ["sales", "date_created", "DATETIME"],
+      ["sale_items", "product_name", "TEXT"],
+      ["sale_returns", "total_returned", "REAL DEFAULT 0"],
+      ["sale_returns", "date_created", "DATETIME"],
+      ["sale_returns", "notes", "TEXT"],
+      ["sale_returns", "reason", "TEXT"],
+      ["sale_return_items", "product_name", "TEXT"],
+      ["sale_return_items", "price", "REAL NOT NULL DEFAULT 0"],
+      ["purchases", "date_created", "DATETIME"],
+      ["purchases", "register_id", "INTEGER"],
+      ["purchases", "status", "TEXT DEFAULT 'Completed'"],
+      ["purchase_returns", "date_created", "DATETIME"],
+      ["purchase_returns", "total_returned", "REAL DEFAULT 0"],
+      ["purchase_returns", "notes", "TEXT"],
+      ["purchase_returns", "reason", "TEXT"],
+      ["purchase_return_items", "product_name", "TEXT"],
+      ["purchase_return_items", "purchase_price", "REAL NOT NULL DEFAULT 0"],
+      ["vendor_payments", "date_created", "DATETIME"],
+      ["vendor_payments", "amount", "REAL"],
+      ["vendor_payments", "purchase_id", "INTEGER REFERENCES purchases(id) ON DELETE SET NULL"],
+      ["customer_payments", "sale_id", "INTEGER REFERENCES sales(id) ON DELETE SET NULL"],
+      ["financial_transactions", "date_created", "DATETIME"],
+      ["financial_transactions", "type", "TEXT"],
+      ["financial_transactions", "amount", "REAL"],
+      ["products", "product_type", "TEXT DEFAULT 'general'"],
+      ["products", "metadata", "TEXT DEFAULT '{}'"]
+    ];
+    for (const [table, col, def] of repairs) {
+      try {
+        const tableInfo = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND LOWER(name)=LOWER(?)").get(table) as any;
+        if (tableInfo) {
+          const actualTableName = tableInfo.name;
+          const colCheck = database.prepare(`PRAGMA table_info(${actualTableName})`).all() as any[];
+          const colNames = colCheck.map(c => c.name.toLowerCase());
+          
+          if (actualTableName.toLowerCase() === 'purchase_returns') {
+            logger.info(`Columns in purchase_returns: ${colNames.join(', ')}`);
+          }
+
+          if (!colNames.includes(col.toLowerCase())) {
+            database.exec(`ALTER TABLE ${actualTableName} ADD COLUMN ${col} ${def}`);
+            logger.info(`Injected missing column ${col} into ${actualTableName}`);
+          }
+        }
+      } catch (e: any) {
+        logger.error(`Repair failed for ${table}.${col}: ${e.message}`);
+      }
+    }
+
+    // Fill in default values for newly injected date columns (since ALTER TABLE can't use dynamic defaults)
+    try {
+      database.exec("UPDATE sales SET date_created = datetime('now', 'localtime') WHERE date_created IS NULL");
+      database.exec("UPDATE purchases SET date_created = datetime('now', 'localtime') WHERE date_created IS NULL");
+      database.exec("UPDATE sale_returns SET date_created = datetime('now', 'localtime') WHERE date_created IS NULL");
+      database.exec("UPDATE purchase_returns SET date_created = datetime('now', 'localtime') WHERE date_created IS NULL");
+      database.exec("UPDATE registers SET opened_at = datetime('now', 'localtime') WHERE opened_at IS NULL");
+      database.exec("UPDATE vendor_payments SET date_created = datetime('now', 'localtime') WHERE date_created IS NULL");
+    } catch (e: any) {
+      logger.error('Failed to fill null dates:', e.message);
+    }
+
+    logger.info('Schema verification completed.');
+    logger.info('Performing core table verification...');
     const tables = ['settings', 'products', 'customers', 'sales', 'sale_items', 'vendors', 'purchases', 'inventory_batches', 'customer_payments'];
     for (const table of tables) {
       const exists = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
@@ -421,7 +502,7 @@ function migrate(database: Database.Database) {
             notes TEXT
           )
         `);
-        try { database.exec('ALTER TABLE settings ADD COLUMN low_stock_threshold INTEGER DEFAULT 10'); } catch(e){}
+        try { database.exec('ALTER TABLE settings ADD COLUMN low_stock_threshold INTEGER DEFAULT 10'); } catch (e) { }
       } catch (e) { logger.error('Migration 17 error:', e); }
       database.exec('PRAGMA user_version = 17');
     }
@@ -429,24 +510,24 @@ function migrate(database: Database.Database) {
     // Migration 18: Add purchase_price, stock, and barcode to products
     if (ver < 18) {
       logger.info('Running migration 18 - Adding product details...');
-      try { database.exec('ALTER TABLE products ADD COLUMN purchase_price REAL DEFAULT 0'); } catch(e){}
-      try { database.exec('ALTER TABLE products ADD COLUMN stock INTEGER DEFAULT 0'); } catch(e){}
-      try { database.exec('ALTER TABLE products ADD COLUMN barcode TEXT DEFAULT ""'); } catch(e){}
+      try { database.exec('ALTER TABLE products ADD COLUMN purchase_price REAL DEFAULT 0'); } catch (e) { }
+      try { database.exec('ALTER TABLE products ADD COLUMN stock INTEGER DEFAULT 0'); } catch (e) { }
+      try { database.exec('ALTER TABLE products ADD COLUMN barcode TEXT DEFAULT ""'); } catch (e) { }
       database.exec('PRAGMA user_version = 18');
     }
 
     // Migration 19: Add receipt_size setting
     if (ver < 19) {
       logger.info('Running migration 19 - Adding receipt_size to settings...');
-      try { database.exec(`ALTER TABLE settings ADD COLUMN receipt_size TEXT DEFAULT 'thermal'`); } catch(e){}
-      try { database.exec(`ALTER TABLE settings ADD COLUMN low_stock_threshold INTEGER DEFAULT 10`); } catch(e){}
+      try { database.exec(`ALTER TABLE settings ADD COLUMN receipt_size TEXT DEFAULT 'thermal'`); } catch (e) { }
+      try { database.exec(`ALTER TABLE settings ADD COLUMN low_stock_threshold INTEGER DEFAULT 10`); } catch (e) { }
       database.exec('PRAGMA user_version = 19');
     }
 
     // Migration 20: Add unit field to products (e.g. kg, pcs, box)
     if (ver < 20) {
       logger.info('Running migration 20 - Adding unit column to products...');
-      try { database.exec(`ALTER TABLE products ADD COLUMN unit TEXT DEFAULT ''`); } catch(e){}
+      try { database.exec(`ALTER TABLE products ADD COLUMN unit TEXT DEFAULT ''`); } catch (e) { }
       database.exec('PRAGMA user_version = 20');
     }
 
@@ -462,20 +543,28 @@ function migrate(database: Database.Database) {
       }
       database.exec('PRAGMA user_version = 21');
     }
-    
+
     // Migration 22: Auto-Export Settings
     if (ver < 22) {
       logger.info('Running migration 22 - Adding auto_export_path to settings...');
-      try { database.exec(`ALTER TABLE settings ADD COLUMN auto_export_path TEXT DEFAULT ''`); } catch(e){}
-      try { database.exec(`ALTER TABLE settings ADD COLUMN auto_export_enabled INTEGER DEFAULT 0`); } catch(e){}
+      try { database.exec(`ALTER TABLE settings ADD COLUMN auto_export_path TEXT DEFAULT ''`); } catch (e) { }
+      try { database.exec(`ALTER TABLE settings ADD COLUMN auto_export_enabled INTEGER DEFAULT 0`); } catch (e) { }
       database.exec('PRAGMA user_version = 22');
     }
 
     // Migration 23: Add last_auto_export to settings
     if (ver < 23) {
       logger.info('Running migration 23 - Adding last_auto_export to settings...');
-      try { database.exec(`ALTER TABLE settings ADD COLUMN last_auto_export DATETIME`); } catch(e){}
+      try { database.exec(`ALTER TABLE settings ADD COLUMN last_auto_export DATETIME`); } catch (e) { }
       database.exec('PRAGMA user_version = 23');
+    }
+
+    // Migration 24: Add bill-to-bill tracking columns
+    if (ver < 24) {
+      logger.info('Running migration 24 - Adding bill-to-bill tracking columns...');
+      try { database.exec(`ALTER TABLE customer_payments ADD COLUMN sale_id INTEGER REFERENCES sales(id) ON DELETE SET NULL`); } catch (e) { }
+      try { database.exec(`ALTER TABLE vendor_payments ADD COLUMN purchase_id INTEGER REFERENCES purchases(id) ON DELETE SET NULL`); } catch (e) { }
+      database.exec('PRAGMA user_version = 24');
     }
 
     logger.info(`Database migration completed. Current version: ${database.pragma('user_version', { simple: true })}`);
@@ -585,12 +674,22 @@ function initializeDatabase() {
         created_at DATETIME DEFAULT (datetime('now', 'localtime'))
       );
 
+      CREATE TABLE IF NOT EXISTS vendor_payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        vendor_id INTEGER NOT NULL,
+        amount REAL NOT NULL,
+        date_created DATETIME DEFAULT (datetime('now', 'localtime')),
+        notes TEXT,
+        FOREIGN KEY(vendor_id) REFERENCES vendors(id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS purchases (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         vendor_id INTEGER,
         total REAL NOT NULL DEFAULT 0,
         date_created DATETIME DEFAULT (datetime('now', 'localtime')),
         status TEXT DEFAULT 'Completed',
+        register_id INTEGER,
         FOREIGN KEY(vendor_id) REFERENCES vendors(id) ON DELETE SET NULL
       );
 
@@ -615,6 +714,72 @@ function initializeDatabase() {
         date_added DATETIME DEFAULT (datetime('now', 'localtime')),
         notes TEXT,
         FOREIGN KEY(customer_id) REFERENCES customers(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS registers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        opened_at DATETIME DEFAULT (datetime('now', 'localtime')),
+        closed_at DATETIME,
+        opening_balance REAL DEFAULT 0,
+        actual_cash REAL DEFAULT 0,
+        status TEXT DEFAULT 'open',
+        opened_by TEXT,
+        closed_by TEXT,
+        notes TEXT,
+        opening_time DATETIME
+      );
+
+      CREATE TABLE IF NOT EXISTS financial_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT,
+        category TEXT,
+        amount REAL,
+        description TEXT,
+        register_id INTEGER,
+        date_created DATETIME DEFAULT (datetime('now', 'localtime')),
+        FOREIGN KEY(register_id) REFERENCES registers(id) ON DELETE SET NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS sale_returns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sale_id INTEGER NOT NULL,
+        total_returned REAL DEFAULT 0,
+        reason TEXT,
+        notes TEXT,
+        date_created DATETIME DEFAULT (datetime('now', 'localtime')),
+        FOREIGN KEY(sale_id) REFERENCES sales(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS sale_return_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_id INTEGER NOT NULL,
+        product_id INTEGER,
+        product_name TEXT,
+        quantity INTEGER NOT NULL,
+        price REAL NOT NULL,
+        FOREIGN KEY(return_id) REFERENCES sale_returns(id) ON DELETE CASCADE,
+        FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS purchase_returns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        purchase_id INTEGER NOT NULL,
+        total_returned REAL DEFAULT 0,
+        reason TEXT,
+        notes TEXT,
+        date_created DATETIME DEFAULT (datetime('now', 'localtime')),
+        FOREIGN KEY(purchase_id) REFERENCES purchases(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS purchase_return_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        return_id INTEGER NOT NULL,
+        product_id INTEGER,
+        product_name TEXT,
+        quantity INTEGER NOT NULL,
+        purchase_price REAL NOT NULL,
+        FOREIGN KEY(return_id) REFERENCES purchase_returns(id) ON DELETE CASCADE,
+        FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL
       );
 
       CREATE TABLE IF NOT EXISTS expenses (
@@ -728,14 +893,21 @@ async function triggerAutoExport(force = false) {
       inventory_batches: db.prepare('SELECT * FROM inventory_batches').all(),
       customer_payments: db.prepare('SELECT * FROM customer_payments').all(),
       expenses: db.prepare('SELECT * FROM expenses').all(),
+      registers: db.prepare('SELECT * FROM registers').all(),
+      sale_returns: db.prepare('SELECT * FROM sale_returns').all(),
+      sale_return_items: db.prepare('SELECT * FROM sale_return_items').all(),
+      purchase_returns: db.prepare('SELECT * FROM purchase_returns').all(),
+      purchase_return_items: db.prepare('SELECT * FROM purchase_return_items').all(),
+      vendor_payments: db.prepare('SELECT * FROM vendor_payments').all(),
+      financial_transactions: db.prepare('SELECT * FROM financial_transactions').all(),
       export_date: new Date().toISOString(),
-      version: '1.1'
+      version: '1.2'
     };
 
     const exportFilePath = path.join(settings.auto_export_path, 'pos_auto_backup.json');
     fs.writeFileSync(exportFilePath, JSON.stringify(data, null, 2), 'utf8');
     logger.info(`Auto-export completed to: ${exportFilePath}`);
-    
+
     if (mainWindow) {
       mainWindow.webContents.send('auto-export-complete', { success: true, path: exportFilePath });
     }
@@ -749,25 +921,35 @@ async function triggerAutoExport(force = false) {
 // ============= BACKGROUND TASKS =============
 
 function startBackgroundTasks() {
-  // Check for auto-export every 30 minutes
-  setInterval(async () => {
-    if (!db) return;
-    try {
-      const settings = db.prepare('SELECT auto_export_path, auto_export_enabled, last_auto_export FROM settings WHERE id = 1').get() as any;
-      if (!settings?.auto_export_enabled || !settings?.auto_export_path) return;
+  try {
+    const dbPath = path.join(app.getPath('userData'), 'pos.db');
+    backupService.scheduleWeeklyBackup(dbPath);
+    backupService.processQueue();
 
-      const lastExport = settings.last_auto_export ? new Date(settings.last_auto_export) : new Date(0);
-      const fiveHoursInMs = 5 * 60 * 60 * 1000;
-      const now = new Date();
+    // Check for auto-export every 30 minutes
+    setInterval(async () => {
+      if (!db) return;
+      try {
+        const settings = db.prepare('SELECT auto_export_path, auto_export_enabled, last_auto_export FROM settings WHERE id = 1').get() as any;
+        if (!settings?.auto_export_enabled || !settings?.auto_export_path) return;
 
-      if (now.getTime() - lastExport.getTime() >= fiveHoursInMs) {
-        logger.info('Starting scheduled 5-hour auto-backup...');
-        await triggerAutoExport();
+        const lastExport = settings.last_auto_export ? new Date(settings.last_auto_export) : new Date(0);
+        const fiveHoursInMs = 5 * 60 * 60 * 1000;
+        const now = new Date();
+
+        if (now.getTime() - lastExport.getTime() >= fiveHoursInMs) {
+          logger.info('Starting scheduled 5-hour auto-backup...');
+          await triggerAutoExport();
+        }
+      } catch (err) {
+        logger.error('Background auto-export check failed:', err);
       }
-    } catch (err) {
-      logger.error('Background auto-export check failed:', err);
-    }
-  }, 30 * 60 * 1000); // 30 minutes check
+    }, 30 * 60 * 1000); // 30 minutes check
+
+    logger.info('Background tasks initialized');
+  } catch (e) {
+    logger.error('Failed to start background tasks:', e);
+  }
 }
 
 // ============= EVENT LISTENERS =============
@@ -779,14 +961,14 @@ function verifyActivationKey(name: string, key: string): { valid: boolean, licen
   try {
     const decoded = Buffer.from(key, 'base64').toString('utf8');
     const license = JSON.parse(decoded);
-    
+
     // New JSON System Validation
     if (license.businessName && license.businessName.toLowerCase() === name.toLowerCase() && license.durationDays) {
       return { valid: true, license };
     } else {
       logger.warn(`License name mismatch or missing duration: Expected "${name}", Got "${license.businessName}". Duration: ${license.durationDays}`);
     }
-    
+
     return { valid: false, license: null };
   } catch (e) {
     logger.debug('Key is not valid JSON Base64, trying legacy MD5 fallback...');
@@ -796,12 +978,12 @@ function verifyActivationKey(name: string, key: string): { valid: boolean, licen
       const firstName = cleanName.split(/\s+/)[0].replace(/[^a-z0-9]/g, '');
       const parts = key.split('-');
       if (parts.length === 3) {
-         const year = parts[1];
-         const hash = crypto.createHash('md5').update(cleanName).digest('hex').substring(0, 4);
-         if (key === `${firstName}-${year}-${hash}`) {
-           logger.info('Legacy MD5 license verified.');
-           return { valid: true, license: { plan: 'lifetime', isLegacy: true } };
-         }
+        const year = parts[1];
+        const hash = crypto.createHash('md5').update(cleanName).digest('hex').substring(0, 4);
+        if (key === `${firstName}-${year}-${hash}`) {
+          logger.info('Legacy MD5 license verified.');
+          return { valid: true, license: { plan: 'lifetime', isLegacy: true } };
+        }
       }
     } catch { return { valid: false, license: null }; }
     return { valid: false, license: null };
@@ -812,13 +994,13 @@ ipcMain.handle('is-activated', async () => {
   try {
     if (!db) throw new Error('Database not initialized');
     const settings = db.prepare('SELECT activation_key, business_name, expiry_date FROM settings WHERE id = 1').get() as any;
-    
+
     if (!settings || !settings.activation_key || !settings.business_name) {
       return { success: true, activated: false, license: null };
     }
-    
+
     const { valid, license } = verifyActivationKey(settings.business_name, settings.activation_key);
-    
+
     // For additive system, return the DB expiry_date instead of relying on token
     if (valid && license && !license.isLegacy) {
       if (settings.expiry_date) {
@@ -835,53 +1017,53 @@ ipcMain.handle('is-activated', async () => {
 ipcMain.handle('activate-app', async (_, { businessName, activationKey }: { businessName: string, activationKey: string }) => {
   try {
     if (!db) throw new Error('Database not initialized');
-    
+
     const { valid, license } = verifyActivationKey(businessName, activationKey);
     if (!valid) {
       throw new Error('Invalid activation key for this business name');
     }
-    
+
     const settings = db.prepare('SELECT expiry_date, used_license_ids FROM settings WHERE id = 1').get() as any;
-    
+
     if (license.isLegacy) {
-        db.prepare('UPDATE settings SET business_name = ?, activation_key = ? WHERE id = 1')
-          .run(businessName, activationKey);
-        logger.info(`Legacy app activated for: ${businessName}`);
-        return { success: true };
+      db.prepare('UPDATE settings SET business_name = ?, activation_key = ? WHERE id = 1')
+        .run(businessName, activationKey);
+      logger.info(`Legacy app activated for: ${businessName}`);
+      return { success: true };
     }
 
     // Additive logic for new JSON keys
     let usedIds: string[] = [];
-    try { usedIds = JSON.parse(settings.used_license_ids || '[]'); } catch (e) {}
+    try { usedIds = JSON.parse(settings.used_license_ids || '[]'); } catch (e) { }
 
     if (usedIds.includes(license.licenseId)) {
-        throw new Error('This license key has already been used.');
+      throw new Error('This license key has already been used.');
     }
-    
+
     // If we're activating a new JSON key, we always overwrite the old one
     // even if the old one was "lifetime". The user is explicitly renewing/changing.
     usedIds.push(license.licenseId);
-    
+
     // Calculate new expiry
     const now = new Date();
     let currentExpiry: Date;
-    
+
     // If switching from legacy MD5 (which has no expiry_date) or expired, start from today
     if (!settings.expiry_date || settings.expiry_date === 'lifetime') {
-        currentExpiry = now;
+      currentExpiry = now;
     } else {
-        currentExpiry = new Date(settings.expiry_date);
-        if (isNaN(currentExpiry.getTime()) || currentExpiry < now) {
-            currentExpiry = now;
-        }
+      currentExpiry = new Date(settings.expiry_date);
+      if (isNaN(currentExpiry.getTime()) || currentExpiry < now) {
+        currentExpiry = now;
+      }
     }
-    
+
     currentExpiry.setDate(currentExpiry.getDate() + license.durationDays);
     const newExpiryIso = currentExpiry.toISOString();
-    
+
     db.prepare('UPDATE settings SET business_name = ?, activation_key = ?, expiry_date = ?, used_license_ids = ? WHERE id = 1')
       .run(businessName, activationKey, newExpiryIso, JSON.stringify(usedIds));
-    
+
     logger.info(`App activated for: ${businessName}. Added ${license.durationDays} days. New expiry: ${newExpiryIso}`);
     return { success: true };
   } catch (error: any) {
@@ -895,7 +1077,16 @@ ipcMain.handle('activate-app', async (_, { businessName, activationKey }: { busi
 ipcMain.handle('get-products', async () => {
   try {
     if (!db) throw new Error('Database not initialized');
-    const products = db.prepare('SELECT * FROM products ORDER BY name').all();
+    const products = db.prepare('SELECT * FROM products ORDER BY name').all().map((p: any) => {
+      try {
+        if (p.metadata && typeof p.metadata === 'string') {
+          p.metadata = JSON.parse(p.metadata);
+        }
+      } catch (e) {
+        p.metadata = {};
+      }
+      return p;
+    });
     logger.debug(`Retrieved ${products.length} products`);
     return { success: true, data: products };
   } catch (error: any) {
@@ -917,17 +1108,19 @@ ipcMain.handle('add-product', async (_, product: { name: string; price: number; 
     if (existing) throw new Error(`Product "${product.name}" already exists`);
 
     const stmt = db.prepare(`
-      INSERT INTO products (name, price, category, purchase_price, stock, barcode, unit, created_at, updated_at) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, (datetime('now', 'localtime')), (datetime('now', 'localtime')))
+      INSERT INTO products (name, price, category, purchase_price, stock, barcode, unit, product_type, metadata, created_at, updated_at) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, (datetime('now', 'localtime')), (datetime('now', 'localtime')))
     `);
     const info = stmt.run(
-      product.name.trim(), 
-      price, 
+      product.name.trim(),
+      price,
       product.category?.trim() || '',
       product.purchase_price || 0,
       product.stock || 0,
       product.barcode?.trim() || '',
-      product.unit?.trim() || ''
+      product.unit?.trim() || '',
+      (product as any).product_type || 'general',
+      typeof (product as any).metadata === 'object' ? JSON.stringify((product as any).metadata) : ((product as any).metadata || '{}')
     );
 
     const newProduct = db.prepare('SELECT * FROM products WHERE id = ?').get(info.lastInsertRowid);
@@ -957,17 +1150,19 @@ ipcMain.handle('update-product', async (_, id: number, product: { name: string; 
 
     const stmt = db.prepare(`
       UPDATE products 
-      SET name = ?, price = ?, category = ?, purchase_price = ?, stock = ?, barcode = ?, unit = ?, updated_at = (datetime('now', 'localtime')) 
+      SET name = ?, price = ?, category = ?, purchase_price = ?, stock = ?, barcode = ?, unit = ?, product_type = ?, metadata = ?, updated_at = (datetime('now', 'localtime')) 
       WHERE id = ?
     `);
     stmt.run(
-      product.name.trim(), 
-      price, 
-      product.category?.trim() || '', 
+      product.name.trim(),
+      price,
+      product.category?.trim() || '',
       product.purchase_price || 0,
       product.stock || 0,
       product.barcode?.trim() || '',
       product.unit?.trim() || '',
+      (product as any).product_type || 'general',
+      typeof (product as any).metadata === 'object' ? JSON.stringify((product as any).metadata) : ((product as any).metadata || '{}'),
       id
     );
 
@@ -1109,6 +1304,8 @@ ipcMain.handle('create-sale', async (_, data: {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
         `);
 
+        const determinedStatus = (data.amount_paid || 0) >= data.total ? 'Paid' : (data.amount_paid || 0) > 0 ? 'Partial' : 'Pending';
+        
         const saleInfo = saleStmt.run(
           data.customer_id || null,
           data.total,
@@ -1116,7 +1313,7 @@ ipcMain.handle('create-sale', async (_, data: {
           data.discount || 0,
           data.tax || 0,
           data.payment_method || 'cash',
-          data.payment_status || 'Paid',
+          data.payment_status || determinedStatus,
           data.notes || null
         );
 
@@ -1124,8 +1321,8 @@ ipcMain.handle('create-sale', async (_, data: {
 
         // Record partial payment if explicitly provided and there's a customer
         if (data.customer_id && data.amount_paid && data.amount_paid > 0) {
-          db!.prepare("INSERT INTO customer_payments (customer_id, amount, notes, date_added) VALUES (?, ?, ?, datetime('now', 'localtime'))").run(
-            data.customer_id, data.amount_paid, `Payment for Sale #${saleId}`
+          db!.prepare("INSERT INTO customer_payments (customer_id, amount, notes, sale_id, date_added) VALUES (?, ?, ?, ?, datetime('now', 'localtime'))").run(
+            data.customer_id, data.amount_paid, `Payment for Sale #${saleId}`, saleId
           );
         }
 
@@ -1148,9 +1345,9 @@ ipcMain.handle('create-sale', async (_, data: {
             for (const batch of batches) {
               if (qtyRemainingToSell <= 0) break;
               const deduct = Math.min(qtyRemainingToSell, batch.quantity_remaining);
-              
+
               db!.prepare('UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?').run(deduct, batch.id);
-              
+
               itemStmt.run(
                 saleId,
                 item.product_id,
@@ -1160,7 +1357,7 @@ ipcMain.handle('create-sale', async (_, data: {
                 batch.purchase_price,
                 0
               );
-              
+
               qtyRemainingToSell -= deduct;
             }
 
@@ -1175,7 +1372,7 @@ ipcMain.handle('create-sale', async (_, data: {
                 0
               );
             }
-            
+
             // Subtract from global stock cache
             db!.prepare('UPDATE products SET stock = stock - ? WHERE id = ?').run(item.quantity, item.product_id);
           } else {
@@ -1204,7 +1401,7 @@ ipcMain.handle('create-sale', async (_, data: {
 
     const saleId = transaction();
     logger.info(`Sale created: ID ${saleId}, Total: ${data.total}`);
-    
+
     // Trigger auto-export after a successful sale
     triggerAutoExport();
 
@@ -1240,6 +1437,7 @@ ipcMain.handle('get-sales', async (_, opts: { limit?: number; offset?: number; s
         SELECT s.*,
                c.name as customer_name,
                COUNT(si.id) as item_count,
+               COALESCE((SELECT SUM(total_returned) FROM sale_returns WHERE sale_id = s.id), 0) as total_returned,
                GROUP_CONCAT(DISTINCT si.product_name || ' (x' || si.quantity || ')') as items_summary
         FROM sales s
         LEFT JOIN customers c ON s.customer_id = c.id
@@ -1268,6 +1466,7 @@ ipcMain.handle('get-sales', async (_, opts: { limit?: number; offset?: number; s
       SELECT s.*,
              c.name as customer_name,
              COUNT(si.id) as item_count,
+             COALESCE((SELECT SUM(total_returned) FROM sale_returns WHERE sale_id = s.id), 0) as total_returned,
              GROUP_CONCAT(DISTINCT si.product_name || ' (x' || si.quantity || ')') as items_summary
       FROM sales s
       LEFT JOIN customers c ON s.customer_id = c.id
@@ -1293,9 +1492,11 @@ ipcMain.handle('get-sale-items', async (_, saleId: number) => {
     if (!saleId || saleId <= 0) throw new Error('Invalid sale ID');
 
     const items = db.prepare(`
-      SELECT * FROM sale_items 
-      WHERE sale_id = ? 
-      ORDER BY id
+      SELECT si.*, p.name as product_name, p.category,
+      (SELECT COALESCE(SUM(quantity), 0) FROM sale_return_items WHERE product_id = si.product_id AND return_id IN (SELECT id FROM sale_returns WHERE sale_id = si.sale_id)) as quantity_returned
+      FROM sale_items si
+      LEFT JOIN products p ON si.product_id = p.id
+      WHERE si.sale_id = ?
     `).all(saleId);
 
     return { success: true, data: items };
@@ -1316,8 +1517,8 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
     const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()).toISOString();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-    const sqlStart = args?.startDate ? getLocalSqliteDate(args.startDate) : null;
-    const sqlEnd = args?.endDate ? getLocalSqliteDate(args.endDate) : null;
+    const sqlStart = (args && args.startDate) ? getLocalSqliteDate(args.startDate) : null;
+    const sqlEnd = (args && args.endDate) ? getLocalSqliteDate(args.endDate) : null;
 
     // Helper functions
     const sumSince = (since: string) => {
@@ -1333,11 +1534,11 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
     let periodQuery = '';
     let periodParams: any[] = [];
     if (sqlStart && sqlEnd) {
-       periodQuery = ' AND date_created >= ? AND date_created <= ? ';
-       periodParams = [sqlStart, sqlEnd];
+      periodQuery = ' AND date_created >= ? AND date_created <= ? ';
+      periodParams = [sqlStart, sqlEnd];
     } else if (sqlStart) {
-       periodQuery = ' AND date_created >= ? ';
-       periodParams = [sqlStart];
+      periodQuery = ' AND date_created >= ? ';
+      periodParams = [sqlStart];
     }
 
     const filteredRevenue = (db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE status = 'Completed' ${periodQuery}`).get(...periodParams) as any).total;
@@ -1386,31 +1587,90 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
         WHERE status = 'Completed' ${periodQuery}
         GROUP BY payment_method
       `).all(...periodParams),
-      // ---- Inventory Analytics ----
+      // ---- Inventory Analytics (Period Aware) ----
       totalStockValue: (db.prepare(`
-        SELECT COALESCE(SUM(stock * purchase_price), 0) as val FROM products
-      `).get() as any).val,
+        SELECT COALESCE(SUM(quantity_added * purchase_price), 0) as val 
+        FROM inventory_batches 
+        WHERE 1=1 ${periodQuery.replace(/date_created/g, 'date_added')}
+      `).get(...periodParams) as any).val,
       totalRetailValue: (db.prepare(`
-        SELECT COALESCE(SUM(stock * price), 0) as val FROM products
-      `).get() as any).val,
+        SELECT COALESCE(SUM(quantity_added * p.price), 0) as val 
+        FROM inventory_batches ib
+        JOIN products p ON ib.product_id = p.id
+        WHERE 1=1 ${periodQuery.replace(/date_created/g, 'ib.date_added')}
+      `).get(...periodParams) as any).val,
       lowStockProducts: db.prepare(`
         SELECT id, name, stock, price FROM products WHERE stock <= 10 ORDER BY stock ASC LIMIT 8
       `).all(),
-      // ---- Loan / Qaraz Analytics ----
+      // ---- Loan / Qaraz Analytics (Period Aware) ----
       totalOutstandingLoans: (db.prepare(`
-        SELECT COALESCE(
-          (SELECT COALESCE(SUM(s.total),0) FROM sales s) -
-          (SELECT COALESCE(SUM(cp.amount),0) FROM customer_payments cp),
-        0) as total
-      `).get() as any).total,
+        SELECT (
+          (SELECT COALESCE(SUM(CAST(total AS REAL)), 0) FROM sales WHERE (status IS NULL OR LOWER(status) != 'cancelled') ${periodQuery}) - 
+          (SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) FROM customer_payments WHERE 1=1 ${periodQuery.replace(/date_created/g, 'date_added')}) -
+          (SELECT COALESCE(SUM(CAST(total_returned AS REAL)), 0) FROM sale_returns WHERE 1=1 ${periodQuery})
+        ) as total
+      `).get(...[...periodParams, ...periodParams, ...periodParams]) as any).total,
       customersInDebt: (db.prepare(`
         SELECT COUNT(*) as count FROM (
           SELECT c.id,
-            COALESCE((SELECT SUM(s.total) FROM sales s WHERE s.customer_id = c.id),0) -
-            COALESCE((SELECT SUM(p.amount) FROM customer_payments p WHERE p.customer_id = c.id),0) as bal
+            COALESCE((SELECT SUM(CAST(s.total AS REAL)) FROM sales s WHERE s.customer_id = c.id AND (s.status IS NULL OR LOWER(s.status) != 'cancelled') ${periodQuery}),0) -
+            COALESCE((SELECT SUM(CAST(p.amount AS REAL)) FROM customer_payments p WHERE p.customer_id = c.id ${periodQuery.replace(/date_created/g, 'p.date_added')}),0) -
+            COALESCE((SELECT SUM(CAST(sr.total_returned AS REAL)) FROM sale_returns sr JOIN sales s ON sr.sale_id = s.id WHERE s.customer_id = c.id ${periodQuery.replace(/date_created/g, 'sr.date_created')}),0) as bal
           FROM customers c
-        ) WHERE bal > 0
-      `).get() as any).count,
+        ) WHERE bal > 0.5
+      `).get(...[...periodParams, ...periodParams, ...periodParams]) as any).count,
+      totalOutstandingPayables: (db.prepare(`
+        SELECT SUM(remaining) FROM (
+          SELECT CAST(p.total AS REAL) - 
+                 COALESCE((SELECT SUM(CAST(amount AS REAL)) FROM vendor_payments WHERE purchase_id = p.id), 0) -
+                 COALESCE((SELECT SUM(CAST(total_returned AS REAL)) FROM purchase_returns WHERE purchase_id = p.id), 0) as remaining
+          FROM purchases p 
+          WHERE (p.status IS NULL OR LOWER(p.status) != 'cancelled') ${periodQuery}
+        ) WHERE remaining > 0.5
+      `).get(...periodParams) as any)['SUM(remaining)'] || 0,
+      vendorsWithDebt: (db.prepare(`
+        SELECT COUNT(DISTINCT vendor_id) as count FROM (
+          SELECT vendor_id,
+                 CAST(total AS REAL) - 
+                 COALESCE((SELECT SUM(CAST(amount AS REAL)) FROM vendor_payments WHERE purchase_id = p.id), 0) -
+                 COALESCE((SELECT SUM(CAST(total_returned AS REAL)) FROM purchase_returns WHERE purchase_id = p.id), 0) as remaining
+          FROM purchases p
+          WHERE (p.status IS NULL OR LOWER(p.status) != 'cancelled') ${periodQuery}
+        ) WHERE remaining > 0.5
+      `).get(...periodParams) as any).count,
+      topDebtors: db.prepare(`
+        SELECT id, name, phone, balance FROM (
+          SELECT c.id, c.name, c.phone,
+                 (SELECT SUM(rem) FROM (
+                    SELECT CAST(s.total AS REAL) - 
+                           COALESCE((SELECT SUM(CAST(amount AS REAL)) FROM customer_payments WHERE sale_id = s.id), 0) -
+                           COALESCE((SELECT SUM(CAST(total_returned AS REAL)) FROM sale_returns WHERE sale_id = s.id), 0) as rem
+                    FROM sales s WHERE CAST(s.customer_id AS INTEGER) = c.id AND (s.status IS NULL OR LOWER(s.status) != 'cancelled')
+                 ) WHERE rem > 0.5) as balance
+          FROM customers c
+        ) WHERE balance > 0.5
+        ORDER BY balance DESC LIMIT 5
+      `).all(),
+      topPayableVendors: db.prepare(`
+        SELECT id, name, phone, balance FROM (
+          SELECT v.id, v.name, v.phone,
+                 (SELECT SUM(rem) FROM (
+                    SELECT CAST(p.total AS REAL) - 
+                           COALESCE((SELECT SUM(CAST(amount AS REAL)) FROM vendor_payments WHERE purchase_id = p.id), 0) -
+                           COALESCE((SELECT SUM(CAST(total_returned AS REAL)) FROM purchase_returns WHERE purchase_id = p.id), 0) as rem
+                    FROM purchases p WHERE CAST(p.vendor_id AS INTEGER) = v.id AND (p.status IS NULL OR LOWER(p.status) != 'cancelled')
+                 ) WHERE rem > 0.5) as balance
+          FROM vendors v
+        ) WHERE balance > 0.5
+        ORDER BY balance DESC LIMIT 5
+      `).all(),
+      salesTrend: db.prepare(`
+        SELECT date(date_created) as date, SUM(CAST(total AS REAL)) as revenue
+        FROM sales
+        WHERE LOWER(status) = 'completed' AND date_created >= date('now', '-30 days')
+        GROUP BY date(date_created)
+        ORDER BY date ASC
+      `).all(),
     };
 
     logger.debug('Dashboard stats retrieved');
@@ -1452,7 +1712,7 @@ ipcMain.handle('get-report', async (_, args: any) => {
       startDate = args.startDate;
       endDate = args.endDate || new Date().toISOString();
     }
-    
+
     // Convert to SQLite local format YYYY-MM-DD HH:MM:SS
     const sqlStart = getLocalSqliteDate(startDate);
     const sqlEnd = getLocalSqliteDate(endDate);
@@ -1470,21 +1730,21 @@ ipcMain.handle('get-report', async (_, args: any) => {
         ORDER BY s.date_created DESC
       `).all(sqlStart, sqlEnd),
       revenue: (db.prepare(`
-        SELECT COALESCE(SUM(total), 0) as total 
+        SELECT COALESCE(SUM(CAST(total AS REAL)), 0) as total 
         FROM sales 
-        WHERE date_created >= ? AND date_created <= ? AND status = 'Completed'
+        WHERE date_created >= ? AND date_created <= ? AND LOWER(status) = 'completed'
       `).get(sqlStart, sqlEnd) as any).total,
       totalSales: (db.prepare(`
         SELECT COUNT(*) as count 
         FROM sales 
-        WHERE date_created >= ? AND date_created <= ? AND status = 'Completed'
+        WHERE date_created >= ? AND date_created <= ? AND LOWER(status) = 'completed'
       `).get(sqlStart, sqlEnd) as any).count,
       topProducts: db.prepare(`
         SELECT 
           si.product_name as name, 
           SUM(si.quantity) as qty_sold, 
-          SUM(si.quantity * si.price) as revenue,
-          AVG(si.price) as avg_price
+          SUM(si.quantity * CAST(si.price AS REAL)) as revenue,
+          AVG(CAST(si.price AS REAL)) as avg_price
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
         WHERE s.date_created >= ? AND s.date_created <= ?
@@ -1496,7 +1756,7 @@ ipcMain.handle('get-report', async (_, args: any) => {
         SELECT 
           strftime('%H', date_created) as hour,
           COUNT(*) as count,
-          SUM(total) as total
+          SUM(CAST(total AS REAL)) as total
         FROM sales
         WHERE date_created >= ? AND date_created <= ?
         GROUP BY hour
@@ -1506,7 +1766,7 @@ ipcMain.handle('get-report', async (_, args: any) => {
         SELECT 
           payment_method,
           COUNT(*) as count,
-          SUM(total) as total
+          SUM(CAST(total AS REAL)) as total
         FROM sales
         WHERE date_created >= ? AND date_created <= ?
         GROUP BY payment_method
@@ -1529,8 +1789,16 @@ ipcMain.handle('get-customers', async () => {
     const customers = db.prepare(`
       SELECT c.*, 
              COUNT(s.id) as total_sales, 
-             COALESCE(SUM(s.total), 0) as total_spent,
-             (COALESCE(SUM(s.total), 0) - COALESCE((SELECT SUM(amount) FROM customer_payments cp WHERE cp.customer_id = c.id), 0)) as balance
+             COALESCE(SUM(CASE WHEN (s.status IS NULL OR LOWER(s.status) != 'cancelled') THEN CAST(s.total AS REAL) ELSE 0 END), 0) as total_spent,
+             COALESCE((
+               SELECT SUM(rem) FROM (
+                 SELECT CAST(s.total AS REAL) - 
+                        COALESCE((SELECT SUM(CAST(amount AS REAL)) FROM customer_payments cp WHERE cp.sale_id = s.id), 0) -
+                        COALESCE((SELECT SUM(CAST(total_returned AS REAL)) FROM sale_returns sr WHERE sr.sale_id = s.id), 0) as rem
+                 FROM sales s 
+                 WHERE CAST(s.customer_id AS INTEGER) = c.id AND (s.status IS NULL OR LOWER(s.status) != 'cancelled')
+               ) WHERE rem > 0.5
+             ), 0) as balance
       FROM customers c
       LEFT JOIN sales s ON c.id = s.customer_id
       GROUP BY c.id
@@ -1781,24 +2049,24 @@ ipcMain.handle('print-invoice', async (_, htmlContent: string) => {
 
     return new Promise((resolve) => {
       printWindow.webContents.print(
-  {
-    silent: false,
-    printBackground: true,
-    pageSize: { width: RECEIPT_WIDTH_MICRONS, height: heightMicrons },
-    margins: { marginType: 'custom', top: 0, bottom: 0, left: 0, right: 0 },
-    scaleFactor: 100,
-  },
-  (success, reason) => {
-    printWindow.close();
-    if (success) {
-      logger.info('Invoice printed successfully');
-      resolve({ success: true });
-    } else {
-      logger.error('Print failed:', reason);
-      resolve({ success: false, error: reason });
-    }
-  }
-);
+        {
+          silent: false,
+          printBackground: true,
+          pageSize: { width: RECEIPT_WIDTH_MICRONS, height: heightMicrons },
+          margins: { marginType: 'custom', top: 0, bottom: 0, left: 0, right: 0 },
+          scaleFactor: 100,
+        },
+        (success, reason) => {
+          printWindow.close();
+          if (success) {
+            logger.info('Invoice printed successfully');
+            resolve({ success: true });
+          } else {
+            logger.error('Print failed:', reason);
+            resolve({ success: false, error: reason });
+          }
+        }
+      );
     });
   } catch (error: any) {
     logger.error('Failed to print invoice:', error);
@@ -1882,10 +2150,10 @@ ipcMain.handle('delete-all-data', async () => {
     db.prepare('DELETE FROM sales').run();
     db.prepare('DELETE FROM customers').run();
     db.prepare('DELETE FROM products').run();
-    
+
     // Reset Settings dynamically without dropping so the app doesn't crash
     db.prepare("UPDATE settings SET store_name = 'My Restaurant', store_phone = '', store_address = '', store_logo = '', receipt_footer = 'Thank you for visiting!', pos_password = '1234' WHERE id = 1").run();
-    
+
     db.prepare('DELETE FROM sqlite_sequence').run(); // Reset AI counters
     db.prepare('PRAGMA foreign_keys = ON').run();
     logger.info('All data deleted successfully and settings factory reset');
@@ -1899,7 +2167,7 @@ ipcMain.handle('delete-all-data', async () => {
 ipcMain.handle('seed-database', async () => {
   try {
     if (!db) throw new Error('Database not initialized');
-    
+
     const categories = ['Groceries', 'Electronics', 'Clothing', 'Snacks', 'Beverages', 'Personal Care', 'Home & Kitchen', 'Stationery'];
     const productPrefixes = ['Premium', 'Organic', 'Global', 'Smart', 'Elite', 'Eco', 'Super', 'Pure'];
     const productTypes = ['Water', 'Milk', 'Bread', 'Phone', 'Shirt', 'Chips', 'Soda', 'Soap', 'Pan', 'Pen', 'Chocolate', 'Rice', 'Oil'];
@@ -1930,7 +2198,7 @@ ipcMain.handle('seed-database', async () => {
         try {
           const info = insertProduct.run(name, retailPrice, purchasePrice, stock, barcode, category);
           productIds.push({ id: info.lastInsertRowid, name, price: retailPrice, purchase_price: purchasePrice });
-        } catch (e) {}
+        } catch (e) { }
       }
 
       // 3. Seed Customers (100)
@@ -1999,6 +2267,13 @@ ipcMain.handle('export-data', async () => {
       inventory_batches: db.prepare('SELECT * FROM inventory_batches').all(),
       customer_payments: db.prepare('SELECT * FROM customer_payments').all(),
       expenses: db.prepare('SELECT * FROM expenses').all(),
+      registers: db.prepare('SELECT * FROM registers').all(),
+      sale_returns: db.prepare('SELECT * FROM sale_returns').all(),
+      sale_return_items: db.prepare('SELECT * FROM sale_return_items').all(),
+      purchase_returns: db.prepare('SELECT * FROM purchase_returns').all(),
+      purchase_return_items: db.prepare('SELECT * FROM purchase_return_items').all(),
+      vendor_payments: db.prepare('SELECT * FROM vendor_payments').all(),
+      financial_transactions: db.prepare('SELECT * FROM financial_transactions').all(),
     };
     logger.info('Data exported successfully');
     return { success: true, data };
@@ -2038,6 +2313,13 @@ ipcMain.handle('import-data', async (_, data: any) => {
       db!.prepare('DELETE FROM customers').run();
       db!.prepare('DELETE FROM products').run();
       db!.prepare('DELETE FROM settings').run();
+      db!.prepare('DELETE FROM registers').run();
+      db!.prepare('DELETE FROM sale_returns').run();
+      db!.prepare('DELETE FROM sale_return_items').run();
+      db!.prepare('DELETE FROM purchase_returns').run();
+      db!.prepare('DELETE FROM purchase_return_items').run();
+      db!.prepare('DELETE FROM vendor_payments').run();
+      db!.prepare('DELETE FROM financial_transactions').run();
 
       const now = new Date().toISOString();
 
@@ -2092,6 +2374,34 @@ ipcMain.handle('import-data', async (_, data: any) => {
         const insertExpense = db!.prepare('INSERT OR REPLACE INTO expenses (id, title, category, amount, date_added, notes) VALUES (?, ?, ?, ?, ?, ?)');
         for (const e of data.expenses) insertExpense.run(e.id, e.title, e.category, e.amount, e.date_added || now, e.notes);
       }
+      if (data.registers) {
+        const insertReg = db!.prepare('INSERT OR REPLACE INTO registers (id, opening_balance, opened_at, opened_by, actual_cash, closed_at, closed_by, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        for (const r of data.registers) insertReg.run(r.id, r.opening_balance, r.opened_at, r.opened_by, r.actual_cash, r.closed_at, r.closed_by, r.status, r.notes);
+      }
+      if (data.sale_returns) {
+        const insertSR = db!.prepare('INSERT OR REPLACE INTO sale_returns (id, sale_id, total_returned, date_created, reason, notes) VALUES (?, ?, ?, ?, ?, ?)');
+        for (const sr of data.sale_returns) insertSR.run(sr.id, sr.sale_id, sr.total_returned, sr.date_created || now, sr.reason, sr.notes);
+      }
+      if (data.sale_return_items) {
+        const insertSRI = db!.prepare('INSERT OR REPLACE INTO sale_return_items (id, return_id, product_id, product_name, quantity, price) VALUES (?, ?, ?, ?, ?, ?)');
+        for (const sri of data.sale_return_items) insertSRI.run(sri.id, sri.return_id, sri.product_id, sri.product_name, sri.quantity, sri.price);
+      }
+      if (data.purchase_returns) {
+        const insertPR = db!.prepare('INSERT OR REPLACE INTO purchase_returns (id, purchase_id, total_returned, date_created, reason, notes) VALUES (?, ?, ?, ?, ?, ?)');
+        for (const pr of data.purchase_returns) insertPR.run(pr.id, pr.purchase_id, pr.total_returned, pr.date_created || now, pr.reason, pr.notes);
+      }
+      if (data.purchase_return_items) {
+        const insertPRI = db!.prepare('INSERT OR REPLACE INTO purchase_return_items (id, return_id, product_id, product_name, quantity, price) VALUES (?, ?, ?, ?, ?, ?)');
+        for (const pri of data.purchase_return_items) insertPRI.run(pri.id, pri.return_id, pri.product_id, pri.product_name, pri.quantity, pri.price);
+      }
+      if (data.vendor_payments) {
+        const insertVP = db!.prepare('INSERT OR REPLACE INTO vendor_payments (id, vendor_id, amount, date_created, notes) VALUES (?, ?, ?, ?, ?)');
+        for (const vp of data.vendor_payments) insertVP.run(vp.id, vp.vendor_id, vp.amount, vp.date_created || now, vp.notes);
+      }
+      if (data.financial_transactions) {
+        const insertFT = db!.prepare('INSERT OR REPLACE INTO financial_transactions (id, type, amount, date_created, notes) VALUES (?, ?, ?, ?, ?)');
+        for (const ft of data.financial_transactions) insertFT.run(ft.id, ft.type, ft.amount, ft.date_created || now, ft.notes);
+      }
 
       db!.prepare('PRAGMA foreign_keys = ON').run();
     })();
@@ -2108,10 +2418,128 @@ ipcMain.handle('import-data', async (_, data: any) => {
 ipcMain.handle('get-vendors', async () => {
   try {
     if (!db) throw new Error('Database not initialized');
-    const vendors = db.prepare('SELECT * FROM vendors ORDER BY name').all();
+    
+    const vendors = db.prepare(`
+      SELECT v.*,
+             COALESCE((
+               SELECT SUM(rem) FROM (
+                 SELECT CAST(p.total AS REAL) - 
+                        COALESCE((SELECT SUM(CAST(vp.amount AS REAL)) FROM vendor_payments vp WHERE vp.purchase_id = p.id), 0) -
+                        COALESCE((SELECT SUM(CAST(pr.total_returned AS REAL)) FROM purchase_returns pr WHERE pr.purchase_id = p.id), 0) as rem
+                 FROM purchases p 
+                 WHERE CAST(p.vendor_id AS INTEGER) = v.id AND (p.status IS NULL OR LOWER(p.status) != 'cancelled')
+               ) WHERE rem > 0.5
+             ), 0) as balance
+      FROM vendors v
+      ORDER BY balance DESC, v.name ASC
+    `).all();
     return { success: true, data: vendors };
   } catch (error: any) {
     logger.error('Failed to get vendors:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-vendor-details', async (_, vendorId: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const vendor = db.prepare('SELECT * FROM vendors WHERE id = ?').get(vendorId);
+    if (!vendor) throw new Error('Vendor not found');
+    
+    const purchases = db.prepare('SELECT * FROM purchases WHERE vendor_id = ? ORDER BY date_created DESC').all(vendorId);
+    const payments = db.prepare('SELECT * FROM vendor_payments WHERE vendor_id = ? ORDER BY date_created DESC').all(vendorId);
+    const returns = db.prepare(`
+      SELECT pr.*, p.date_created as purchase_date
+      FROM purchase_returns pr
+      JOIN purchases p ON pr.purchase_id = p.id
+      WHERE p.vendor_id = ?
+      ORDER BY pr.date_created DESC
+    `).all(vendorId);
+
+    const purchaseItemsAll = db.prepare(`
+      SELECT ib.*, p.name as product_name
+      FROM inventory_batches ib
+      JOIN products p ON ib.product_id = p.id
+      JOIN purchases pur ON ib.purchase_id = pur.id
+      WHERE pur.vendor_id = ?
+    `).all(vendorId);
+
+    // Link payments and returns to specific purchases
+    const enhancedPurchases = purchases.map((p: any) => {
+      const linkedPayments = payments.filter((pay: any) => pay.purchase_id === p.id);
+      const linkedReturns = returns.filter((ret: any) => ret.purchase_id === p.id);
+      const linkedItems = purchaseItemsAll.filter((item: any) => item.purchase_id === p.id);
+      
+      const amountPaid: number = linkedPayments.reduce((acc: number, pay: any) => acc + (Number(pay.amount) || 0), 0);
+      const amountReturned: number = linkedReturns.reduce((acc: number, ret: any) => acc + (Number(ret.total_returned) || 0), 0);
+      
+      return {
+        ...p,
+        amountPaid,
+        amountReturned,
+        remaining: (p.status === 'Cancelled' ? 0 : (Number(p.total) || 0)) - amountPaid - amountReturned,
+        linkedPayments,
+        linkedReturns,
+        items: linkedItems
+      };
+    });
+
+    const totalPurchased = purchases.filter((p: any) => p.status !== 'Cancelled').reduce((acc: number, p: any) => acc + (Number(p.total) || 0), 0);
+    const totalPaid = payments.reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
+    const totalReturned = returns.reduce((acc: number, r: any) => acc + (Number(r.total_returned) || 0), 0);
+    
+    // Net Account Balance
+    const accountBalance = totalPurchased - totalPaid - totalReturned;
+    
+    // Invoice-based Debt Balance (Sum of positive remaining on each invoice)
+    const unpaidInvoicesBalance = enhancedPurchases.reduce((acc: number, p: any) => acc + Math.max(0, p.remaining), 0);
+
+    return { 
+      success: true, 
+      data: { 
+        vendor, 
+        purchases: enhancedPurchases, 
+        payments, 
+        returns, 
+        totalPurchased, 
+        totalPaid, 
+        totalReturned, 
+        balance: unpaidInvoicesBalance, // Use invoice-based as primary
+        accountBalance 
+      } 
+    };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('add-vendor-payment', async (_, data: { vendor_id: number; amount: number; notes?: string; purchase_id?: number }) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const stmt = db.prepare('INSERT INTO vendor_payments (vendor_id, amount, notes, purchase_id, date_created) VALUES (?, ?, ?, ?, datetime(\'now\', \'localtime\'))');
+    stmt.run(data.vendor_id, data.amount, data.notes || '', data.purchase_id || null);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('delete-vendor-payment', async (_, paymentId: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    db.prepare('DELETE FROM vendor_payments WHERE id = ?').run(paymentId);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('cancel-purchase', async (_, purchaseId: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    db.prepare("UPDATE purchases SET status = 'Cancelled' WHERE id = ?").run(purchaseId);
+    return { success: true };
+  } catch (error: any) {
     return { success: false, error: error.message };
   }
 });
@@ -2130,41 +2558,58 @@ ipcMain.handle('add-vendor', async (_, vendor: { name: string; phone?: string; a
 });
 
 // ============= PURCHASES / INVENTORY BATCHES =============
-ipcMain.handle('create-purchase', async (_, data: { vendor_id: number; items: any[]; total: number }) => {
+ipcMain.handle('create-purchase', async (_, data: { vendor_id: number; items: any[]; total: number; amount_paid?: number }) => {
   try {
     if (!db) throw new Error('Database not initialized');
     const transaction = db.transaction(() => {
-      const purchaseStmt = db!.prepare("INSERT INTO purchases (vendor_id, total, date_created) VALUES (?, ?, datetime('now', 'localtime'))");
-      const info = purchaseStmt.run(data.vendor_id, data.total);
+      // Get current register if any
+      const reg = db!.prepare("SELECT id FROM registers WHERE status = 'open' ORDER BY opened_at DESC LIMIT 1").get() as any;
+      const determinedStatus = (data.amount_paid || 0) >= data.total ? 'Completed' : (data.amount_paid || 0) > 0 ? 'Partial' : 'Pending';
+      const purchaseStmt = db!.prepare("INSERT INTO purchases (vendor_id, total, status, date_created, register_id) VALUES (?, ?, ?, datetime('now', 'localtime'), ?)");
+      const info = purchaseStmt.run(data.vendor_id, data.total, determinedStatus, reg?.id || null);
       const purchaseId = info.lastInsertRowid;
-      
+
       const batchStmt = db!.prepare(`
         INSERT INTO inventory_batches (product_id, vendor_id, purchase_id, quantity_added, quantity_remaining, purchase_price, date_added)
         VALUES (?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
       `);
-      
+
       for (const item of data.items) {
         batchStmt.run(item.product_id, data.vendor_id, purchaseId, item.quantity, item.quantity, item.purchase_price);
 
-        // Update WAC and stock in products table
+        // Update WAC, stock and Selling Price in products table
         if (item.product_id) {
-          const p = db!.prepare('SELECT stock, purchase_price FROM products WHERE id = ?').get(item.product_id) as any;
+          const p = db!.prepare('SELECT stock, purchase_price, price FROM products WHERE id = ?').get(item.product_id) as any;
           if (p) {
-             const oldStock = p.stock || 0;
-             const oldPrice = p.purchase_price || 0;
-             const newStock = oldStock + item.quantity;
-             let newWAC = item.purchase_price;
-             if (newStock > 0) {
-               newWAC = ((oldStock * oldPrice) + (item.quantity * item.purchase_price)) / newStock;
-             }
-             db!.prepare('UPDATE products SET stock = ?, purchase_price = ? WHERE id = ?').run(newStock, newWAC, item.product_id);
+            const oldStock = p.stock || 0;
+            const oldPrice = p.purchase_price || 0;
+            const newStock = oldStock + item.quantity;
+            let newWAC = item.purchase_price;
+            if (newStock > 0) {
+              newWAC = ((oldStock * oldPrice) + (item.quantity * item.purchase_price)) / newStock;
+            }
+            
+            // Use provided selling_price or keep the current one
+            const finalSellingPrice = item.selling_price || p.price;
+            
+            db!.prepare('UPDATE products SET stock = ?, purchase_price = ?, price = ? WHERE id = ?')
+              .run(newStock, newWAC, finalSellingPrice, item.product_id);
           }
         }
       }
+
+      // Record initial payment if provided
+      if (data.amount_paid && data.amount_paid > 0) {
+        db!.prepare(`
+          INSERT INTO vendor_payments (vendor_id, amount, notes, purchase_id, date_created)
+          VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
+        `).run(data.vendor_id, data.amount_paid, `Initial Payment for PO #${purchaseId}`, purchaseId);
+      }
+
       return purchaseId;
     });
     const purchaseId = transaction();
-    
+
     // Trigger auto-export after a successful purchase
     triggerAutoExport();
 
@@ -2187,6 +2632,22 @@ ipcMain.handle('get-inventory-batches', async (_, productId?: number) => {
     query += ' ORDER BY b.date_added ASC';
     const batches = db.prepare(query).all(...params);
     return { success: true, data: batches };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-purchase-items', async (_, purchaseId: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const items = db.prepare(`
+      SELECT ib.*, p.name as product_name,
+      (SELECT COALESCE(SUM(quantity), 0) FROM purchase_return_items WHERE product_id = ib.product_id AND return_id IN (SELECT id FROM purchase_returns WHERE purchase_id = ib.purchase_id)) as quantity_returned
+      FROM inventory_batches ib
+      LEFT JOIN products p ON ib.product_id = p.id
+      WHERE ib.purchase_id = ?
+    `).all(purchaseId);
+    return { success: true, data: items };
   } catch (error: any) {
     return { success: false, error: error.message };
   }
@@ -2249,6 +2710,73 @@ ipcMain.handle('get-product-analytics', async () => {
   }
 });
 
+ipcMain.handle('create-stock-adjustment', async (_, data: { product_id: number; quantity: number; type: string; reason: string }) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    
+    const { product_id, quantity, type, reason } = data;
+    const isReduction = quantity < 0;
+    const absQty = Math.abs(quantity);
+
+    const transaction = db.transaction(() => {
+      // 1. Log the adjustment as a financial transaction for auditing
+      // Use average purchase price for cost calculation if it's a reduction
+      const product = db!.prepare("SELECT name, purchase_price FROM products WHERE id = ?").get(product_id) as any;
+      if (!product) throw new Error("Product not found");
+
+      const costValue = absQty * (product.purchase_price || 0);
+
+      db!.prepare(`
+        INSERT INTO financial_transactions (type, category, amount, description, date_created)
+        VALUES (?, 'Adjustment', ?, ?, datetime('now', 'localtime'))
+      `).run(isReduction ? 'Expense' : 'Income', costValue, `${type}: ${reason || 'Manual Correction'} (${absQty} units of ${product.name})`);
+
+      // 2. Adjust Batches
+      if (isReduction) {
+        // FIFO: Deduct from oldest available batches
+        const batches = db!.prepare(`
+          SELECT * FROM inventory_batches 
+          WHERE product_id = ? AND quantity_remaining > 0 
+          ORDER BY date_added ASC
+        `).all(product_id) as any[];
+
+        let remainingToDeduct = absQty;
+        for (const batch of batches) {
+          if (remainingToDeduct <= 0) break;
+          const deduct = Math.min(batch.quantity_remaining, remainingToDeduct);
+          
+          db!.prepare("UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?")
+            .run(deduct, batch.id);
+          
+          remainingToDeduct -= deduct;
+        }
+
+        if (remainingToDeduct > 0) {
+          throw new Error(`Insufficient stock to deduct ${absQty} units. Shortage: ${remainingToDeduct}`);
+        }
+      } else {
+        // Increase: Create a new correction batch
+        db!.prepare(`
+          INSERT INTO inventory_batches (product_id, quantity_added, quantity_remaining, purchase_price, date_added, notes)
+          VALUES (?, ?, ?, ?, datetime('now', 'localtime'), ?)
+        `).run(product_id, absQty, absQty, product.purchase_price || 0, `Adjustment: ${reason}`);
+      }
+
+      // 3. Update master product stock count
+      db!.prepare("UPDATE products SET stock = (SELECT COALESCE(SUM(quantity_remaining), 0) FROM inventory_batches WHERE product_id = ?) WHERE id = ?")
+        .run(product_id, product_id);
+
+      return true;
+    });
+
+    transaction();
+    return { success: true };
+  } catch (error: any) {
+    logger.error('Stock adjustment failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 // ============= CUSTOMER HANDLERS =============
 
 ipcMain.handle('update-customer', async (_, id: number, customer: { name: string; phone?: string; email?: string; address?: string }) => {
@@ -2282,26 +2810,81 @@ ipcMain.handle('get-customer-details', async (_, customerId: number) => {
     }
     const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId);
     if (!customer) throw new Error('Customer not found');
-    
+
     const sales = db.prepare('SELECT * FROM sales WHERE customer_id = ? ORDER BY date_created DESC').all(customerId);
     const payments = db.prepare('SELECT * FROM customer_payments WHERE customer_id = ? ORDER BY date_added DESC').all(customerId);
-    
+    const returns = db.prepare(`
+      SELECT sr.*, s.date_created as sale_date 
+      FROM sale_returns sr
+      JOIN sales s ON sr.sale_id = s.id
+      WHERE s.customer_id = ?
+      ORDER BY sr.date_created DESC
+    `).all(customerId);
+
+    const saleItemsAll = db.prepare(`
+      SELECT si.*, s.customer_id
+      FROM sale_items si
+      JOIN sales s ON si.sale_id = s.id
+      WHERE s.customer_id = ?
+    `).all(customerId);
+
+    // Link payments and returns to specific sales
+    const enhancedSales = sales.map((s: any) => {
+      const linkedPayments = payments.filter((pay: any) => pay.sale_id === s.id);
+      const linkedReturns = returns.filter((ret: any) => ret.sale_id === s.id);
+      const linkedItems = saleItemsAll.filter((item: any) => item.sale_id === s.id);
+      
+      const amountPaid: number = linkedPayments.reduce((acc: number, pay: any) => acc + (Number(pay.amount) || 0), 0);
+      const amountReturned: number = linkedReturns.reduce((acc: number, ret: any) => acc + (Number(ret.total_returned) || 0), 0);
+      
+      return {
+        ...s,
+        amountPaid,
+        amountReturned,
+        remaining: (s.status === 'Cancelled' ? 0 : (Number(s.total) || 0)) - amountPaid - amountReturned,
+        linkedPayments,
+        linkedReturns,
+        items: linkedItems
+      };
+    });
+
     // Calculate totals
-    const totalTaken = sales.reduce((acc: number, s: any) => acc + (s.total || 0), 0);
-    const totalPaid = payments.reduce((acc: number, p: any) => acc + (p.amount || 0), 0);
-    const balance = totalTaken - totalPaid;
-    
-    return { success: true, data: { customer, sales, payments, totalTaken, totalPaid, balance } };
+    const totalTaken = sales.filter((s: any) => s.status !== 'Cancelled').reduce((acc: number, s: any) => acc + (Number(s.total) || 0), 0);
+    const totalPaid = payments.reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
+    const totalReturned = returns.reduce((acc: number, r: any) => acc + (Number(r.total_returned) || 0), 0);
+    const balance = totalTaken - totalPaid - totalReturned;
+
+    return { success: true, data: { customer, sales: enhancedSales, payments, returns, totalTaken, totalPaid, totalReturned, balance } };
   } catch (error: any) {
     return { success: false, error: error.message };
   }
 });
 
-ipcMain.handle('add-customer-payment', async (_, data: { customer_id: number; amount: number; notes?: string }) => {
+ipcMain.handle('add-customer-payment', async (_, data: { customer_id: number; amount: number; notes?: string; sale_id?: number }) => {
   try {
     if (!db) throw new Error('Database not initialized');
-    const stmt = db.prepare('INSERT INTO customer_payments (customer_id, amount, notes) VALUES (?, ?, ?)');
-    stmt.run(data.customer_id, data.amount, data.notes || '');
+    const stmt = db.prepare('INSERT INTO customer_payments (customer_id, amount, notes, sale_id, date_added) VALUES (?, ?, ?, ?, datetime(\'now\', \'localtime\'))');
+    stmt.run(data.customer_id, data.amount, data.notes || '', data.sale_id || null);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('delete-customer-payment', async (_, paymentId: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    db.prepare('DELETE FROM customer_payments WHERE id = ?').run(paymentId);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('cancel-sale', async (_, saleId: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    db.prepare("UPDATE sales SET status = 'Cancelled' WHERE id = ?").run(saleId);
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -2321,7 +2904,7 @@ ipcMain.handle('get-profit-loss-report', async (_, data: { startDate?: string; e
       WHERE 1=1
     `;
     let params: any[] = [];
-    
+
     const sqlStart = data.startDate ? data.startDate.replace('T', ' ').substring(0, 19) : null;
     const sqlEnd = data.endDate ? data.endDate.replace('T', ' ').substring(0, 19) : null;
 
@@ -2336,7 +2919,7 @@ ipcMain.handle('get-profit-loss-report', async (_, data: { startDate?: string; e
     const row = db.prepare(query).get(...params) as any;
     const revenue = row?.total_revenue || 0;
     const cogs = row?.total_cogs || 0;
-    
+
     // Get Expenses
     let expQuery = 'SELECT SUM(amount) as total_expenses FROM expenses WHERE 1=1';
     let expParams: any[] = [];
@@ -2344,9 +2927,9 @@ ipcMain.handle('get-profit-loss-report', async (_, data: { startDate?: string; e
     if (sqlEnd) { expQuery += ' AND date_added <= ?'; expParams.push(sqlEnd); }
     const expRow = db.prepare(expQuery).get(...expParams) as any;
     const expenses = expRow?.total_expenses || 0;
-    
+
     const profit = revenue - cogs - expenses;
-    
+
     return { success: true, data: { revenue, cogs, expenses, profit } };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -2385,6 +2968,555 @@ ipcMain.handle('delete-expense', async (_, id: number) => {
   }
 });
 
+// ============= CASH REGISTER HANDLERS =============
+
+ipcMain.handle('get-current-register', async () => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const register = db.prepare("SELECT * FROM registers WHERE status = 'open' ORDER BY opened_at DESC LIMIT 1").get();
+    return { success: true, data: register };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('open-register', async (_, data: { openingBalance: number; openedBy?: string }) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+
+    // Ensure no other register is open
+    const open = db.prepare("SELECT id FROM registers WHERE status = 'open'").get();
+    if (open) throw new Error('A register is already open. Close it first.');
+
+    const stmt = db.prepare(`
+      INSERT INTO registers (opening_balance, opened_by, status, opened_at, opening_time)
+      VALUES (?, ?, 'open', datetime('now', 'localtime'), datetime('now', 'localtime'))
+    `);
+    const info = stmt.run(data.openingBalance, data.openedBy || 'Admin');
+
+    return { success: true, data: { id: info.lastInsertRowid } };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-register-summary', async (_, registerId: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+
+    const reg = db.prepare('SELECT * FROM registers WHERE id = ?').get(registerId) as any;
+    if (!reg) throw new Error('Register not found');
+
+    const sales = db.prepare(`
+      SELECT 
+        COUNT(*) as count, 
+        SUM(total) as total,
+        SUM(CASE WHEN payment_method = 'cash' THEN total ELSE 0 END) as cash_total,
+        SUM(CASE WHEN payment_method = 'card' THEN total ELSE 0 END) as card_total
+      FROM sales 
+      WHERE date_created >= ? AND date_created <= ?
+    `).get(reg.opened_at, reg.closed_at || '9999-12-31 23:59:59') as any;
+
+    const returns = db.prepare(`
+      SELECT COALESCE(SUM(total_returned), 0) as total 
+      FROM sale_returns 
+      WHERE date_created >= ? AND date_created <= ?
+    `).get(reg.opened_at, reg.closed_at || '9999-12-31 23:59:59') as any;
+
+    const expenses = db.prepare(`
+      SELECT COALESCE(SUM(amount), 0) as total 
+      FROM expenses 
+      WHERE date_added >= ? AND date_added <= ?
+    `).get(reg.opened_at, reg.closed_at || '9999-12-31 23:59:59') as any;
+
+    return {
+      success: true,
+      data: {
+        ...reg,
+        salesCount: sales.count,
+        salesTotal: sales.total,
+        cashSales: sales.cash_total,
+        cardSales: sales.card_total,
+        returnsTotal: returns.total,
+        expensesTotal: expenses.total,
+        expectedCash: reg.opening_balance + sales.cash_total - returns.total - expenses.total
+      }
+    };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('close-register', async (_, data: { registerId: number; actualCash: number; closedBy?: string; notes?: string }) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+
+    const stmt = db.prepare(`
+      UPDATE registers 
+      SET status = 'closed', 
+          closed_at = datetime('now', 'localtime'), 
+          actual_cash = ?, 
+          closed_by = ?, 
+          notes = ?
+      WHERE id = ?
+    `);
+    stmt.run(data.actualCash, data.closedBy || 'Admin', data.notes || '', data.registerId);
+
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-register-history', async () => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const history = db.prepare("SELECT * FROM registers ORDER BY opened_at DESC LIMIT 50").all();
+    return { success: true, data: history };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+// ============= FINANCIALS HANDLERS =============
+
+ipcMain.handle('get-financial-transactions', async () => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const txs = db.prepare("SELECT * FROM financial_transactions ORDER BY date_created DESC LIMIT 100").all();
+    return { success: true, data: txs };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('add-financial-transaction', async (_, data: { type: string; category?: string; amount: number; description?: string; register_id?: number }) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const stmt = db.prepare(`
+      INSERT INTO financial_transactions (type, category, amount, description, register_id, date_created)
+      VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'))
+    `);
+    stmt.run(data.type, data.category || 'General', data.amount, data.description || '', data.register_id || null);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+// ============= RETURNS HANDLERS =============
+
+ipcMain.handle('create-sale-return', async (_, data: { sale_id: number; items: any[]; total_returned: number; reason?: string; notes?: string }) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+
+    const transaction = db.transaction(() => {
+      // 1. Create return record
+      const retStmt = db!.prepare(`
+        INSERT INTO sale_returns (sale_id, total_returned, reason, notes, date_created)
+        VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
+      `);
+      const info = retStmt.run(data.sale_id, data.total_returned, data.reason || 'General Return', data.notes || '');
+      const returnId = info.lastInsertRowid;
+
+      // 2. Update items and stock
+      const itemStmt = db!.prepare(`
+        INSERT INTO sale_return_items (return_id, product_id, product_name, quantity, price)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+
+      for (const item of data.items) {
+        const qty = parseInt(String(item.return_qty || item.quantity)) || 0;
+        if (qty <= 0) continue;
+
+        // Validation: Check if return quantity exceeds available
+        const currentItem = db!.prepare("SELECT quantity, (SELECT COALESCE(SUM(quantity), 0) FROM sale_return_items WHERE product_id = si.product_id AND return_id IN (SELECT id FROM sale_returns WHERE sale_id = si.sale_id)) as returned FROM sale_items si WHERE sale_id = ? AND product_id = ?").get(data.sale_id, item.product_id) as any;
+        if (currentItem && (qty + currentItem.returned > currentItem.quantity)) {
+          throw new Error(`Cannot return ${qty} of ${item.product_name}. Total returned would exceed original quantity.`);
+        }
+
+        itemStmt.run(returnId, item.product_id, item.product_name || 'Unknown Product', qty, item.price);
+
+        // Return stock to product
+        if (item.product_id) {
+          db!.prepare("UPDATE products SET stock = stock + ? WHERE id = ?").run(qty, item.product_id);
+        }
+      }
+
+      // 3. Mark sale as returned (partial or full)
+      db!.prepare("UPDATE sales SET status = 'Returned' WHERE id = ?").run(data.sale_id);
+
+      // 4. Log financial transaction (negative income)
+      const sale = db!.prepare("SELECT register_id FROM sales WHERE id = ?").get(data.sale_id) as any;
+      db!.prepare(`
+        INSERT INTO financial_transactions (type, category, amount, description, register_id, date_created)
+        VALUES ('Income', 'Sales Return', ?, ?, ?, datetime('now', 'localtime'))
+      `).run(-data.total_returned, `Return for Sale #${data.sale_id}${data.reason ? ': ' + data.reason : ''}`, sale?.register_id || null);
+
+      return returnId;
+    });
+
+    const returnId = transaction();
+    return { success: true, data: { returnId } };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-sale-return-items', async (_, returnId: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const items = db.prepare(`
+      SELECT sri.*, p.name as product_name
+      FROM sale_return_items sri
+      LEFT JOIN products p ON sri.product_id = p.id
+      WHERE sri.return_id = ?
+    `).all(returnId);
+    return { success: true, data: items };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-sale-returns', async (_, opts: any = {}) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const limit = opts.limit || 50;
+    const offset = opts.offset || 0;
+
+    const data = db.prepare(`
+      SELECT sr.*, s.total as original_total, c.name as customer_name
+      FROM sale_returns sr
+      JOIN sales s ON sr.sale_id = s.id
+      LEFT JOIN customers c ON s.customer_id = c.id
+      ORDER BY sr.date_created DESC
+      LIMIT ? OFFSET ?
+    `).all(limit, offset);
+
+    const total = (db.prepare("SELECT COUNT(*) as count FROM sale_returns").get() as any).count;
+
+    return { success: true, data, total };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('create-purchase-return', async (_, data: { purchase_id: number; items: any[]; total_returned: number; reason?: string; notes?: string }) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+
+    const transaction = db.transaction(() => {
+      // 1. Create return record
+      const retStmt = db!.prepare(`
+        INSERT INTO purchase_returns (purchase_id, total_returned, reason, notes, date_created)
+        VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
+      `);
+      const info = retStmt.run(data.purchase_id, data.total_returned, data.reason || 'General Return', data.notes || '');
+      const returnId = info.lastInsertRowid;
+
+      // 2. Update items and stock
+      const itemStmt = db!.prepare(`
+        INSERT INTO purchase_return_items (return_id, product_id, product_name, quantity, purchase_price)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+
+      for (const item of data.items) {
+        const qty = parseInt(String(item.quantity)) || 0;
+        if (qty <= 0) continue;
+
+        // Validation: Check if return quantity exceeds available in batch
+        const batch = db!.prepare("SELECT quantity_added, quantity_remaining FROM inventory_batches WHERE id = ?").get(item.id) as any;
+        if (!batch) throw new Error(`Inventory batch #${item.id} not found.`);
+        if (qty > batch.quantity_remaining) {
+          throw new Error(`Cannot return ${qty} items. Only ${batch.quantity_remaining} available in batch #${item.id}.`);
+        }
+        
+        itemStmt.run(returnId, item.product_id, item.product_name || 'Unknown Product', qty, item.purchase_price || 0);
+        
+        // Update batch remaining quantity to prevent re-returning
+        db!.prepare("UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?").run(qty, item.id);
+
+        // Remove stock from product (since we are returning it to vendor)
+        if (item.product_id) {
+          db!.prepare("UPDATE products SET stock = stock - ? WHERE id = ?").run(qty, item.product_id);
+        }
+      }
+
+      // 3. Log financial transaction (outflow reduction / income-like)
+      let purchase: any = null;
+      try {
+        purchase = db!.prepare("SELECT register_id FROM purchases WHERE id = ?").get(data.purchase_id);
+      } catch (e) {
+        logger.warn("Purchase table missing register_id column, ignoring for return log");
+      }
+      db!.prepare(`
+        INSERT INTO financial_transactions (type, category, amount, description, register_id, date_created)
+        VALUES ('Income', 'Purchase Return', ?, ?, ?, datetime('now', 'localtime'))
+      `).run(data.total_returned, `Return for Purchase #${data.purchase_id}${data.reason ? ': ' + data.reason : ''}`, purchase?.register_id || null);
+
+      return returnId;
+    });
+
+    const returnId = transaction();
+    return { success: true, data: { returnId } };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-purchase-returns', async (_, opts: any = {}) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const limit = opts.limit || 50;
+    const offset = opts.offset || 0;
+
+    const data = db.prepare(`
+      SELECT pr.*, p.total as original_total, v.name as vendor_name
+      FROM purchase_returns pr
+      JOIN purchases p ON pr.purchase_id = p.id
+      LEFT JOIN vendors v ON p.vendor_id = v.id
+      ORDER BY pr.date_created DESC
+      LIMIT ? OFFSET ?
+    `).all(limit, offset);
+    
+    const total = (db.prepare("SELECT COUNT(*) as count FROM purchase_returns").get() as any).count;
+    
+    return { success: true, data, total };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-purchase-return-items', async (_, returnId: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const items = db.prepare(`
+      SELECT pri.*, p.name as product_name
+      FROM purchase_return_items pri
+      LEFT JOIN products p ON pri.product_id = p.id
+      WHERE pri.return_id = ?
+    `).all(returnId);
+    return { success: true, data: items };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+
+// ============= FINANCIAL AUDIT HANDLERS =============
+
+ipcMain.handle('get-balance-sheet', async (_, args: { startDate?: string; endDate?: string } = {}) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+
+    const sqlStart = args.startDate ? getLocalSqliteDate(args.startDate) : null;
+    const sqlEnd = args.endDate ? getLocalSqliteDate(args.endDate) : null;
+
+    // Build separate param arrays for each table's date column
+    const salesParams: any[] = [];
+    let salesDateFilter = "1=1";
+    if (sqlStart) { salesDateFilter += " AND date_created >= ?"; salesParams.push(sqlStart); }
+    if (sqlEnd)   { salesDateFilter += " AND date_created <= ?"; salesParams.push(sqlEnd); }
+
+    const expenseParams: any[] = [];
+    let expenseDateFilter = "1=1";
+    if (sqlStart) { expenseDateFilter += " AND date_added >= ?"; expenseParams.push(sqlStart); }
+    if (sqlEnd)   { expenseDateFilter += " AND date_added <= ?"; expenseParams.push(sqlEnd); }
+
+    const purchaseParams: any[] = [];
+    let purchaseDateFilter = "1=1";
+    if (sqlStart) { purchaseDateFilter += " AND date_created >= ?"; purchaseParams.push(sqlStart); }
+    if (sqlEnd)   { purchaseDateFilter += " AND date_created <= ?"; purchaseParams.push(sqlEnd); }
+
+    // Inventory Value (at cost) - no date filter needed
+    const inventoryValue = (db.prepare("SELECT COALESCE(SUM(stock * purchase_price), 0) as total FROM products").get() as any).total;
+
+    // Receivables
+    const receivables = (db.prepare(`
+        SELECT SUM(remaining) FROM (
+          SELECT CAST(s.total AS REAL) - 
+                 COALESCE((SELECT SUM(CAST(amount AS REAL)) FROM customer_payments WHERE sale_id = s.id), 0) -
+                 COALESCE((SELECT SUM(CAST(total_returned AS REAL)) FROM sale_returns WHERE sale_id = s.id), 0) as remaining
+          FROM sales s 
+          WHERE (s.status IS NULL OR LOWER(s.status) != 'cancelled')
+        ) WHERE remaining > 0.5
+    `).get() as any)['SUM(remaining)'] || 0;
+
+    // Payables (AP)
+    const payables = (db.prepare(`
+        SELECT SUM(remaining) FROM (
+          SELECT CAST(p.total AS REAL) - 
+                 COALESCE((SELECT SUM(CAST(amount AS REAL)) FROM vendor_payments WHERE purchase_id = p.id), 0) -
+                 COALESCE((SELECT SUM(CAST(total_returned AS REAL)) FROM purchase_returns WHERE purchase_id = p.id), 0) as remaining
+          FROM purchases p 
+          WHERE (p.status IS NULL OR LOWER(p.status) != 'cancelled')
+        ) WHERE remaining > 0.5
+    `).get() as any)['SUM(remaining)'] || 0;
+
+    // Revenue
+    const revenue = (db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE status = 'Completed' AND ${salesDateFilter}`).get(...salesParams) as any).total;
+
+    // COGS
+    const cogs = (db.prepare(`
+      SELECT COALESCE(SUM(si.purchase_price * si.quantity), 0) as total 
+      FROM sale_items si 
+      JOIN sales s ON si.sale_id = s.id 
+      WHERE s.status = 'Completed' AND ${salesDateFilter.replace(/date_created/g, 's.date_created')}
+    `).get(...salesParams) as any).total;
+
+    // Expenses
+    const expenses = (db.prepare(`SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE ${expenseDateFilter}`).get(...expenseParams) as any).total;
+
+    // Vendor Outflow (purchases)
+    const vendorOutflow = (db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM purchases WHERE ${purchaseDateFilter}`).get(...purchaseParams) as any).total;
+
+    // Payment Stats
+    const paymentStats = db.prepare(`
+      SELECT payment_method, SUM(total) as revenue, COUNT(*) as count 
+      FROM sales 
+      WHERE status = 'Completed' AND ${salesDateFilter}
+      GROUP BY payment_method
+    `).all(...salesParams) as any[];
+
+    // Recent Transactions - union across tables with their correct date columns
+    const recentTransactions = db.prepare(`
+      SELECT 'sale' as type, id, total as amount, date_created as date, 'Sale' as description FROM sales
+      WHERE ${salesDateFilter}
+      UNION ALL
+      SELECT 'purchase' as type, id, total as amount, date_created as date, 'Purchase' as description FROM purchases
+      WHERE ${purchaseDateFilter}
+      UNION ALL
+      SELECT 'expense' as type, id, amount, date_added as date, COALESCE(category, 'Expense') as description FROM expenses
+      WHERE ${expenseDateFilter}
+      ORDER BY date DESC LIMIT 20
+    `).all(...salesParams, ...purchaseParams, ...expenseParams);
+
+    return {
+      success: true,
+      data: {
+        inventoryValue,
+        receivables,
+        payables,
+        revenue,
+        cogs,
+        expenses,
+        vendorOutflow,
+        netProfit: revenue - cogs - expenses,
+        paymentStats: paymentStats || [],
+        recentTransactions: recentTransactions || [],
+        period: { start: args.startDate || null, end: args.endDate || null }
+      }
+    };
+  } catch (error: any) {
+    logger.error('Failed to get balance sheet:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-all-payments', async (_, opts: any = {}) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const limit = opts.limit || 50;
+    const offset = opts.offset || 0;
+
+    // Aggregate customer payments, vendor payments, and returns into a single audit ledger
+    // We map types to match the frontend badges: 'Customer Payment', 'Vendor Payment', 'Sale Refund', 'Purchase Return'
+    const ledger = db.prepare(`
+      SELECT 'Customer Payment' as type, cp.amount, COALESCE(cp.date_added, (datetime('now', 'localtime'))) as date_added, c.name as party_name, cp.notes, cp.id
+      FROM customer_payments cp
+      LEFT JOIN customers c ON cp.customer_id = c.id
+      UNION ALL
+      SELECT 'Vendor Payment' as type, p.total as amount, COALESCE(p.date_created, (datetime('now', 'localtime'))) as date_added, v.name as party_name, p.status as notes, p.id
+      FROM purchases p
+      LEFT JOIN vendors v ON p.vendor_id = v.id
+      UNION ALL
+      SELECT 'Sale Refund' as type, sr.total_returned as amount, COALESCE(sr.date_created, (datetime('now', 'localtime'))) as date_added, c.name as party_name, sr.notes, sr.id
+      FROM sale_returns sr
+      JOIN sales s ON sr.sale_id = s.id
+      LEFT JOIN customers c ON s.customer_id = c.id
+      UNION ALL
+      SELECT 'Purchase Return' as type, pr.total_returned as amount, COALESCE(pr.date_created, (datetime('now', 'localtime'))) as date_added, v.name as party_name, pr.notes, pr.id
+      FROM purchase_returns pr
+      JOIN purchases p ON pr.purchase_id = p.id
+      LEFT JOIN vendors v ON p.vendor_id = v.id
+      ORDER BY date_added DESC
+      LIMIT ? OFFSET ?
+    `).all(limit, offset);
+
+    // Calculate summary totals
+    const stats = db.prepare(`
+      SELECT 
+        (SELECT COALESCE(SUM(amount), 0) FROM customer_payments) as total_received,
+        (SELECT COALESCE(SUM(total_returned), 0) FROM sale_returns) as total_returned,
+        (SELECT COALESCE(SUM(total_returned), 0) FROM purchase_returns) as total_purchase_returns,
+        (SELECT COALESCE(SUM(total), 0) FROM purchases) as total_purchases
+    `).get() as any;
+
+    const total = db.prepare(`
+      SELECT (SELECT COUNT(*) FROM customer_payments) + (SELECT COUNT(*) FROM purchases) + (SELECT COUNT(*) FROM sale_returns) + (SELECT COUNT(*) FROM purchase_returns) as count
+    `).get() as any;
+
+    return {
+      success: true,
+      data: ledger,
+      total: total.count,
+      totalIncoming: stats.total_received + stats.total_purchase_returns,
+      totalOutgoing: stats.total_purchases + stats.total_returned
+    };
+  } catch (error: any) {
+    logger.error('Failed to get all payments:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// ============= GOOGLE DRIVE HANDLERS =============
+ipcMain.handle('connect-google-drive', async () => {
+  try {
+    return await googleAuthService.connect();
+  } catch (error: any) {
+    logger.error('Google Drive connection failed:', error);
+    return false;
+  }
+});
+
+ipcMain.handle('get-google-drive-status', async () => {
+  try {
+    return {
+      connected: googleAuthService.isConnected(),
+      lastBackup: backupService.getLastBackupTime()
+    };
+  } catch (error: any) {
+    return { connected: false, lastBackup: null };
+  }
+});
+
+ipcMain.handle('trigger-google-drive-backup', async () => {
+  try {
+    const dbPath = path.join(app.getPath('userData'), 'pos.db');
+    return await backupService.triggerBackup(dbPath);
+  } catch (error: any) {
+    return { success: false, message: error.message };
+  }
+});
+
+ipcMain.handle('get-available-backups', async () => {
+  try {
+    return await restoreService.getAvailableBackups();
+  } catch (error: any) {
+    logger.error('Failed to get available backups:', error);
+    return [];
+  }
+});
+
+ipcMain.handle('restore-cloud-backup', async (event, fileId: string) => {
+  try {
+    return await restoreService.restoreBackup(fileId, event);
+  } catch (error: any) {
+    logger.error('Failed to restore cloud backup:', error);
+    return { success: false, message: error.message };
+  }
+});
+
 // ============= LOGO HANDLER =============
 ipcMain.handle('get-logo', async () => {
   try {
@@ -2392,13 +3524,13 @@ ipcMain.handle('get-logo', async () => {
     // Support loading logo from resources path (when packaged) or current dir (in dev)
     const logoRootPath = app.isPackaged ? process.resourcesPath : app.getAppPath();
     const logoFilePath = path.join(logoRootPath, logoFileName);
-    
+
     if (fs.existsSync(logoFilePath)) {
       const bitmap = fs.readFileSync(logoFilePath);
       const base64Str = Buffer.from(bitmap).toString('base64');
       return { success: true, data: `data:image/png;base64,${base64Str}` };
     }
-    
+
     return { success: false, error: 'Logo not found' };
   } catch (error: any) {
     logger.error('Failed to get logo:', error);
@@ -2411,6 +3543,10 @@ app.whenReady().then(async () => {
   try {
     await initializeDatabase();
     await createWindow();
+
+    const menuBuilder = new MenuBuilder(mainWindow!);
+    menuBuilder.buildMenu();
+
     startBackgroundTasks();
 
     app.on('activate', () => {
@@ -2445,6 +3581,45 @@ ipcMain.handle('select-directory', async () => {
   });
   if (result.canceled) return null;
   return result.filePaths[0];
+});
+
+ipcMain.handle('select-db-file', async () => {
+  if (!mainWindow) return null;
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select POS Database File',
+    filters: [{ name: 'SQLite Database', extensions: ['db'] }],
+    properties: ['openFile']
+  });
+  return canceled ? null : filePaths[0];
+});
+
+ipcMain.handle('import-db', async (_, sourcePath: string) => {
+  try {
+    const destPath = path.join(app.getPath('userData'), 'pos.db');
+
+    // Backup existing
+    if (fs.existsSync(destPath)) {
+      fs.copyFileSync(destPath, `${destPath}.bak_${Date.now()}`);
+    }
+
+    // Close current connection
+    if (db) {
+      db.close();
+      db = null;
+    }
+
+    fs.copyFileSync(sourcePath, destPath);
+
+    // Re-initialize
+    await initializeDatabase();
+
+    return { success: true };
+  } catch (error: any) {
+    logger.error('Failed to import database:', error);
+    // Re-initialize if possible even if copy failed
+    if (!db) await initializeDatabase();
+    return { success: false, error: error.message };
+  }
 });
 
 ipcMain.handle('perform-auto-export', async () => {

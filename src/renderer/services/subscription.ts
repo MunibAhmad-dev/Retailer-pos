@@ -9,7 +9,7 @@ export interface SubscriptionState {
 
 class SubscriptionService {
   private state: SubscriptionState | null = null;
-  private readonly GRACE_PERIOD_DAYS = 3;
+  private readonly GRACE_PERIOD_DAYS = 0; // Strictly enforced
 
   public async initialize(): Promise<SubscriptionState> {
     try {
@@ -20,7 +20,7 @@ class SubscriptionService {
       }
 
       // Legacy MD5 license logic (No expiry date) -> Lifetime
-      if (!res.license) {
+      if (!res.license || res.license.isLegacy) {
         this.state = {
           isActive: true,
           isGracePeriod: false,
@@ -45,14 +45,14 @@ class SubscriptionService {
       const msDiff = expiryDate.getTime() - now.getTime();
       const daysRemaining = Math.ceil(msDiff / (1000 * 60 * 60 * 24));
 
-      const isExpired = daysRemaining < 0;
-      const isGracePeriod = isExpired && daysRemaining >= -this.GRACE_PERIOD_DAYS;
-      const isActive = daysRemaining >= 0 || isGracePeriod;
+      const isExpired = msDiff <= 0;
+      const isGracePeriod = false; // Grace period removed
+      const isActive = msDiff > 0;
 
       this.state = {
         isActive,
         isGracePeriod,
-        isExpired: !isActive, // Strictly dead after grace period
+        isExpired,
         daysRemaining,
         plan: plan || 'monthly',
         expiryDate: expiry
@@ -72,10 +72,11 @@ class SubscriptionService {
 
   public canAccess(routeName: string): boolean {
     const s = this.getState();
-    if (s.isActive || s.isGracePeriod || s.plan === 'lifetime') return true;
+    // Lifetime or active subscription allows everything
+    if (s.plan === 'lifetime' || s.isActive) return true;
     
-    // If fully expired, only allow critical operational pages to prevent data hostage situations
-    const allowedWhenExpired = ['sales', 'settings', 'subscription', 'about'];
+    // If fully expired, only allow these 2 critical pages as requested
+    const allowedWhenExpired = ['subscription', 'settings'];
     return allowedWhenExpired.includes(routeName);
   }
 

@@ -98,6 +98,60 @@ export default function About() {
         </div>
       </div>
 
+      {/* Core Features & Highlights */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <h3 className="font-black text-lg mb-4 flex items-center gap-2 text-primary">
+            <CheckCircle2 size={20} /> Core Features
+          </h3>
+          <ul className="space-y-3 text-sm text-muted-foreground">
+            <li className="flex gap-2"><strong>•</strong> <span><strong>Sales & Inventory:</strong> Category-based styling, barcode support, and real-time stock alerts.</span></li>
+            <li className="flex gap-2"><strong>•</strong> <span><strong>Ledger Management:</strong> Full debt tracking for both Customers and Vendors with payment history.</span></li>
+            <li className="flex gap-2"><strong>•</strong> <span><strong>Smart Analytics:</strong> Weekly, Monthly, and Yearly balance sheets with profit tracking.</span></li>
+            <li className="flex gap-2"><strong>•</strong> <span><strong>Privacy First:</strong> No data ever leaves your device. High-speed local SQLite database.</span></li>
+          </ul>
+        </div>
+
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <h3 className="font-black text-lg mb-4 flex items-center gap-2 text-blue-600">
+            <Database size={20} /> Cloud & Connectivity
+          </h3>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            While primarily an <strong>Offline POS</strong>, this software supports "Edge-Syncing":
+          </p>
+          <ul className="mt-3 space-y-3 text-sm text-muted-foreground">
+            <li className="flex gap-2"><strong>•</strong> <span><strong>Cloud Backup:</strong> Supports manual export for backup on Google Drive or Dropbox.</span></li>
+            <li className="flex gap-2"><strong>•</strong> <span><strong>Multi-Device:</strong> Future updates will support local network syncing for multiple registers.</span></li>
+            <li className="flex gap-2"><strong>•</strong> <span><strong>Remote Access:</strong> Optional add-on for cloud-based reporting via secure API.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      {/* Concerns & Edge Cases */}
+      <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+        <h3 className="font-black text-lg mb-4 flex items-center gap-2 text-destructive">
+          <AlertTriangle size={20} /> Concerns & Edge Cases
+        </h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-3">
+            <h4 className="text-sm font-bold uppercase tracking-tight opacity-70">Known Concerns</h4>
+            <ul className="space-y-2 text-xs text-muted-foreground">
+              <li><strong>Hardware Loss:</strong> If your PC is stolen or breaks, your data goes with it unless backed up.</li>
+              <li><strong>Manual Exports:</strong> We rely on users to perform weekly exports for safety.</li>
+              <li><strong>Offline Limits:</strong> Real-time syncing between two different cities is not available by default.</li>
+            </ul>
+          </div>
+          <div className="space-y-3">
+            <h4 className="text-sm font-bold uppercase tracking-tight opacity-70">Edge Case Handling</h4>
+            <ul className="space-y-2 text-xs text-muted-foreground">
+              <li><strong>Power Cut:</strong> Transactions are "atomic," meaning if power fails mid-sale, the database remains uncorrupted.</li>
+              <li><strong>Invalid Input:</strong> Advanced sanitization prevents "freezes" even with thousands of records.</li>
+              <li><strong>Complex Returns:</strong> Handles partial returns and credit adjustments automatically.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
       {/* License Agreement Card */}
       <div className="rounded-2xl border border-border shadow-sm bg-card overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b bg-muted/20">

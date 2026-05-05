@@ -28,10 +28,25 @@ export default function Expenses() {
   const [category, setCategory] = useState('');
   const [amount, setAmount] = useState('');
   const [notes, setNotes] = useState('');
+  const [currentRegister, setCurrentRegister] = useState<any>(null);
 
   const { addNotification } = useNotifications();
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { 
+    load();
+    checkRegister();
+  }, []);
+
+  const checkRegister = async () => {
+    try {
+      const res = await window.api.getCurrentRegister();
+      if (res.success) {
+        setCurrentRegister(res.data);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -50,7 +65,14 @@ export default function Expenses() {
     try {
       const amt = parseFloat(amount);
       if (isNaN(amt) || amt <= 0) return;
-      const res = await window.api.addExpense({ title, category, amount: amt, notes });
+
+      const res = await window.api.addExpense({ 
+        title, 
+        category, 
+        amount: amt, 
+        notes,
+        register_id: currentRegister?.id || null
+      });
       if (res.success) {
         addNotification("Expense Added", "Expense record was saved.", "success");
         setShowAdd(false);

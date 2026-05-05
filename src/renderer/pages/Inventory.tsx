@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Package, TrendingUp, Search, RefreshCw, FolderTree, ArrowRight, X, Calendar, Truck, AlertTriangle, ArrowUpDown } from 'lucide-react';
+import { Package, TrendingUp, Search, RefreshCw, FolderTree, ArrowRight, X, Calendar, Truck, AlertTriangle, ArrowUpDown, PlusCircle, MinusCircle, Info } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Input } from '../components/ui/input';
@@ -40,6 +40,13 @@ export default function Inventory() {
   const [batches, setBatches] = useState<any[]>([]);
   const [batchesLoading, setBatchesLoading] = useState(false);
 
+  // Adjustment state
+  const [adjustmentModalOpen, setAdjustmentModalOpen] = useState(false);
+  const [adjustmentQty, setAdjustmentQty] = useState('');
+  const [adjustmentType, setAdjustmentType] = useState('Wastage');
+  const [adjustmentReason, setAdjustmentReason] = useState('');
+  const [isSubmittingAdjustment, setIsSubmittingAdjustment] = useState(false);
+
   const { addNotification } = useNotifications();
 
   useEffect(() => { load(); }, []);
@@ -58,20 +65,7 @@ export default function Inventory() {
       }
       
       if (prodRes?.success) {
-        // Calculate stock per product from batches
-        const allBatches = batchRes?.success ? batchRes.data : [];
-        const stockMap: Record<number, number> = {};
-        allBatches.forEach((b: any) => {
-          if (!stockMap[b.product_id]) stockMap[b.product_id] = 0;
-          stockMap[b.product_id] += b.quantity_remaining;
-        });
-
-        const mappedProducts = (prodRes.data as any[]).map(p => ({
-          ...p,
-          stock: stockMap[p.id] || 0
-        }));
-        
-        setProducts(mappedProducts); 
+        setProducts(prodRes.data as any[]); 
         if (isManual) addNotification("Refreshed", "Inventory catalogue re-synced.", "success");
       }
     }
@@ -94,6 +88,43 @@ export default function Inventory() {
       console.error(err);
     }
     setBatchesLoading(false);
+  };
+
+  const handleAdjustmentSubmit = async () => {
+    if (!selectedProduct || !adjustmentQty || isNaN(Number(adjustmentQty)) || Number(adjustmentQty) === 0) {
+      addNotification("Warning", "Please enter a valid quantity", "warning");
+      return;
+    }
+
+    setIsSubmittingAdjustment(true);
+    try {
+      // If adjustmentType is Wastage/Theft, quantity should be negative
+      const qty = (adjustmentType === 'Wastage' || adjustmentType === 'Theft') 
+        ? -Math.abs(Number(adjustmentQty)) 
+        : Number(adjustmentQty);
+
+      const res = await window.api.createStockAdjustment({
+        product_id: selectedProduct.id,
+        quantity: qty,
+        type: adjustmentType,
+        reason: adjustmentReason
+      });
+
+      if (res.success) {
+        addNotification("Success", "Stock adjusted successfully", "success");
+        setAdjustmentModalOpen(false);
+        setAdjustmentQty('');
+        setAdjustmentReason('');
+        load();
+        if (selectedProduct) openProduct(selectedProduct);
+      } else {
+        addNotification("Error", res.error || "Failed to adjust stock", "error");
+      }
+    } catch (err) {
+      addNotification("Error", "Critical error adjusting stock", "error");
+    } finally {
+      setIsSubmittingAdjustment(false);
+    }
   };
 
   let sortedProducts = [...products];
@@ -126,6 +157,9 @@ export default function Inventory() {
 
   // Then paginate the prepared category data
   const { visible: visibleCategories, hasMore: hasMoreCat, loadMore: loadMoreCat, total: catTotal, showing: catShowing } = usePagination(byCategory, 4, 1);
+
+  // Paginate batches for the selected product
+  const { visible: visibleBatches, hasMore: hasMoreBatches, loadMore: loadMoreBatches, total: batchesTotal, showing: batchesShowing } = usePagination(batches, 10, 1);
 
   const lowStockItems = sortedProducts.filter(p => (p.stock || 0) < threshold);
 
@@ -299,17 +333,30 @@ export default function Inventory() {
                     <span className="text-xs font-semibold text-muted-foreground uppercase">Selling Price</span>
                     <span className="text-2xl font-bold text-primary">{fmtPKR(selectedProduct.price)}</span>
                   </div>
+                  <div className="col-span-2 pt-4 border-t">
+                    <Button 
+                      className="w-full gap-2 bg-amber-600 hover:bg-amber-700 text-white"
+                      onClick={() => {
+                        setAdjustmentType('Wastage');
+                        setAdjustmentQty('');
+                        setAdjustmentReason('');
+                        setAdjustmentModalOpen(true);
+                      }}
+                    >
+                      <AlertTriangle size={16} /> Adjust / Fix Stock
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="p-5">
+                <div className="p-5 pb-20">
                   <h4 className="text-sm font-bold mb-4 flex items-center gap-2"><Package size={16}/> Available Batches</h4>
                   <div className="flex flex-col gap-4">
                     {batches.length === 0 ? (
                       <div className="text-sm text-muted-foreground p-4 text-center border rounded-lg border-dashed">No stock available for this product.</div>
                     ) : (
-                      batches.map((b, i) => (
+                      visibleBatches.map((b, i) => (
                         <div key={b.id} className="bg-card border rounded-lg p-4 shadow-sm relative overflow-hidden">
-                          {i === 0 && <div className="absolute right-0 top-0 bg-primary/10 text-primary text-[10px] font-bold px-2 py-1 rounded-bl-lg">NEXT TO SELL (FIFO)</div>}
+                          {i === 0 && batchesShowing === 10 && <div className="absolute right-0 top-0 bg-primary/10 text-primary text-[10px] font-bold px-2 py-1 rounded-bl-lg">NEXT TO SELL (FIFO)</div>}
                           <div className="flex justify-between items-start mb-2 mt-1">
                             <span className="font-bold text-sm text-foreground">Stock: {b.quantity_remaining} units</span>
                             <Badge variant="outline" className="font-mono">{fmtPKR(b.purchase_price)} / unit</Badge>
@@ -322,11 +369,108 @@ export default function Inventory() {
                       ))
                     )}
                   </div>
+                  {hasMoreBatches && (
+                    <div className="mt-6">
+                      <LoadMoreButton 
+                        hasMore={hasMoreBatches} 
+                        onLoadMore={loadMoreBatches} 
+                        showing={batchesShowing} 
+                        total={batchesTotal} 
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
           </CardContent>
         </Card>
+      )}
+
+      {/* Adjustment Modal */}
+      {adjustmentModalOpen && selectedProduct && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300">
+          <Card className="w-full max-w-md shadow-2xl border-none overflow-hidden animate-in zoom-in-95 duration-300">
+            <CardHeader className="bg-amber-600 text-white p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-xl flex items-center gap-2">
+                    <AlertTriangle size={24} /> Stock Adjustment
+                  </CardTitle>
+                  <CardDescription className="text-amber-50/70">
+                    {selectedProduct.name}
+                  </CardDescription>
+                </div>
+                <Button variant="ghost" size="icon" className="rounded-full hover:bg-white/10" onClick={() => setAdjustmentModalOpen(false)}>
+                  <X size={20} />
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="p-6 space-y-6">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold">Adjustment Type</label>
+                  <Select value={adjustmentType} onValueChange={setAdjustmentType}>
+                    <SelectTrigger className="w-full border-amber-200">
+                      <SelectValue placeholder="Select type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Wastage">📉 Wastage / Damage (-)</SelectItem>
+                      <SelectItem value="Theft">🚨 Theft / Loss (-)</SelectItem>
+                      <SelectItem value="Correction">🔧 Manual Correction (+/-)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold">Quantity</label>
+                  <div className="relative">
+                    <Input 
+                      type="text"
+                      placeholder="0"
+                      className="pl-10 h-12 text-lg font-bold border-amber-200"
+                      value={adjustmentQty}
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(/[^0-9]/g, '');
+                        setAdjustmentQty(raw);
+                      }}
+                    />
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 text-amber-600">
+                      {(adjustmentType === 'Wastage' || adjustmentType === 'Theft') ? <MinusCircle size={20} /> : <PlusCircle size={20} />}
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                    <Info size={10} /> 
+                    {adjustmentType === 'Wastage' || adjustmentType === 'Theft' 
+                      ? "This quantity will be subtracted from total stock." 
+                      : "Positive for addition, negative for subtraction."}
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold">Reason / Note</label>
+                  <Input 
+                    placeholder="e.g. Expired on shelf, Found broken..."
+                    className="bg-muted/20 border-amber-100"
+                    value={adjustmentReason}
+                    onChange={(e) => setAdjustmentReason(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4 border-t">
+                <Button variant="outline" className="flex-1" onClick={() => setAdjustmentModalOpen(false)}>Cancel</Button>
+                <Button 
+                  className="flex-1 gap-2 bg-amber-600 hover:bg-amber-700 text-white"
+                  onClick={handleAdjustmentSubmit}
+                  disabled={isSubmittingAdjustment || !adjustmentQty}
+                >
+                  {isSubmittingAdjustment ? <RefreshCw className="animate-spin" size={16} /> : <AlertTriangle size={16} />}
+                  Confirm Adjustment
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
     </div>
   );

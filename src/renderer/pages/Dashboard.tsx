@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
   DollarSign, ShoppingBag, TrendingUp, Package, Activity, RefreshCw,
-  ShieldCheck, CreditCard, Boxes, AlertTriangle, Wallet, Users, ArrowRight
+  ShieldCheck, CreditCard, Boxes, AlertTriangle, Wallet, Users, ArrowRight,
+  Info, Filter, Truck, Store, BarChart3, FileText, Receipt, HandCoins, CheckCircle2
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -11,6 +12,19 @@ import { Badge } from '../components/ui/badge';
 import { cn } from '../lib/utils';
 import { useNotifications } from '../components/NotificationProvider';
 import { subService } from '../services/subscription';
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Legend
+} from 'recharts';
 import {
   Select,
   SelectContent,
@@ -121,10 +135,14 @@ export default function Dashboard({ onLock }: DashboardProps) {
   }
 
   const quickActions = [
-    { title: 'New Sale', path: '/sales', icon: ShoppingBag, color: 'border-blue-500/20 hover:border-blue-500/50 hover:bg-blue-500/5' },
-    { title: 'Products', path: '/products', icon: Package, color: 'border-indigo-500/20 hover:border-indigo-500/50 hover:bg-indigo-500/5' },
-    { title: 'Reports', path: '/reports', icon: TrendingUp, color: 'border-green-500/20 hover:border-green-500/50 hover:bg-green-500/5' },
-    { title: 'Inventory', path: '/inventory', icon: Boxes, color: 'border-orange-500/20 hover:border-orange-500/50 hover:bg-orange-500/5' },
+    { title: 'New Sale',    emoji: '🛒', desc: 'Sell to customers',   path: '/sales',       icon: ShoppingBag, accent: '#3b82f6', bg: 'hover:bg-blue-500/8 border-blue-500/20 hover:border-blue-500/40' },
+    { title: 'Products',   emoji: '📦', desc: 'Manage your items',   path: '/products',    icon: Package,     accent: '#8b5cf6', bg: 'hover:bg-violet-500/8 border-violet-500/20 hover:border-violet-500/40' },
+    { title: 'Purchase',   emoji: '🚚', desc: 'Restock from vendors', path: '/purchases',   icon: Truck,       accent: '#f97316', bg: 'hover:bg-orange-500/8 border-orange-500/20 hover:border-orange-500/40' },
+    { title: 'Inventory',  emoji: '🗄️', desc: 'Track stock levels',  path: '/inventory',   icon: Boxes,       accent: '#06b6d4', bg: 'hover:bg-cyan-500/8 border-cyan-500/20 hover:border-cyan-500/40' },
+    { title: 'Customers',  emoji: '👥', desc: 'Qaraz / credit list',  path: '/customers',   icon: Users,       accent: '#10b981', bg: 'hover:bg-emerald-500/8 border-emerald-500/20 hover:border-emerald-500/40' },
+    { title: 'Vendors',    emoji: '🏪', desc: 'Suppliers & payments', path: '/vendors',     icon: Store,       accent: '#f59e0b', bg: 'hover:bg-amber-500/8 border-amber-500/20 hover:border-amber-500/40' },
+    { title: 'Accounts',   emoji: '💰', desc: 'AP / AR ledgers',      path: '/loans',       icon: HandCoins,   accent: '#ef4444', bg: 'hover:bg-red-500/8 border-red-500/20 hover:border-red-500/40' },
+    { title: 'Reports',    emoji: '📊', desc: 'Sales analytics',      path: '/reports',     icon: BarChart3,   accent: '#6366f1', bg: 'hover:bg-indigo-500/8 border-indigo-500/20 hover:border-indigo-500/40' },
   ];
 
   if (loading && !stats) {
@@ -181,22 +199,31 @@ export default function Dashboard({ onLock }: DashboardProps) {
             {new Date().toLocaleDateString('en-PK', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
           </p>
         </div>
-        <div className="flex flex-col sm:flex-row items-center gap-3 bg-muted/30 p-2 rounded-lg border border-border/50">
-          <Select value={period} onValueChange={(val) => {
-            setPeriod(val);
-            if (val !== 'custom') loadStats(true, { p: val });
-          }}>
-            <SelectTrigger className="w-[160px] h-9 bg-background">
-              <SelectValue placeholder="Select period" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Lifetime (All)</SelectItem>
-              <SelectItem value="today">Today</SelectItem>
-              <SelectItem value="week">Last 7 Days</SelectItem>
-              <SelectItem value="month">This Month</SelectItem>
-              <SelectItem value="custom">Custom Range</SelectItem>
-            </SelectContent>
-          </Select>
+        <div className="flex flex-col sm:flex-row items-center gap-1 bg-muted/50 p-1 rounded-xl border border-border/40">
+          {[
+            { id: 'today', label: 'Today' },
+            { id: 'week', label: 'Weekly' },
+            { id: 'month', label: 'Monthly' },
+            { id: 'all', label: 'Lifetime' },
+            { id: 'custom', label: 'Custom' }
+          ].map((p) => (
+            <Button
+              key={p.id}
+              variant={period === p.id ? "secondary" : "ghost"}
+              size="sm"
+              className={cn(
+                "h-8 px-3 text-xs font-bold transition-all duration-200 rounded-lg",
+                period === p.id ? "bg-background shadow-sm text-primary" : "text-muted-foreground hover:text-foreground"
+              )}
+              onClick={() => {
+                setPeriod(p.id);
+                if (p.id !== 'custom') loadStats(true, { p: p.id });
+              }}
+            >
+              {p.label}
+            </Button>
+          ))}
+        </div>
           {period === 'custom' && (
             <div className="flex items-center gap-2 animate-in fade-in">
               <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)}
@@ -212,12 +239,17 @@ export default function Dashboard({ onLock }: DashboardProps) {
             <Button variant="outline" size="sm" onClick={onLock} className="h-9 gap-2">
               <ShieldCheck size={16} /><span className="hidden sm:inline">Lock</span>
             </Button>
-            <Button variant="default" size="sm" onClick={() => loadStats(true)} className="h-9 gap-2 shadow-sm">
-              <RefreshCw size={14} className={cn(loading && 'animate-spin')} />
+            <Button 
+              variant="default" 
+              size="sm" 
+              onClick={() => loadStats(true)} 
+              className="h-9 w-9 p-0 shadow-md transition-transform active:scale-95"
+              title="Refresh Stats"
+            >
+              <RefreshCw className={cn("h-4 w-4 text-white", loading && "animate-spin")} />
             </Button>
           </div>
         </div>
-      </div>
 
       {stats && (
         <>
@@ -226,22 +258,20 @@ export default function Dashboard({ onLock }: DashboardProps) {
             {statCards.map((card, i) => (
               <Card key={i} className="hover:-translate-y-1 hover:shadow-lg transition-all duration-300 border-border/50 bg-card/50 backdrop-blur-sm">
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
-                  <CardTitle className="text-xs font-medium text-muted-foreground uppercase">{card.title}</CardTitle>
+                  <CardTitle className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">{card.title}</CardTitle>
                   <div className={cn('p-2 rounded-lg', card.bg)}>
                     <card.icon className={cn('h-4 w-4', card.color)} />
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold">{card.value}</div>
-                  <p className="text-xs text-muted-foreground mt-1">{card.sub}</p>
+                  <div className="text-2xl font-black tracking-tight">{card.value}</div>
+                  <p className="text-[10px] font-bold text-muted-foreground mt-1 uppercase opacity-70">{card.sub}</p>
                 </CardContent>
               </Card>
             ))}
           </div>
 
-          {/* ===== Inventory + Loan Health Row ===== */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Stock Cost Value */}
             <Card className="border-border/50 shadow-sm hover:-translate-y-1 transition-transform">
               <CardHeader className="pb-2 flex flex-row items-center justify-between">
                 <CardTitle className="text-xs font-medium text-muted-foreground uppercase">Stock Cost Value</CardTitle>
@@ -253,7 +283,6 @@ export default function Dashboard({ onLock }: DashboardProps) {
               </CardContent>
             </Card>
 
-            {/* Retail Value */}
             <Card className="border-border/50 shadow-sm hover:-translate-y-1 transition-transform">
               <CardHeader className="pb-2 flex flex-row items-center justify-between">
                 <CardTitle className="text-xs font-medium text-muted-foreground uppercase">Retail Stock Value</CardTitle>
@@ -267,7 +296,6 @@ export default function Dashboard({ onLock }: DashboardProps) {
               </CardContent>
             </Card>
 
-            {/* Outstanding Loans */}
             <Card className={cn("shadow-sm hover:-translate-y-1 transition-transform", totalLoans > 0 ? "border-red-400/30 bg-red-500/5" : "border-border/50")}>
               <CardHeader className="pb-2 flex flex-row items-center justify-between">
                 <CardTitle className="text-xs font-medium text-muted-foreground uppercase">Outstanding Loans</CardTitle>
@@ -281,7 +309,6 @@ export default function Dashboard({ onLock }: DashboardProps) {
               </CardContent>
             </Card>
 
-            {/* Low Stock Alert */}
             <Card className={cn("shadow-sm hover:-translate-y-1 transition-transform", lowStockList.length > 0 ? "border-orange-400/30 bg-orange-500/5" : "border-border/50")}>
               <CardHeader className="pb-2 flex flex-row items-center justify-between">
                 <CardTitle className="text-xs font-medium text-muted-foreground uppercase">Low Stock Alert</CardTitle>
@@ -294,29 +321,32 @@ export default function Dashboard({ onLock }: DashboardProps) {
             </Card>
           </div>
 
-          {/* ===== Main Grid: Quick Actions + Top Products ===== */}
-          <div className="grid grid-cols-1 lg:grid-cols-7 gap-6">
-            <Card className="col-span-1 lg:col-span-2 shadow-md">
-              <CardHeader>
-                <CardTitle>Quick Actions</CardTitle>
-                <CardDescription>Shortcut to main modules</CardDescription>
+          {/* ===== Quick Actions Full Width ===== */}
+          <Card className="shadow-md">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-lg">Quick Actions</CardTitle>
+                <CardDescription>Tap a button to go to any section — icons show what each area does</CardDescription>
               </CardHeader>
-              <CardContent className="grid grid-cols-2 gap-3">
-                {quickActions.map((action, i) => (
-                  <Link key={i} to={action.path} className="h-full">
-                    <div className={cn(
-                      'flex flex-col items-center justify-center p-4 h-24 rounded-xl border bg-card text-card-foreground shadow-sm transition-all duration-200 cursor-pointer',
-                      action.color
-                    )}>
-                      <action.icon size={28} className="mb-3 text-foreground/70" />
-                      <span className="text-sm font-semibold text-foreground/80">{action.title}</span>
-                    </div>
-                  </Link>
-                ))}
+              <CardContent>
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+                  {quickActions.map((action, i) => (
+                    <Link key={i} to={action.path}>
+                      <div className={cn(
+                        'flex flex-col items-center justify-center gap-2 p-4 h-28 rounded-2xl border-2 bg-card transition-all duration-200 cursor-pointer group shadow-sm hover:shadow-md hover:-translate-y-0.5',
+                        action.bg
+                      )}>
+                        <span className="text-3xl leading-none">{action.emoji}</span>
+                        <span className="text-sm font-bold text-foreground leading-tight text-center">{action.title}</span>
+                        <span className="text-[10px] text-muted-foreground text-center leading-tight">{action.desc}</span>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
               </CardContent>
             </Card>
 
-            <Card className="col-span-1 lg:col-span-5 shadow-md">
+          {/* ===== Top Products ===== */}
+          <Card className="shadow-md">
               <CardHeader className="pb-3 border-b border-border/40">
                 <CardTitle>Top Selling Products</CardTitle>
                 <CardDescription>Highest quantity sold{period !== 'all' ? ' in selected period' : ' overall'}</CardDescription>
@@ -349,6 +379,194 @@ export default function Dashboard({ onLock }: DashboardProps) {
                     <p>No sales data yet.</p>
                   </div>
                 )}
+              </CardContent>
+            </Card>
+
+          {/* ===== AP / AR Invoice Tables ===== */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+            {/* Receivables (AR) */}
+            <Card className={cn("shadow-md border-2", (stats?.totalOutstandingLoans || 0) > 0 ? "border-red-400/30 bg-red-50 dark:bg-red-950/20" : "border-border/50")}>
+              <CardHeader className="pb-3 border-b border-red-400/20 flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-base font-bold text-red-600 flex items-center gap-2">
+                    <Receipt size={16}/> Receivable (AR) — قرض واپس ملنی
+                  </CardTitle>
+                  <CardDescription className="dark:text-red-200/60">{stats?.customersInDebt || 0} customers owe &nbsp;
+                    <span className="font-bold text-red-500">{fmt(stats?.totalOutstandingLoans || 0)}</span>
+                  </CardDescription>
+                </div>
+                <Link to="/loans">
+                  <Button variant="outline" size="sm" className="gap-1 border-red-400/30 text-red-600 hover:bg-red-50 text-xs shrink-0">
+                    View All <ArrowRight size={12}/>
+                  </Button>
+                </Link>
+              </CardHeader>
+              <CardContent className="p-0">
+                {(stats?.topDebtors || []).length > 0 ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/30 hover:bg-muted/30">
+                        <TableHead>Customer</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead className="text-right pr-4">Balance Due</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(stats?.topDebtors || []).map((d: any) => (
+                        <TableRow key={d.id} className="hover:bg-red-50/50">
+                          <TableCell className="font-semibold">{d.name}</TableCell>
+                          <TableCell className="text-muted-foreground text-xs">{d.phone || '—'}</TableCell>
+                          <TableCell className="text-right pr-4 font-bold text-red-600">{fmt(d.balance)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
+                    <CheckCircle2 size={32} className="text-green-500 opacity-60" />
+                    <p className="text-sm">No outstanding receivables 🎉</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Payables (AP) */}
+            <Card className={cn("shadow-md border-2", (stats?.totalOutstandingPayables || 0) > 0 ? "border-amber-400/30 bg-amber-50 dark:bg-amber-950/20" : "border-border/50")}>
+              <CardHeader className="pb-3 border-b border-amber-400/20 flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-base font-bold text-amber-700 dark:text-amber-500 flex items-center gap-2">
+                    <HandCoins size={16}/> Payable (AP) — ادائیگی باقی
+                  </CardTitle>
+                  <CardDescription className="dark:text-amber-200/60">{stats?.vendorsWithDebt || 0} vendors waiting &nbsp;
+                    <span className="font-bold text-amber-600 dark:text-amber-500">{fmt(stats?.totalOutstandingPayables || 0)}</span>
+                  </CardDescription>
+                </div>
+                <Link to="/loans">
+                  <Button variant="outline" size="sm" className="gap-1 border-amber-400/30 text-amber-700 hover:bg-amber-50 text-xs shrink-0">
+                    View All <ArrowRight size={12}/>
+                  </Button>
+                </Link>
+              </CardHeader>
+              <CardContent className="p-0">
+                {(stats?.topPayableVendors || []).length > 0 ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/30 hover:bg-muted/30">
+                        <TableHead>Vendor</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead className="text-right pr-4">Amount Due</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {(stats?.topPayableVendors || []).map((v: any) => (
+                        <TableRow key={v.id} className="hover:bg-amber-50/50">
+                          <TableCell className="font-semibold">{v.name}</TableCell>
+                          <TableCell className="text-muted-foreground text-xs">{v.phone || '—'}</TableCell>
+                          <TableCell className="text-right pr-4 font-bold text-amber-700">{fmt(v.balance)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
+                    <CheckCircle2 size={32} className="text-green-500 opacity-60" />
+                    <p className="text-sm">No outstanding payables 🎉</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* ===== Charts Section (Moved to bottom) ===== */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+            {/* Revenue Trend Chart */}
+            <Card className="shadow-md overflow-hidden border-none bg-slate-900 text-white">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <TrendingUp className="text-emerald-400" size={18} /> Revenue Trend
+                </CardTitle>
+                <CardDescription className="text-slate-400 text-xs">Daily performance metrics</CardDescription>
+              </CardHeader>
+              <CardContent className="h-[300px] pt-4">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={stats.salesTrend}>
+                    <defs>
+                      <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.8}/>
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.1)" />
+                    <XAxis 
+                      dataKey="date" 
+                      fontSize={10} 
+                      tickLine={false} 
+                      axisLine={false}
+                      stroke="#94a3b8"
+                      tickFormatter={(str) => {
+                        const date = new Date(str);
+                        return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+                      }}
+                    />
+                    <YAxis 
+                      fontSize={10} 
+                      tickLine={false} 
+                      axisLine={false} 
+                      stroke="#94a3b8"
+                      tickFormatter={(value) => `Rs.${value}`}
+                    />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#1e293b', borderRadius: '12px', border: 'none', color: '#f8fafc' }}
+                      itemStyle={{ color: '#10b981' }}
+                      formatter={(value: any) => [fmt(value), 'Revenue']}
+                    />
+                    <Area 
+                      type="monotone" 
+                      dataKey="revenue" 
+                      stroke="#10b981" 
+                      fillOpacity={1} 
+                      fill="url(#colorRev)" 
+                      strokeWidth={3}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            {/* Payment Distribution Chart */}
+            <Card className="shadow-md border-none bg-slate-900 text-white">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <CreditCard className="text-blue-400" size={18} /> Payment Methods
+                </CardTitle>
+                <CardDescription className="text-slate-400 text-xs">Revenue share by type</CardDescription>
+              </CardHeader>
+              <CardContent className="h-[300px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={stats.paymentStats}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={70}
+                      outerRadius={90}
+                      paddingAngle={5}
+                      dataKey="revenue"
+                      nameKey="payment_method"
+                      stroke="none"
+                    >
+                      {stats.paymentStats?.map((entry: any, index: number) => (
+                        <Cell key={`cell-${index}`} fill={['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'][index % 5]} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#1e293b', borderRadius: '12px', border: 'none', color: '#f8fafc' }}
+                      formatter={(value: any) => fmt(value)}
+                    />
+                    <Legend iconType="circle" />
+                  </PieChart>
+                </ResponsiveContainer>
               </CardContent>
             </Card>
           </div>
@@ -413,16 +631,41 @@ export default function Dashboard({ onLock }: DashboardProps) {
                   </Button>
                 </Link>
               </CardHeader>
-              <CardContent className="flex items-center justify-between p-6">
-                <div className="flex items-center gap-4">
-                  <div className="h-14 w-14 rounded-full bg-red-500/10 flex items-center justify-center">
-                    <Users size={28} className="text-red-500" />
-                  </div>
-                  <div>
-                    <p className="text-sm text-muted-foreground">Total amount owed to your shop</p>
-                    <p className="text-3xl font-bold text-red-500">{fmt(totalLoans)}</p>
-                  </div>
-                </div>
+              <CardContent className="flex flex-col lg:flex-row items-center justify-between p-6 gap-6">
+                 <div className="flex items-center gap-4 w-full">
+                   <div className="h-16 w-16 rounded-2xl bg-red-500/10 flex items-center justify-center border border-red-500/20 shadow-inner">
+                     <Wallet size={32} className="text-red-600" />
+                   </div>
+                   <div>
+                     <p className="text-xs font-bold uppercase tracking-wider text-red-600/70 mb-1">Total Outstanding Debt</p>
+                     <p className="text-4xl font-black text-red-600 tracking-tight">{fmt(totalLoans)}</p>
+                   </div>
+                 </div>
+                 <Card className="w-full lg:max-w-md shadow-xl border-amber-500/30 dark:border-amber-500/20 bg-amber-50/80 dark:bg-amber-950/40 backdrop-blur-md">
+                    <CardHeader className="pb-3 border-b border-amber-500/20 bg-amber-500/10">
+                       <CardTitle className="text-xs font-black text-amber-900 dark:text-amber-200 flex items-center gap-2 uppercase tracking-widest">
+                         <Info size={14} className="text-amber-600" /> Financial Insights
+                       </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-5 space-y-5">
+                       <div className="flex gap-4 items-start">
+                          <div className="w-9 h-9 rounded-2xl bg-amber-500/20 dark:bg-amber-500/30 flex items-center justify-center shrink-0 border border-amber-500/30 shadow-sm">
+                             <HandCoins size={18} className="text-amber-800 dark:text-amber-300"/>
+                          </div>
+                          <p className="text-[12px] leading-snug text-amber-950 dark:text-amber-50 font-bold">
+                            Your <strong className="text-amber-600 dark:text-amber-400 uppercase tracking-tighter">receivables</strong> are payments owed to you. Monitor these closely to maintain healthy cash flow.
+                          </p>
+                       </div>
+                       <div className="flex gap-4 items-start">
+                          <div className="w-9 h-9 rounded-2xl bg-blue-500/20 dark:bg-blue-500/30 flex items-center justify-center shrink-0 border border-blue-500/30 shadow-sm">
+                             <TrendingUp size={18} className="text-blue-800 dark:text-blue-300"/>
+                          </div>
+                          <p className="text-[12px] leading-snug text-blue-950 dark:text-blue-50 font-bold">
+                            <strong className="text-blue-600 dark:text-blue-400 uppercase tracking-tighter">Net Profit</strong> represents your earnings after all costs. A margin of 15-20% is considered healthy.
+                          </p>
+                       </div>
+                    </CardContent>
+                  </Card>
               </CardContent>
             </Card>
           )}

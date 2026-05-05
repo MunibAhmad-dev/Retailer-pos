@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Save, Upload, Store, Phone, MapPin, FileText, Lock, Mail, Image as ImageIcon, Database, Download, Trash2, ShieldCheck, Eye, EyeOff, Zap, Key, ShieldAlert, Clock, Calendar } from 'lucide-react';
+import { Save, Upload, Store, Phone, MapPin, FileText, Lock, Mail, Image as ImageIcon, Database, Download, Trash2, ShieldCheck, Eye, EyeOff, Zap, Key, ShieldAlert, Clock, Calendar, Wallet } from 'lucide-react';
 import { useNotifications } from '../components/NotificationProvider';
 import { subService, SubscriptionState } from '../services/subscription';
 import { Badge } from '../components/ui/badge';
@@ -19,7 +19,7 @@ export default function Subscription() {
   const [timeLeft, setTimeLeft] = useState<string>('');
   useEffect(() => {
     loadSubscription();
-    
+
     const timer = setInterval(() => {
       const state = subService.getState();
       if (state.expiryDate) {
@@ -41,7 +41,7 @@ export default function Subscription() {
   const loadSubscription = async () => {
     const state = await subService.initialize();
     setSubState(state);
-    
+
     try {
       const settings = await window.api.getSettings();
       if (settings.success && settings.data && settings.data.business_name) {
@@ -56,7 +56,7 @@ export default function Subscription() {
   const handleActivate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activationKey || !inputBusinessName) return;
-    
+
     setIsActivating(true);
     try {
       const res = await window.api.activateApp({ businessName: inputBusinessName, activationKey });
@@ -92,29 +92,29 @@ export default function Subscription() {
           { name: 'Lifetime', days: '∞ Unlimited', icon: <ShieldCheck size={20} className="text-emerald-600" />, color: 'bg-emerald-500/5 border-emerald-500/20' },
         ].map(plan => (
           <div key={plan.name} className={cn("p-5 rounded-2xl border flex flex-col items-center text-center gap-2 transition-all hover:shadow-md hover:-translate-y-1", plan.color)}>
-             <div className="p-3 rounded-xl bg-white/80 shadow-sm mb-1">{plan.icon}</div>
-             <h3 className="font-bold text-sm">{plan.name}</h3>
-             <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-widest">{plan.days} {typeof plan.days === 'number' ? 'Days' : ''}</p>
+            <div className="p-3 rounded-xl bg-white/80 shadow-sm mb-1">{plan.icon}</div>
+            <h3 className="font-bold text-sm">{plan.name}</h3>
+            <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-widest">{plan.days} {typeof plan.days === 'number' ? 'Days' : ''}</p>
           </div>
         ))}
       </div>
 
       {subState.plan !== 'lifetime' && subState.daysRemaining <= 5 && (
         <div className="bg-destructive border border-destructive rounded-xl p-5 flex flex-col md:flex-row items-center justify-between gap-6 animate-in slide-in-from-top duration-500 shadow-xl shadow-destructive/20 text-white">
-           <div className="flex items-center gap-4">
-             <div className="bg-white/20 p-3 rounded-2xl text-white backdrop-blur-md shadow-inner animate-pulse">
-               <ShieldAlert size={28} />
-             </div>
-             <div>
-               <h3 className="text-xl font-black uppercase tracking-tight">Urgent: License Expiring</h3>
-               <p className="text-white/80 text-sm font-medium mt-1">
-                 Remaining Time: <span className="font-black text-white underline underline-offset-4 decoration-2">{timeLeft || `${subState.daysRemaining} days`}</span>
-               </p>
-             </div>
-           </div>
-           <div className="font-mono text-sm font-bold bg-black/20 px-4 py-2 rounded-lg border border-white/20 backdrop-blur-md">
-             EXPIRES ON: {new Date(subState.expiryDate || 0).toLocaleDateString()}
-           </div>
+          <div className="flex items-center gap-4">
+            <div className="bg-white/20 p-3 rounded-2xl text-white backdrop-blur-md shadow-inner animate-pulse">
+              <ShieldAlert size={28} />
+            </div>
+            <div>
+              <h3 className="text-xl font-black uppercase tracking-tight">Urgent: License Expiring</h3>
+              <p className="text-white/80 text-sm font-medium mt-1">
+                Remaining Time: <span className="font-black text-white underline underline-offset-4 decoration-2">{timeLeft || `${subState.daysRemaining} days`}</span>
+              </p>
+            </div>
+          </div>
+          <div className="font-mono text-sm font-bold bg-black/20 px-4 py-2 rounded-lg border border-white/20 backdrop-blur-md">
+            EXPIRES ON: {new Date(subState.expiryDate || 0).toLocaleDateString()}
+          </div>
         </div>
       )}
 
@@ -143,7 +143,7 @@ export default function Subscription() {
               {subState.isGracePeriod && <Badge className="bg-amber-500 hover:bg-amber-600">Grace Period</Badge>}
               {subState.isExpired && !subState.isGracePeriod && <Badge variant="destructive">Expired</Badge>}
             </div>
-            
+
             <div className="flex items-center justify-between border-b pb-4">
               <span className="text-muted-foreground text-sm">Current Plan</span>
               <span className="font-medium capitalize">{subState.plan}</span>
@@ -214,27 +214,70 @@ export default function Subscription() {
         </Card>
       </div>
 
-      {/* Support Card */}
-      <Card className="border-border shadow-sm bg-primary/5 border-primary/20">
-        <CardContent className="p-6 flex flex-col sm:flex-row items-center gap-6">
-          <div className="bg-background p-4 rounded-full shadow-sm">
-            <Mail size={32} className="text-primary" />
-          </div>
-          <div className="flex-1 text-center sm:text-left">
-            <h3 className="text-lg font-bold mb-1">Need a new license?</h3>
-            <p className="text-muted-foreground text-sm mb-4">
-              Contact the developer to purchase a new Weekly, Monthly, Yearly, Custom or Lifetime license.
-            </p>
-            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3">
-              <div className="inline-flex items-center gap-2 bg-background border px-4 py-2 rounded-md font-mono text-sm text-primary shadow-sm font-semibold select-all">
-                munibahmad4735@gmail.com
+      {/* Payment & Support Card */}
+      <Card className="border-border shadow-sm bg-primary/5 border-primary/20 overflow-hidden">
+        <div className="grid md:grid-cols-2">
+          <CardContent className="p-8 border-b md:border-b-0 md:border-r border-primary/10">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="bg-primary/10 p-3 rounded-xl">
+                <Wallet size={24} className="text-primary" />
               </div>
-              <div className="inline-flex items-center gap-2 bg-background border px-4 py-2 rounded-md font-mono text-sm text-primary shadow-sm font-semibold select-all">
-                032988748232
+              <h3 className="text-xl font-bold">Payment Methods</h3>
+            </div>
+
+            <div className="space-y-6">
+              <div className="flex items-center justify-between p-4 bg-background rounded-xl border border-primary/10 shadow-sm group hover:border-primary/30 transition-all">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-emerald-600 rounded-lg flex items-center justify-center font-black text-white text-xs text-center leading-tight tracking-tighter">EASY<br />PAISA</div>
+                  <div>
+                    <p className="font-bold text-sm">Easypaisa Transfer</p>
+                    <p className="text-xs text-muted-foreground">Account: </p>
+                  </div>
+                </div>
+                <div className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold uppercase">Active</div>
+              </div>
+
+              <div className="flex items-center justify-between p-4 bg-background rounded-xl border border-primary/10 shadow-sm group hover:border-primary/30 transition-all">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-red-600 rounded-lg flex items-center justify-center font-black text-white text-xs text-center leading-tight tracking-tighter">JAZZ<br />CASH</div>
+                  <div>
+                    <p className="font-bold text-sm">JazzCash Transfer</p>
+                    <p className="text-xs text-muted-foreground">Account: 0329-8748232</p>
+                  </div>
+                </div>
+                <div className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold uppercase">Active</div>
               </div>
             </div>
-          </div>
-        </CardContent>
+
+            <p className="text-[11px] text-muted-foreground mt-6 italic">
+              * Please send a screenshot of the payment receipt to the developer after transfer to receive your key.
+            </p>
+          </CardContent>
+
+          <CardContent className="p-8 bg-background/50">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="bg-primary/10 p-3 rounded-xl">
+                <Mail size={24} className="text-primary" />
+              </div>
+              <h3 className="text-xl font-bold">Contact Support</h3>
+            </div>
+
+            <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+              If you have any issues with activation or need a custom license plan, please contact our support team.
+            </p>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between p-3 bg-background rounded-lg border text-sm group">
+                <span className="text-muted-foreground text-xs uppercase font-bold tracking-wider">Email</span>
+                <span className="font-mono font-bold text-primary select-all">munibahmad4735@gmail.com</span>
+              </div>
+              <div className="flex items-center justify-between p-3 bg-background rounded-lg border text-sm group">
+                <span className="text-muted-foreground text-xs uppercase font-bold tracking-wider">WhatsApp</span>
+                <span className="font-mono font-bold text-primary select-all">03298748232</span>
+              </div>
+            </div>
+          </CardContent>
+        </div>
       </Card>
     </div>
   );

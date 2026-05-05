@@ -130,6 +130,13 @@ export default class MenuBuilder {
       label: 'View',
       submenu: [
         {
+          label: 'Reload',
+          accelerator: 'Command+R',
+          click: () => {
+            this.mainWindow.webContents.reload();
+          },
+        },
+        {
           label: 'Toggle Full Screen',
           accelerator: 'Ctrl+Command+F',
           click: () => {
@@ -192,8 +199,8 @@ export default class MenuBuilder {
     return [subMenuAbout, subMenuEdit, subMenuView, subMenuWindow, subMenuHelp];
   }
 
-  buildDefaultTemplate() {
-    const templateDefault = [
+  buildDefaultTemplate(): MenuItemConstructorOptions[] {
+    const templateDefault: MenuItemConstructorOptions[] = [
       {
         label: '&File',
         submenu: [
@@ -208,6 +215,18 @@ export default class MenuBuilder {
               this.mainWindow.close();
             },
           },
+        ],
+      },
+      {
+        label: '&Edit',
+        submenu: [
+          { label: 'Undo', accelerator: 'Ctrl+Z', role: 'undo' },
+          { label: 'Redo', accelerator: 'Ctrl+Y', role: 'redo' },
+          { type: 'separator' },
+          { label: 'Cut', accelerator: 'Ctrl+X', role: 'cut' },
+          { label: 'Copy', accelerator: 'Ctrl+C', role: 'copy' },
+          { label: 'Paste', accelerator: 'Ctrl+V', role: 'paste' },
+          { label: 'Select All', accelerator: 'Ctrl+A', role: 'selectAll' },
         ],
       },
       {
@@ -241,6 +260,13 @@ export default class MenuBuilder {
                 },
               ]
             : [
+                {
+                  label: '&Reload',
+                  accelerator: 'Ctrl+R',
+                  click: () => {
+                    this.mainWindow.webContents.reload();
+                  },
+                },
                 {
                   label: 'Toggle &Full Screen',
                   accelerator: 'F11',
