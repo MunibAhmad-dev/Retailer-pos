@@ -401,7 +401,7 @@ export default function Sales() {
       ${itemsHtml}
       <div class="divider"></div>
       <div class="total-row" style="font-weight:normal;font-size:11px"><span>Subtotal</span><span>${fmtPKR(data.subtotal)}</span></div>
-      ${data.discount > 0 ? `<div class="total-row" style="font-weight:normal;font-size:11px;color:red"><span>Discount</span><span>-${fmtPKR(data.discount)}</span></div>` : ''}
+      ${Number(data.discount) > 0 ? `<div class="total-row" style="font-weight:normal;font-size:11px;color:red"><span>Discount</span><span>-${fmtPKR(Number(data.discount))}</span></div>` : ''}
       <div class="total-row"><span>Total</span><span>${fmtPKR(data.total)}</span></div>
       <div class="total-row" style="font-weight:normal;font-size:10px;margin-top:2px"><span>Payment</span><span>${data.paymentMethod === 'online' ? 'ONLINE PAYMENT' : data.paymentMethod.toUpperCase()}</span></div>
       
@@ -598,7 +598,7 @@ export default function Sales() {
     <div class="summary">
       <table>
         <tr><td class="label">AMOUNT</td><td class="value">PKR ${pkrNum(data.subtotal)}</td></tr>
-        <tr class="discount-row"><td class="label">DISCOUNT</td><td class="value">${data.discount > 0 ? '- PKR ' + pkrNum(data.discount) : '—'}</td></tr>
+        <tr class="discount-row"><td class="label">DISCOUNT</td><td class="value">${Number(data.discount) > 0 ? '- PKR ' + pkrNum(Number(data.discount)) : '—'}</td></tr>
         <tr class="grand-row"><td class="label">GRAND TOTAL</td><td class="value">PKR ${pkrNum(data.total)}</td></tr>
         <tr><td class="label">PAID</td><td class="value">PKR ${pkrNum(data.total)}</td></tr>
         <tr><td class="label">BALANCE</td><td class="value">PKR 0</td></tr>

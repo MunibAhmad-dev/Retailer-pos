@@ -37,13 +37,13 @@ function QuickPaymentInput({ sale, onPay }: { sale: any, onPay: (amount: string)
         value={val}
         onChange={(e) => setVal(e.target.value.replace(/[^0-9]/g, ''))}
       />
-      <Button 
-        size="sm" 
-        className="h-8 text-[10px] px-3 flex-1 bg-primary hover:bg-primary/90" 
-        onClick={() => { 
+      <Button
+        size="sm"
+        className="h-8 text-[10px] px-3 flex-1 bg-primary hover:bg-primary/90"
+        onClick={() => {
           if (!val) return;
-          onPay(val); 
-          setVal(''); 
+          onPay(val);
+          setVal('');
         }}
       >
         Pay
@@ -58,12 +58,12 @@ function ManualPaymentInput({ onAdd, onMarkAllPaid, balance, loading }: { onAdd:
     <div className="p-5 border-b bg-muted/10">
       <h4 className="text-sm font-bold mb-3 flex items-center gap-2"><CreditCard size={16} /> Record Payment Received</h4>
       <div className="flex gap-2">
-        <Input 
+        <Input
           type="text"
-          placeholder="Amount received..." 
+          placeholder="Amount received..."
           value={val}
-          onChange={(e) => setVal(e.target.value.replace(/[^0-9]/g, ''))} 
-          className="flex-1" 
+          onChange={(e) => setVal(e.target.value.replace(/[^0-9]/g, ''))}
+          className="flex-1"
         />
         <Button disabled={loading || !val} onClick={() => { onAdd(val); setVal(''); }}>Add</Button>
       </div>
@@ -125,11 +125,19 @@ export default function Customers() {
 
   const handleReturnSubmit = async () => {
     const itemsToReturn = saleItems.map(item => ({
+      sale_item_id: item.id,
       product_id: item.product_id,
       product_name: item.product_name || item.name,
-      quantity: parseInt(returnQuantities[item.product_id] || '0'),
-      price: item.price
+      quantity: parseInt(returnQuantities[item.id] || '0'),
+      price: item.price,
+      max_available: Math.max(0, item.quantity - (item.quantity_returned || 0))
     })).filter(i => i.quantity > 0);
+
+    const invalidItems = itemsToReturn.filter(i => i.quantity > i.max_available);
+    if (invalidItems.length > 0) {
+      addNotification('Validation', `You cannot return more than what was sold for: ${invalidItems.map(i => i.product_name).join(', ')}`, 'error');
+      return;
+    }
 
     if (itemsToReturn.length === 0) {
       addNotification('Validation', 'Please enter at least one quantity to return.', 'warning');
@@ -333,18 +341,49 @@ export default function Customers() {
   };
 
   const sendWhatsApp = (sale?: any) => {
-    if (!selectedCustomer?.phone) { addNotification('No Phone', "Customer doesn't have a phone number.", 'warning'); return; }
+    if (!selectedCustomer?.phone) {
+      addNotification('No Phone', "Customer doesn't have a phone number.", 'warning');
+      return;
+    }
+
     let number = selectedCustomer.phone.replace(/[^0-9]/g, '');
     if (number.startsWith('0')) number = '92' + number.substring(1);
 
+    const storeName = customerDetails?.settings?.store_name || 'Our Store';
     let msg = '';
+
     if (sale) {
-      const remaining = Math.round(sale.remaining);
-      msg = `Hello ${selectedCustomer.name},\nThis is regarding Sale Order #${sale.id} (Date: ${new Date(sale.date_created).toLocaleDateString()}).\nTotal: PKR ${sale.total.toLocaleString()}\nPaid: PKR ${sale.amountPaid.toLocaleString()}\nRemaining: PKR ${remaining.toLocaleString()}\nPlease acknowledge. Thank you!`;
+      const remaining = Math.max(0, Math.round(sale.remaining));
+      msg = `*Order Update / آرڈر اپڈیٹ - ${storeName}*\n\n` +
+        `Hello / السلام علیکم *${selectedCustomer.name}*,\n` +
+        `Order / آرڈر: *#${sale.id}*\n` +
+        `--------------------------\n` +
+        `• Date / تاریخ: ${new Date(sale.date_created).toLocaleDateString()}\n` +
+        `• Bill / کل بل: PKR ${Math.round(sale.total).toLocaleString()}\n` +
+        `• Paid / ادا شدہ: PKR ${Math.round(sale.amountPaid).toLocaleString()}\n` +
+        `--------------------------\n` +
+        `*Balance Due / بقایا رقم: PKR ${remaining.toLocaleString()}*\n\n` +
+        `Please acknowledge. Thank you!\n` +
+        `شکریہ!`;
     } else {
-      const balance = customerDetails?.balance || 0;
-      msg = `Hello ${selectedCustomer.name},\nYour total pending balance is PKR ${balance.toLocaleString('en-PK')}.\nThank you!`;
+      const totalTaken = customerDetails?.totalTaken || 0;
+      const totalPaid = customerDetails?.totalPaid || 0;
+      const totalReturned = customerDetails?.totalReturned || 0;
+      const balance = Math.max(0, customerDetails?.balance || 0);
+
+      msg = `*Account Summary / حساب کی تفصیل - ${storeName}*\n\n` +
+        `Hello / السلام علیکم *${selectedCustomer.name}*,\n` +
+        `Your balance summary / آپ کے حساب کی تفصیل:\n` +
+        `--------------------------\n` +
+        `• Total Purchases / کل خریداری: PKR ${Math.round(totalTaken).toLocaleString()}\n` +
+        `• Total Paid / کل ادائیگی: PKR ${Math.round(totalPaid).toLocaleString()}\n` +
+        `• Returns / واپسی: PKR ${Math.round(totalReturned).toLocaleString()}\n` +
+        `--------------------------\n` +
+        `*Net Balance Due / بقایا رقم: PKR ${Math.round(balance).toLocaleString()}*\n\n` +
+        `Please clear your dues. Thank you!\n` +
+        `براہ کرم اپنی بقایا رقم جلد ادا کریں۔ شکریہ!`;
     }
+
     window.open(`https://wa.me/${number}?text=${encodeURIComponent(msg)}`, '_blank');
   };
 
@@ -478,7 +517,7 @@ export default function Customers() {
               {selectedCustomer.address && <span className="text-xs">{selectedCustomer.address}</span>}
             </CardDescription>
             <div className="flex gap-2 mt-3">
-              <Button size="sm" className="flex-1 gap-2 bg-green-600 hover:bg-green-700" onClick={sendWhatsApp}><MessageCircle size={16} /> WhatsApp</Button>
+              <Button size="sm" className="flex-1 gap-2 bg-green-600 hover:bg-green-700" onClick={() => sendWhatsApp()}><MessageCircle size={16} /> WhatsApp</Button>
               <Button size="sm" variant="outline" className="flex-1 gap-2" onClick={() => navigate(`/sales`)}><ShoppingBag size={16} /> New Sale</Button>
             </div>
           </CardHeader>
@@ -510,12 +549,6 @@ export default function Customers() {
                   </div>
                 </div>
 
-                <ManualPaymentInput 
-                  balance={customerDetails.balance} 
-                  loading={paymentLoading} 
-                  onAdd={(amt) => handleAddPayment(undefined, amt)} 
-                  onMarkAllPaid={handleMarkAllPaid} 
-                />
 
                 {/* Combined Transaction History */}
                 <div className="p-5">
@@ -587,9 +620,9 @@ export default function Customers() {
 
                                 <div className="flex gap-1.5 pt-1">
                                   {s.status !== 'Cancelled' && s.remaining > 0.1 && (
-                                    <QuickPaymentInput 
-                                      sale={s} 
-                                      onPay={(amt) => handleAddPayment(s.id, amt)} 
+                                    <QuickPaymentInput
+                                      sale={s}
+                                      onPay={(amt) => handleAddPayment(s.id, amt)}
                                     />
                                   )}
                                   <Button variant="outline" size="sm" className="h-8 w-8 p-0" onClick={() => openSaleDetail(s)}>
@@ -629,38 +662,38 @@ export default function Customers() {
                         } else if (item.type === 'PAYMENT') {
                           return (
                             <div key={`pay-${item.id}-${idx}`} className="bg-emerald-50/40 border border-emerald-100 p-3 rounded-xl flex justify-between items-center group">
-                               <div className="flex items-center gap-3">
-                                  <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
-                                     <CheckCircle2 size={14} />
-                                  </div>
-                                  <div>
-                                     <p className="text-xs font-black uppercase text-emerald-800">Payment Collected</p>
-                                     <p className="text-[10px] text-emerald-600/70">{new Date(item.date).toLocaleString()}</p>
-                                  </div>
-                               </div>
-                               <div className="text-right flex items-center gap-3">
-                                  <span className="text-sm font-black text-emerald-700">{fmtPKR(item.amount)}</span>
-                                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive opacity-0 group-hover:opacity-100" onClick={() => handleDeletePayment(item.id)}>
-                                     <Trash2 size={12} />
-                                  </Button>
-                               </div>
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+                                  <CheckCircle2 size={14} />
+                                </div>
+                                <div>
+                                  <p className="text-xs font-black uppercase text-emerald-800">Payment Collected</p>
+                                  <p className="text-[10px] text-emerald-600/70">{new Date(item.date).toLocaleString()}</p>
+                                </div>
+                              </div>
+                              <div className="text-right flex items-center gap-3">
+                                <span className="text-sm font-black text-emerald-700">{fmtPKR(item.amount)}</span>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive opacity-0 group-hover:opacity-100" onClick={() => handleDeletePayment(item.id)}>
+                                  <Trash2 size={12} />
+                                </Button>
+                              </div>
                             </div>
                           );
                         } else if (item.type === 'RETURN') {
                           return (
                             <div key={`ret-${item.id}-${idx}`} className="bg-amber-50/40 border border-amber-100 p-3 rounded-xl flex justify-between items-center">
-                               <div className="flex items-center gap-3">
-                                  <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
-                                     <Undo2 size={14} />
-                                  </div>
-                                  <div>
-                                     <p className="text-xs font-black uppercase text-amber-800">Return Request</p>
-                                     <p className="text-[10px] text-amber-600/70">{new Date(item.date).toLocaleString()}</p>
-                                  </div>
-                               </div>
-                               <div className="text-right">
-                                  <span className="text-sm font-black text-amber-700">-{fmtPKR(item.total)}</span>
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
+                                  <Undo2 size={14} />
                                 </div>
+                                <div>
+                                  <p className="text-xs font-black uppercase text-amber-800">Return Request</p>
+                                  <p className="text-[10px] text-amber-600/70">{new Date(item.date).toLocaleString()}</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-sm font-black text-amber-700">-{fmtPKR(item.total)}</span>
+                              </div>
                             </div>
                           );
                         }
@@ -907,23 +940,28 @@ export default function Customers() {
                             <Input
                               type="text"
                               className={cn(
-                                "h-8 text-right font-bold border-amber-200 focus:border-amber-500",
-                                availableToReturn === 0 && "opacity-50 cursor-not-allowed bg-muted"
+                                "h-8 text-right font-bold",
+                                availableToReturn === 0 && "opacity-50 cursor-not-allowed bg-muted",
+                                (parseInt(returnQuantities[item.id] || '0') > availableToReturn) && "border-destructive bg-destructive/5 text-destructive"
                               )}
-                              value={returnQuantities[item.product_id] || ''}
+                              value={returnQuantities[item.id] || ''}
                               disabled={availableToReturn <= 0}
                               onChange={(e) => {
                                 const raw = e.target.value.replace(/[^0-9]/g, '');
-                                const val = Math.min(availableToReturn, parseInt(raw) || 0);
                                 setReturnQuantities(prev => ({
                                   ...prev,
-                                  [item.product_id]: val === 0 && raw === '' ? '' : String(val)
+                                  [item.id]: raw
                                 }));
                               }}
                               placeholder="0"
                             />
                             {availableToReturn > 0 && (
-                              <p className="text-[10px] text-muted-foreground mt-1">Max: {availableToReturn}</p>
+                              <p className={cn(
+                                "text-[10px] mt-1",
+                                (parseInt(returnQuantities[item.id] || '0') > availableToReturn) ? "text-destructive font-bold" : "text-muted-foreground"
+                              )}>
+                                Max: {availableToReturn}
+                              </p>
                             )}
                           </TableCell>
                         </TableRow>

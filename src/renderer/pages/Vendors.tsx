@@ -37,13 +37,13 @@ function QuickPaymentInput({ purchase, onPay }: { purchase: any, onPay: (amount:
         value={val}
         onChange={(e) => setVal(e.target.value.replace(/[^0-9]/g, ''))}
       />
-      <Button 
-        size="sm" 
-        className="h-8 text-[10px] px-3 flex-1 bg-primary hover:bg-primary/90" 
-        onClick={() => { 
+      <Button
+        size="sm"
+        className="h-8 text-[10px] px-3 flex-1 bg-primary hover:bg-primary/90"
+        onClick={() => {
           if (!val) return;
-          onPay(val); 
-          setVal(''); 
+          onPay(val);
+          setVal('');
         }}
       >
         Pay
@@ -58,12 +58,12 @@ function ManualPaymentInput({ onAdd, onMarkAllPaid, balance, loading }: { onAdd:
     <div className="p-5 border-b bg-muted/10">
       <h4 className="text-sm font-bold mb-3 flex items-center gap-2"><CreditCard size={16} /> Record Payment Sent</h4>
       <div className="flex gap-2">
-        <Input 
+        <Input
           type="text"
-          placeholder="Amount paid..." 
+          placeholder="Amount paid..."
           value={val}
-          onChange={(e) => setVal(e.target.value.replace(/[^0-9]/g, ''))} 
-          className="flex-1" 
+          onChange={(e) => setVal(e.target.value.replace(/[^0-9]/g, ''))}
+          className="flex-1"
         />
         <Button disabled={loading || !val} onClick={() => { onAdd(val); setVal(''); }}>Log</Button>
       </div>
@@ -528,11 +528,11 @@ export default function Vendors() {
                   </div>
                 </div>
 
-                <ManualPaymentInput 
-                  balance={vendorDetails.balance} 
-                  loading={paymentLoading} 
-                  onAdd={(amt) => handleAddPayment(undefined, amt)} 
-                  onMarkAllPaid={handleMarkAllPaid} 
+                <ManualPaymentInput
+                  balance={vendorDetails.balance}
+                  loading={paymentLoading}
+                  onAdd={(amt) => handleAddPayment(undefined, amt)}
+                  onMarkAllPaid={handleMarkAllPaid}
                 />
                 {/* Combined Transaction History */}
                 <div className="p-5">
@@ -604,9 +604,9 @@ export default function Vendors() {
 
                                 <div className="flex gap-1.5 pt-1">
                                   {p.status !== 'Cancelled' && p.remaining > 0.1 && (
-                                    <QuickPaymentInput 
-                                      purchase={p} 
-                                      onPay={(amt) => handleAddPayment(p.id, amt)} 
+                                    <QuickPaymentInput
+                                      purchase={p}
+                                      onPay={(amt) => handleAddPayment(p.id, amt)}
                                     />
                                   )}
                                   <Button
@@ -643,38 +643,38 @@ export default function Vendors() {
                         } else if (item.type === 'PAYMENT') {
                           return (
                             <div key={`pay-${item.id}-${idx}`} className="bg-emerald-50/40 border border-emerald-100 p-3 rounded-xl flex justify-between items-center group">
-                               <div className="flex items-center gap-3">
-                                  <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
-                                     <CheckCircle2 size={14} />
-                                  </div>
-                                  <div>
-                                     <p className="text-xs font-black uppercase text-emerald-800">Payment Sent</p>
-                                     <p className="text-[10px] text-emerald-600/70">{new Date(item.date).toLocaleString()}</p>
-                                  </div>
-                               </div>
-                               <div className="text-right flex items-center gap-3">
-                                  <span className="text-sm font-black text-emerald-700">{fmtPKR(item.amount)}</span>
-                                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive opacity-0 group-hover:opacity-100" onClick={() => handleDeletePayment(item.id)}>
-                                     <Trash2 size={12} />
-                                  </Button>
-                               </div>
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+                                  <CheckCircle2 size={14} />
+                                </div>
+                                <div>
+                                  <p className="text-xs font-black uppercase text-emerald-800">Payment Sent</p>
+                                  <p className="text-[10px] text-emerald-600/70">{new Date(item.date).toLocaleString()}</p>
+                                </div>
+                              </div>
+                              <div className="text-right flex items-center gap-3">
+                                <span className="text-sm font-black text-emerald-700">{fmtPKR(item.amount)}</span>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive opacity-0 group-hover:opacity-100" onClick={() => handleDeletePayment(item.id)}>
+                                  <Trash2 size={12} />
+                                </Button>
+                              </div>
                             </div>
                           );
                         } else if (item.type === 'RETURN') {
                           return (
                             <div key={`ret-${item.id}-${idx}`} className="bg-amber-50/40 border border-amber-100 p-3 rounded-xl flex justify-between items-center">
-                               <div className="flex items-center gap-3">
-                                  <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
-                                     <Undo2 size={14} />
-                                  </div>
-                                  <div>
-                                     <p className="text-xs font-black uppercase text-amber-800">Return Processed</p>
-                                     <p className="text-[10px] text-amber-600/70">{new Date(item.date).toLocaleString()}</p>
-                                  </div>
-                               </div>
-                               <div className="text-right">
-                                  <span className="text-sm font-black text-amber-700">-{fmtPKR(item.amount)}</span>
-                               </div>
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
+                                  <Undo2 size={14} />
+                                </div>
+                                <div>
+                                  <p className="text-xs font-black uppercase text-amber-800">Return Processed</p>
+                                  <p className="text-[10px] text-amber-600/70">{new Date(item.date).toLocaleString()}</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <span className="text-sm font-black text-amber-700">-{fmtPKR(item.amount)}</span>
+                              </div>
                             </div>
                           );
                         }
@@ -840,16 +840,16 @@ export default function Vendors() {
                             <div className="flex flex-col items-end gap-1">
                               <div className="flex items-center gap-2">
                                 {availableToReturn > 0 && (
-                                  <Button 
-                                    variant="ghost" 
-                                    size="sm" 
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
                                     className="h-6 px-1.5 text-[10px] text-primary hover:bg-primary/10"
-                                    onClick={() => setReturnQuantities({...returnQuantities, [item.id]: String(availableToReturn)})}
+                                    onClick={() => setReturnQuantities({ ...returnQuantities, [item.id]: String(availableToReturn) })}
                                   >
                                     Max
                                   </Button>
                                 )}
-                                <Input 
+                                <Input
                                   type="text"
                                   className={cn(
                                     "h-8 w-20 text-right font-bold",

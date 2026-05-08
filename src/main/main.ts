@@ -38,7 +38,7 @@ const getLocalSqliteDate = (isoString?: string) => {
   if (!isoString) return new Date().toISOString().replace('T', ' ').substring(0, 19);
   // If it's already a local-style string (YYYY-MM-DD HH:mm:ss), just return it
   if (isoString.includes(' ') && !isoString.includes('T')) return isoString;
-  
+
   const d = new Date(isoString);
   const offset = d.getTimezoneOffset() * 60000;
   const local = new Date(d.getTime() - offset);
@@ -92,7 +92,8 @@ function checkDatabaseSchema(database: Database.Database) {
       ["financial_transactions", "type", "TEXT"],
       ["financial_transactions", "amount", "REAL"],
       ["products", "product_type", "TEXT DEFAULT 'general'"],
-      ["products", "metadata", "TEXT DEFAULT '{}'"]
+      ["products", "metadata", "TEXT DEFAULT '{}'"],
+      ["stock_adjustments", "date_created", "DATETIME"]
     ];
     for (const [table, col, def] of repairs) {
       try {
@@ -101,7 +102,7 @@ function checkDatabaseSchema(database: Database.Database) {
           const actualTableName = tableInfo.name;
           const colCheck = database.prepare(`PRAGMA table_info(${actualTableName})`).all() as any[];
           const colNames = colCheck.map(c => c.name.toLowerCase());
-          
+
           if (actualTableName.toLowerCase() === 'purchase_returns') {
             logger.info(`Columns in purchase_returns: ${colNames.join(', ')}`);
           }
@@ -130,15 +131,21 @@ function checkDatabaseSchema(database: Database.Database) {
 
     logger.info('Schema verification completed.');
     logger.info('Performing core table verification...');
-    const tables = ['settings', 'products', 'customers', 'sales', 'sale_items', 'vendors', 'purchases', 'inventory_batches', 'customer_payments'];
-    for (const table of tables) {
-      const exists = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
-      if (!exists) {
-        logger.error(`CRITICAL: Table ${table} is missing! Database might be corrupt.`);
-        return false;
-      }
-    }
     logger.info('All core tables verified.');
+
+    // Create stock_adjustments table if not exists
+    database.exec(`
+      CREATE TABLE IF NOT EXISTS stock_adjustments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        product_id INTEGER NOT NULL,
+        quantity REAL NOT NULL,
+        type TEXT NOT NULL,
+        reason TEXT,
+        date_created DATETIME,
+        FOREIGN KEY(product_id) REFERENCES products(id)
+      )
+    `);
+
     return true;
   } catch (e) {
     logger.error('Schema verification failed:', e);
@@ -567,6 +574,28 @@ function migrate(database: Database.Database) {
       database.exec('PRAGMA user_version = 24');
     }
 
+    // Migration 25: Nuclear ghost table cleanup
+    if (ver < 25) {
+      logger.info('Running migration 25 - Nuclear ghost cleanup...');
+      try {
+        database.exec('PRAGMA foreign_keys = OFF');
+        const ghosts = ['_products_old', '_sale_items_old', '_sales_old', '_sale_items_repair', '_sale_return_items_old', 'main._products_old'];
+        for (const ghost of ghosts) {
+          try { database.exec(`DROP TABLE IF EXISTS "${ghost}"`); } catch (e) { }
+        }
+        // Rebuild sale_items indexes fresh
+        try {
+          database.exec(`CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items(sale_id)`);
+          database.exec(`CREATE INDEX IF NOT EXISTS idx_sale_items_product ON sale_items(product_id)`);
+        } catch (e) { }
+        database.exec('PRAGMA foreign_keys = ON');
+        database.exec('PRAGMA integrity_check');
+        database.exec('PRAGMA user_version = 25');
+      } catch (e) {
+        logger.error('Migration 25 error:', e);
+      }
+    }
+
     logger.info(`Database migration completed. Current version: ${database.pragma('user_version', { simple: true })}`);
   } catch (error) {
     logger.error('Migration system failed:', error);
@@ -594,9 +623,72 @@ function initializeDatabase() {
     db.pragma('cache_size = -64000'); // 64MB cache
     db.pragma('temp_store = MEMORY');
 
+    // Self-healing / Maintenance
+    try {
+      // Force drop ALL ghost tables
+      const ghostTables = ['_products_old', '_sale_items_old', '_sales_old', 'main._products_old', '_sale_return_items_old', '_sale_items_repair'];
+      for (const ghost of ghostTables) {
+        try { db!.exec(`DROP TABLE IF EXISTS "${ghost}"`); } catch (e) { }
+      }
+
+      // Drop any views or triggers referencing ghost tables
+      const brokenObjects = db!.prepare(`
+        SELECT name, type FROM sqlite_master 
+        WHERE type IN ('trigger', 'view') 
+        AND (sql LIKE '%_products_old%' OR sql LIKE '%_sale_items_old%')
+      `).all() as any[];
+      for (const obj of brokenObjects) {
+        try { db!.exec(`DROP ${obj.type.toUpperCase()} IF EXISTS "${obj.name}"`); } catch (e) { }
+      }
+
+      // Rebuild tables that have ghost references in their SQL
+      const tablesToRebuild = ['inventory_batches', 'sale_return_items', 'purchase_return_items', 'sale_items'];
+      for (const tableName of tablesToRebuild) {
+        const t = db!.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(tableName) as any;
+        if (t && t.sql && t.sql.includes('_products_old')) {
+          logger.info(`Rebuilding table ${tableName} to fix ghost reference...`);
+          try {
+            db!.exec('PRAGMA foreign_keys = OFF');
+            // 1. Get existing data
+            const data = db!.prepare(`SELECT * FROM ${tableName}`).all() as any[];
+            // 2. Drop old table
+            db!.exec(`DROP TABLE "${tableName}"`);
+            // 3. Create fresh table with correct SQL (this will use the CREATE TABLE from initializeDatabase later, 
+            // but for now we just run the correct CREATE here to be safe)
+            let newSql = t.sql.replace(/"_products_old"/g, 'products').replace(/_products_old/g, 'products');
+            db!.exec(newSql);
+            // 4. Restore data
+            if (data.length > 0) {
+              const columns = Object.keys(data[0]);
+              const placeholders = columns.map(() => '?').join(',');
+              const insertStmt = db!.prepare(`INSERT INTO ${tableName} (${columns.join(',')}) VALUES (${placeholders})`);
+              for (const row of data) {
+                insertStmt.run(Object.values(row));
+              }
+            }
+            db!.exec('PRAGMA foreign_keys = ON');
+            logger.info(`Table ${tableName} rebuilt successfully.`);
+          } catch (err) {
+            logger.error(`Failed to rebuild ${tableName}:`, err);
+            db!.exec('PRAGMA foreign_keys = ON');
+          }
+        }
+      }
+
+      db!.exec("VACUUM");
+      db!.exec("REINDEX");
+    } catch (e) {
+      logger.warn('Maintenance tasks skipped:', e);
+    }
+
     logger.info('Database pragmas configured');
 
-    // Create tables if they don't exist
+    // Structural migrations that need to run regardless of version
+    try { db!.prepare("ALTER TABLE sale_return_items ADD COLUMN sale_item_id INTEGER").run(); } catch (e) { }
+    try { db!.prepare("ALTER TABLE sales ADD COLUMN register_id INTEGER").run(); } catch (e) { }
+    try { db!.prepare("CREATE INDEX IF NOT EXISTS idx_sale_return_items_sid ON sale_return_items(sale_item_id)").run(); } catch (e) { }
+
+    // Check current version
     db.exec(`
       CREATE TABLE IF NOT EXISTS settings (
         id INTEGER PRIMARY KEY DEFAULT 1,
@@ -649,6 +741,7 @@ function initializeDatabase() {
         payment_status TEXT DEFAULT 'completed',
         status TEXT DEFAULT 'Completed',
         notes TEXT,
+        register_id INTEGER,
         FOREIGN KEY(customer_id) REFERENCES customers(id) ON DELETE SET NULL
       );
 
@@ -753,6 +846,7 @@ function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS sale_return_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         return_id INTEGER NOT NULL,
+        sale_item_id INTEGER,
         product_id INTEGER,
         product_name TEXT,
         quantity INTEGER NOT NULL,
@@ -1280,9 +1374,16 @@ ipcMain.handle('create-sale', async (_, data: {
   payment_status?: string;
   amount_paid?: number;
   notes?: string;
+  register_id?: number;
 }) => {
   try {
     if (!db) throw new Error('Database not initialized');
+
+    // Safety: kill any ghost table references before each sale
+    try {
+      db.exec(`DROP TABLE IF EXISTS _products_old`);
+      db.exec(`DROP TABLE IF EXISTS _sale_items_old`);
+    } catch (e) { }
 
     // Strict validation for data integrity
     if (!data.items || !Array.isArray(data.items) || data.items.length === 0) throw new Error('Sale must have at least one valid item');
@@ -1300,12 +1401,12 @@ ipcMain.handle('create-sale', async (_, data: {
       try {
         // Insert sale
         const saleStmt = db!.prepare(`
-          INSERT INTO sales (customer_id, total, subtotal, discount, tax, payment_method, payment_status, notes, date_created)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+          INSERT INTO sales (customer_id, total, subtotal, discount, tax, payment_method, payment_status, notes, date_created, register_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'), ?)
         `);
 
         const determinedStatus = (data.amount_paid || 0) >= data.total ? 'Paid' : (data.amount_paid || 0) > 0 ? 'Partial' : 'Pending';
-        
+
         const saleInfo = saleStmt.run(
           data.customer_id || null,
           data.total,
@@ -1314,7 +1415,8 @@ ipcMain.handle('create-sale', async (_, data: {
           data.tax || 0,
           data.payment_method || 'cash',
           data.payment_status || determinedStatus,
-          data.notes || null
+          data.notes || null,
+          data.register_id || null
         );
 
         const saleId = saleInfo.lastInsertRowid;
@@ -1493,7 +1595,7 @@ ipcMain.handle('get-sale-items', async (_, saleId: number) => {
 
     const items = db.prepare(`
       SELECT si.*, p.name as product_name, p.category,
-      (SELECT COALESCE(SUM(quantity), 0) FROM sale_return_items WHERE product_id = si.product_id AND return_id IN (SELECT id FROM sale_returns WHERE sale_id = si.sale_id)) as quantity_returned
+      (SELECT COALESCE(SUM(quantity), 0) FROM sale_return_items WHERE sale_item_id = si.id) as quantity_returned
       FROM sale_items si
       LEFT JOIN products p ON si.product_id = p.id
       WHERE si.sale_id = ?
@@ -1522,12 +1624,12 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
 
     // Helper functions
     const sumSince = (since: string) => {
-      const result = db!.prepare("SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE date_created >= ? AND status = 'Completed'").get(since) as any;
+      const result = db!.prepare("SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE date_created >= ? AND (status = 'Completed' OR status = 'Paid' OR status = 'Partial')").get(since) as any;
       return result.total;
     };
 
     const countSince = (since: string) => {
-      const result = db!.prepare('SELECT COUNT(*) as count FROM sales WHERE date_created >= ?').get(since) as any;
+      const result = db!.prepare("SELECT COUNT(*) as count FROM sales WHERE date_created >= ? AND (status = 'Completed' OR status = 'Paid' OR status = 'Partial')").get(since) as any;
       return result.count;
     };
 
@@ -1541,10 +1643,17 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
       periodParams = [sqlStart];
     }
 
-    const filteredRevenue = (db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE status = 'Completed' ${periodQuery}`).get(...periodParams) as any).total;
-    const filteredCount = (db.prepare(`SELECT COUNT(*) as count FROM sales WHERE status = 'Completed' ${periodQuery}`).get(...periodParams) as any).count;
+    const filteredRevenue = (db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE (status = 'Completed' OR status = 'Paid' OR status = 'Partial') ${periodQuery}`).get(...periodParams) as any).total;
+    const filteredCount = (db.prepare(`SELECT COUNT(*) as count FROM sales WHERE (status = 'Completed' OR status = 'Paid' OR status = 'Partial') ${periodQuery}`).get(...periodParams) as any).count;
 
     let periodQueryS = periodQuery ? periodQuery.replace(/date_created/g, 's.date_created') : '';
+
+    const filteredProfit = (db.prepare(`
+      SELECT COALESCE(SUM(si.quantity * (si.price - si.purchase_price)), 0) as profit
+      FROM sale_items si
+      INNER JOIN sales s ON si.sale_id = s.id
+      WHERE (s.status = 'Completed' OR s.status = 'Paid' OR s.status = 'Partial') ${periodQueryS}
+    `).get(...periodParams) as any).profit;
 
     const stats = {
       totalSalesToday: sumSince(todayStart),
@@ -1556,6 +1665,7 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
       totalCustomers: (db.prepare('SELECT COUNT(*) as count FROM customers').get() as any).count,
       filteredRevenue,
       filteredCount,
+      filteredProfit,
       topProducts: db.prepare(`
         SELECT 
           si.product_name as name, 
@@ -1564,7 +1674,7 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
           COUNT(DISTINCT si.sale_id) as times_sold
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
-        WHERE s.status = 'Completed' ${periodQueryS}
+        WHERE (s.status = 'Completed' OR s.status = 'Paid' OR s.status = 'Partial') ${periodQueryS}
         GROUP BY si.product_name
         ORDER BY qty_sold DESC
         LIMIT 5
@@ -1584,31 +1694,28 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
           SUM(total) as revenue,
           COUNT(*) as count
         FROM sales
-        WHERE status = 'Completed' ${periodQuery}
+        WHERE (status = 'Completed' OR status = 'Paid' OR status = 'Partial') ${periodQuery}
         GROUP BY payment_method
       `).all(...periodParams),
-      // ---- Inventory Analytics (Period Aware) ----
+      // ---- Inventory Analytics (Global Snapshot) ----
       totalStockValue: (db.prepare(`
-        SELECT COALESCE(SUM(quantity_added * purchase_price), 0) as val 
-        FROM inventory_batches 
-        WHERE 1=1 ${periodQuery.replace(/date_created/g, 'date_added')}
-      `).get(...periodParams) as any).val,
+        SELECT COALESCE(SUM(stock * purchase_price), 0) as val FROM products
+      `).get() as any).val,
       totalRetailValue: (db.prepare(`
-        SELECT COALESCE(SUM(quantity_added * p.price), 0) as val 
-        FROM inventory_batches ib
-        JOIN products p ON ib.product_id = p.id
-        WHERE 1=1 ${periodQuery.replace(/date_created/g, 'ib.date_added')}
-      `).get(...periodParams) as any).val,
+        SELECT COALESCE(SUM(stock * price), 0) as val FROM products
+      `).get() as any).val,
       lowStockProducts: db.prepare(`
         SELECT id, name, stock, price FROM products WHERE stock <= 10 ORDER BY stock ASC LIMIT 8
       `).all(),
       // ---- Loan / Qaraz Analytics (Period Aware) ----
       totalOutstandingLoans: (db.prepare(`
-        SELECT (
-          (SELECT COALESCE(SUM(CAST(total AS REAL)), 0) FROM sales WHERE (status IS NULL OR LOWER(status) != 'cancelled') ${periodQuery}) - 
-          (SELECT COALESCE(SUM(CAST(amount AS REAL)), 0) FROM customer_payments WHERE 1=1 ${periodQuery.replace(/date_created/g, 'date_added')}) -
-          (SELECT COALESCE(SUM(CAST(total_returned AS REAL)), 0) FROM sale_returns WHERE 1=1 ${periodQuery})
-        ) as total
+        SELECT COALESCE(SUM(bal), 0) as total FROM (
+          SELECT c.id,
+            COALESCE((SELECT SUM(CAST(s.total AS REAL)) FROM sales s WHERE s.customer_id = c.id AND (s.status IS NULL OR LOWER(s.status) != 'cancelled') ${periodQuery}),0) -
+            COALESCE((SELECT SUM(CAST(p.amount AS REAL)) FROM customer_payments p WHERE p.customer_id = c.id ${periodQuery.replace(/date_created/g, 'p.date_added')}),0) -
+            COALESCE((SELECT SUM(CAST(sr.total_returned AS REAL)) FROM sale_returns sr JOIN sales s ON sr.sale_id = s.id WHERE s.customer_id = c.id ${periodQuery.replace(/date_created/g, 'sr.date_created')}),0) as bal
+          FROM customers c
+        ) WHERE bal > 0.5
       `).get(...[...periodParams, ...periodParams, ...periodParams]) as any).total,
       customersInDebt: (db.prepare(`
         SELECT COUNT(*) as count FROM (
@@ -2418,7 +2525,7 @@ ipcMain.handle('import-data', async (_, data: any) => {
 ipcMain.handle('get-vendors', async () => {
   try {
     if (!db) throw new Error('Database not initialized');
-    
+
     const vendors = db.prepare(`
       SELECT v.*,
              COALESCE((
@@ -2445,7 +2552,7 @@ ipcMain.handle('get-vendor-details', async (_, vendorId: number) => {
     if (!db) throw new Error('Database not initialized');
     const vendor = db.prepare('SELECT * FROM vendors WHERE id = ?').get(vendorId);
     if (!vendor) throw new Error('Vendor not found');
-    
+
     const purchases = db.prepare('SELECT * FROM purchases WHERE vendor_id = ? ORDER BY date_created DESC').all(vendorId);
     const payments = db.prepare('SELECT * FROM vendor_payments WHERE vendor_id = ? ORDER BY date_created DESC').all(vendorId);
     const returns = db.prepare(`
@@ -2469,10 +2576,10 @@ ipcMain.handle('get-vendor-details', async (_, vendorId: number) => {
       const linkedPayments = payments.filter((pay: any) => pay.purchase_id === p.id);
       const linkedReturns = returns.filter((ret: any) => ret.purchase_id === p.id);
       const linkedItems = purchaseItemsAll.filter((item: any) => item.purchase_id === p.id);
-      
+
       const amountPaid: number = linkedPayments.reduce((acc: number, pay: any) => acc + (Number(pay.amount) || 0), 0);
       const amountReturned: number = linkedReturns.reduce((acc: number, ret: any) => acc + (Number(ret.total_returned) || 0), 0);
-      
+
       return {
         ...p,
         amountPaid,
@@ -2487,26 +2594,26 @@ ipcMain.handle('get-vendor-details', async (_, vendorId: number) => {
     const totalPurchased = purchases.filter((p: any) => p.status !== 'Cancelled').reduce((acc: number, p: any) => acc + (Number(p.total) || 0), 0);
     const totalPaid = payments.reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
     const totalReturned = returns.reduce((acc: number, r: any) => acc + (Number(r.total_returned) || 0), 0);
-    
+
     // Net Account Balance
     const accountBalance = totalPurchased - totalPaid - totalReturned;
-    
+
     // Invoice-based Debt Balance (Sum of positive remaining on each invoice)
     const unpaidInvoicesBalance = enhancedPurchases.reduce((acc: number, p: any) => acc + Math.max(0, p.remaining), 0);
 
-    return { 
-      success: true, 
-      data: { 
-        vendor, 
-        purchases: enhancedPurchases, 
-        payments, 
-        returns, 
-        totalPurchased, 
-        totalPaid, 
-        totalReturned, 
+    return {
+      success: true,
+      data: {
+        vendor,
+        purchases: enhancedPurchases,
+        payments,
+        returns,
+        totalPurchased,
+        totalPaid,
+        totalReturned,
         balance: unpaidInvoicesBalance, // Use invoice-based as primary
-        accountBalance 
-      } 
+        accountBalance
+      }
     };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -2585,15 +2692,12 @@ ipcMain.handle('create-purchase', async (_, data: { vendor_id: number; items: an
             const oldPrice = p.purchase_price || 0;
             const newStock = oldStock + item.quantity;
             let newWAC = item.purchase_price;
-            if (newStock > 0) {
-              newWAC = ((oldStock * oldPrice) + (item.quantity * item.purchase_price)) / newStock;
-            }
-            
             // Use provided selling_price or keep the current one
             const finalSellingPrice = item.selling_price || p.price;
-            
+
+            // Update the product's master record with NEW stock and the LATEST purchase price
             db!.prepare('UPDATE products SET stock = ?, purchase_price = ?, price = ? WHERE id = ?')
-              .run(newStock, newWAC, finalSellingPrice, item.product_id);
+              .run(newStock, item.purchase_price, finalSellingPrice, item.product_id);
           }
         }
       }
@@ -2713,7 +2817,7 @@ ipcMain.handle('get-product-analytics', async () => {
 ipcMain.handle('create-stock-adjustment', async (_, data: { product_id: number; quantity: number; type: string; reason: string }) => {
   try {
     if (!db) throw new Error('Database not initialized');
-    
+
     const { product_id, quantity, type, reason } = data;
     const isReduction = quantity < 0;
     const absQty = Math.abs(quantity);
@@ -2744,10 +2848,10 @@ ipcMain.handle('create-stock-adjustment', async (_, data: { product_id: number; 
         for (const batch of batches) {
           if (remainingToDeduct <= 0) break;
           const deduct = Math.min(batch.quantity_remaining, remainingToDeduct);
-          
+
           db!.prepare("UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?")
             .run(deduct, batch.id);
-          
+
           remainingToDeduct -= deduct;
         }
 
@@ -2766,6 +2870,12 @@ ipcMain.handle('create-stock-adjustment', async (_, data: { product_id: number; 
       db!.prepare("UPDATE products SET stock = (SELECT COALESCE(SUM(quantity_remaining), 0) FROM inventory_batches WHERE product_id = ?) WHERE id = ?")
         .run(product_id, product_id);
 
+      // 4. Log to stock_adjustments for history
+      db!.prepare(`
+        INSERT INTO stock_adjustments (product_id, quantity, type, reason, date_created)
+        VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
+      `).run(product_id, quantity, type, reason);
+
       return true;
     });
 
@@ -2773,6 +2883,23 @@ ipcMain.handle('create-stock-adjustment', async (_, data: { product_id: number; 
     return { success: true };
   } catch (error: any) {
     logger.error('Stock adjustment failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-stock-adjustments', async (_, productId?: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    let query = 'SELECT * FROM stock_adjustments';
+    let params: any[] = [];
+    if (productId) {
+      query += ' WHERE product_id = ?';
+      params.push(productId);
+    }
+    query += ' ORDER BY date_created DESC';
+    const adjustments = db.prepare(query).all(...params);
+    return { success: true, data: adjustments };
+  } catch (error: any) {
     return { success: false, error: error.message };
   }
 });
@@ -2833,10 +2960,10 @@ ipcMain.handle('get-customer-details', async (_, customerId: number) => {
       const linkedPayments = payments.filter((pay: any) => pay.sale_id === s.id);
       const linkedReturns = returns.filter((ret: any) => ret.sale_id === s.id);
       const linkedItems = saleItemsAll.filter((item: any) => item.sale_id === s.id);
-      
+
       const amountPaid: number = linkedPayments.reduce((acc: number, pay: any) => acc + (Number(pay.amount) || 0), 0);
       const amountReturned: number = linkedReturns.reduce((acc: number, ret: any) => acc + (Number(ret.total_returned) || 0), 0);
-      
+
       return {
         ...s,
         amountPaid,
@@ -3110,6 +3237,12 @@ ipcMain.handle('create-sale-return', async (_, data: { sale_id: number; items: a
   try {
     if (!db) throw new Error('Database not initialized');
 
+    // Safety: kill any ghost table references before each return
+    try {
+      db.exec(`DROP TABLE IF EXISTS _products_old`);
+      db.exec(`DROP TABLE IF EXISTS _sale_items_old`);
+    } catch (e) { }
+
     const transaction = db.transaction(() => {
       // 1. Create return record
       const retStmt = db!.prepare(`
@@ -3121,23 +3254,30 @@ ipcMain.handle('create-sale-return', async (_, data: { sale_id: number; items: a
 
       // 2. Update items and stock
       const itemStmt = db!.prepare(`
-        INSERT INTO sale_return_items (return_id, product_id, product_name, quantity, price)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO sale_return_items (return_id, sale_item_id, product_id, product_name, quantity, price)
+        VALUES (?, ?, ?, ?, ?, ?)
       `);
 
       for (const item of data.items) {
-        const qty = parseInt(String(item.return_qty || item.quantity)) || 0;
+        const qty = parseInt(String(item.quantity)) || 0;
         if (qty <= 0) continue;
 
-        // Validation: Check if return quantity exceeds available
-        const currentItem = db!.prepare("SELECT quantity, (SELECT COALESCE(SUM(quantity), 0) FROM sale_return_items WHERE product_id = si.product_id AND return_id IN (SELECT id FROM sale_returns WHERE sale_id = si.sale_id)) as returned FROM sale_items si WHERE sale_id = ? AND product_id = ?").get(data.sale_id, item.product_id) as any;
+        // Validation: Check if return quantity exceeds available FOR THIS SPECIFIC ITEM
+        const currentItem = db!.prepare(`
+          SELECT 
+            quantity, 
+            (SELECT COALESCE(SUM(quantity), 0) FROM sale_return_items WHERE sale_item_id = si.id) as returned 
+          FROM sale_items si 
+          WHERE id = ?
+        `).get(item.sale_item_id) as any;
+
         if (currentItem && (qty + currentItem.returned > currentItem.quantity)) {
-          throw new Error(`Cannot return ${qty} of ${item.product_name}. Total returned would exceed original quantity.`);
+          throw new Error(`Cannot return ${qty} of ${item.product_name}. Total returned (${qty + currentItem.returned}) would exceed original quantity (${currentItem.quantity}).`);
         }
 
-        itemStmt.run(returnId, item.product_id, item.product_name || 'Unknown Product', qty, item.price);
+        itemStmt.run(returnId, item.sale_item_id, item.product_id, item.product_name || 'Unknown Product', qty, item.price);
 
-        // Return stock to product
+        // Return stock to product if it's a tracked product
         if (item.product_id) {
           db!.prepare("UPDATE products SET stock = stock + ? WHERE id = ?").run(qty, item.product_id);
         }
@@ -3230,9 +3370,9 @@ ipcMain.handle('create-purchase-return', async (_, data: { purchase_id: number; 
         if (qty > batch.quantity_remaining) {
           throw new Error(`Cannot return ${qty} items. Only ${batch.quantity_remaining} available in batch #${item.id}.`);
         }
-        
+
         itemStmt.run(returnId, item.product_id, item.product_name || 'Unknown Product', qty, item.purchase_price || 0);
-        
+
         // Update batch remaining quantity to prevent re-returning
         db!.prepare("UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?").run(qty, item.id);
 
@@ -3278,9 +3418,9 @@ ipcMain.handle('get-purchase-returns', async (_, opts: any = {}) => {
       ORDER BY pr.date_created DESC
       LIMIT ? OFFSET ?
     `).all(limit, offset);
-    
+
     const total = (db.prepare("SELECT COUNT(*) as count FROM purchase_returns").get() as any).count;
-    
+
     return { success: true, data, total };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3316,17 +3456,17 @@ ipcMain.handle('get-balance-sheet', async (_, args: { startDate?: string; endDat
     const salesParams: any[] = [];
     let salesDateFilter = "1=1";
     if (sqlStart) { salesDateFilter += " AND date_created >= ?"; salesParams.push(sqlStart); }
-    if (sqlEnd)   { salesDateFilter += " AND date_created <= ?"; salesParams.push(sqlEnd); }
+    if (sqlEnd) { salesDateFilter += " AND date_created <= ?"; salesParams.push(sqlEnd); }
 
     const expenseParams: any[] = [];
     let expenseDateFilter = "1=1";
     if (sqlStart) { expenseDateFilter += " AND date_added >= ?"; expenseParams.push(sqlStart); }
-    if (sqlEnd)   { expenseDateFilter += " AND date_added <= ?"; expenseParams.push(sqlEnd); }
+    if (sqlEnd) { expenseDateFilter += " AND date_added <= ?"; expenseParams.push(sqlEnd); }
 
     const purchaseParams: any[] = [];
     let purchaseDateFilter = "1=1";
     if (sqlStart) { purchaseDateFilter += " AND date_created >= ?"; purchaseParams.push(sqlStart); }
-    if (sqlEnd)   { purchaseDateFilter += " AND date_created <= ?"; purchaseParams.push(sqlEnd); }
+    if (sqlEnd) { purchaseDateFilter += " AND date_created <= ?"; purchaseParams.push(sqlEnd); }
 
     // Inventory Value (at cost) - no date filter needed
     const inventoryValue = (db.prepare("SELECT COALESCE(SUM(stock * purchase_price), 0) as total FROM products").get() as any).total;

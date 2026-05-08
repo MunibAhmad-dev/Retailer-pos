@@ -39,7 +39,8 @@ const fmt = (n: number) => 'PKR ' + Math.round(n ?? 0).toLocaleString('en-PK');
 
 export default function Dashboard({ onLock }: DashboardProps) {
   // Date Filtering State
-  const [period, setPeriod] = useState<string>('all');
+  // Date Filtering State
+  const [period, setPeriod] = useState<string>('today');
   const [customStart, setCustomStart] = useState<string>('');
   const [customEnd, setCustomEnd] = useState<string>('');
 
@@ -121,15 +122,15 @@ export default function Dashboard({ onLock }: DashboardProps) {
         { title: "Today's Revenue", value: fmt(stats.totalSalesToday), sub: `${stats.totalTransactionsToday} sales today`, icon: DollarSign, color: 'text-green-500', bg: 'bg-green-500/10' },
         { title: 'This Week', value: fmt(stats.totalSalesWeek), sub: 'Last 7 days', icon: TrendingUp, color: 'text-blue-500', bg: 'bg-blue-500/10' },
         { title: 'This Month', value: fmt(stats.totalSalesMonth), sub: 'Current month', icon: ShoppingBag, color: 'text-purple-500', bg: 'bg-purple-500/10' },
-        { title: 'Total Trx', value: stats.totalTransactions?.toLocaleString(), sub: 'Lifetime sales', icon: Activity, color: 'text-orange-500', bg: 'bg-orange-500/10' },
+        { title: 'Total Profit', value: fmt(stats.filteredProfit || 0), sub: 'Total earnings', icon: Activity, color: 'text-orange-500', bg: 'bg-orange-500/10' },
         { title: 'Products', value: stats.totalProducts?.toLocaleString(), sub: 'In catalogue', icon: Package, color: 'text-indigo-500', bg: 'bg-indigo-500/10' },
       ];
     } else {
       statCards = [
-        { title: 'Period Revenue', value: fmt(stats.filteredRevenue || 0), sub: 'For selected range', icon: DollarSign, color: 'text-primary', bg: 'bg-primary/10' },
-        { title: 'Period Transactions', value: (stats.filteredCount || 0).toLocaleString(), sub: 'For selected range', icon: Activity, color: 'text-blue-500', bg: 'bg-blue-500/10' },
-        { title: "Today's Revenue", value: fmt(stats.totalSalesToday), sub: 'Today only', icon: DollarSign, color: 'text-green-500', bg: 'bg-green-500/10' },
-        { title: 'Products', value: stats.totalProducts?.toLocaleString(), sub: 'In catalogue', icon: Package, color: 'text-indigo-500', bg: 'bg-indigo-500/10' },
+        { title: 'Period Revenue', value: fmt(stats.filteredRevenue || 0), sub: 'Total sales cash-in', icon: DollarSign, color: 'text-primary', bg: 'bg-primary/10' },
+        { title: 'Gross Profit', value: fmt(stats.filteredProfit || 0), sub: 'Revenue - Cost', icon: TrendingUp, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
+        { title: 'Transactions', value: (stats.filteredCount || 0).toLocaleString(), sub: 'Successful sales', icon: Activity, color: 'text-blue-500', bg: 'bg-blue-500/10' },
+        { title: "Today's Revenue", value: fmt(stats.totalSalesToday), sub: 'Today only', icon: DollarSign, color: 'text-indigo-500', bg: 'bg-indigo-500/10' },
       ];
     }
   }
@@ -204,7 +205,6 @@ export default function Dashboard({ onLock }: DashboardProps) {
             { id: 'today', label: 'Today' },
             { id: 'week', label: 'Weekly' },
             { id: 'month', label: 'Monthly' },
-            { id: 'all', label: 'Lifetime' },
             { id: 'custom', label: 'Custom' }
           ].map((p) => (
             <Button
@@ -298,13 +298,13 @@ export default function Dashboard({ onLock }: DashboardProps) {
 
             <Card className={cn("shadow-sm hover:-translate-y-1 transition-transform", totalLoans > 0 ? "border-red-400/30 bg-red-500/5" : "border-border/50")}>
               <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <CardTitle className="text-xs font-medium text-muted-foreground uppercase">Outstanding Loans</CardTitle>
+                <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-tight">Customer Credit (AR)</CardTitle>
                 <div className="p-2 rounded-lg bg-red-500/10"><Wallet className="h-4 w-4 text-red-500" /></div>
               </CardHeader>
               <CardContent>
-                <div className="text-xl font-bold text-red-500">{fmt(totalLoans)}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  <span className="font-semibold text-red-400">{debtorCount}</span> customers in debt
+                <div className="text-xl font-bold text-red-600">{fmt(totalLoans)}</div>
+                <p className="text-[10px] text-muted-foreground mt-1 uppercase font-bold">
+                  {debtorCount} Registered Debtors
                 </p>
               </CardContent>
             </Card>

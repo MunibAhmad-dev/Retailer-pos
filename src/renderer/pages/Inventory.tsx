@@ -39,6 +39,9 @@ export default function Inventory() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [batches, setBatches] = useState<any[]>([]);
   const [batchesLoading, setBatchesLoading] = useState(false);
+  const [adjustments, setAdjustments] = useState<any[]>([]);
+  const [adjustmentsLoading, setAdjustmentsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'batches' | 'history'>('batches');
 
   // Adjustment state
   const [adjustmentModalOpen, setAdjustmentModalOpen] = useState(false);
@@ -79,15 +82,20 @@ export default function Inventory() {
   const openProduct = async (p: Product) => {
     setSelectedProduct(p);
     setBatchesLoading(true);
+    setAdjustmentsLoading(true);
+    setActiveTab('batches');
     try {
-      const res = await window.api.getInventoryBatches(p.id);
-      if (res.success) {
-        setBatches(res.data);
-      }
+      const [batchRes, adjRes] = await Promise.all([
+        window.api.getInventoryBatches(p.id),
+        window.api.getStockAdjustments(p.id)
+      ]);
+      if (batchRes.success) setBatches(batchRes.data);
+      if (adjRes.success) setAdjustments(adjRes.data);
     } catch (err) {
       console.error(err);
     }
     setBatchesLoading(false);
+    setAdjustmentsLoading(false);
   };
 
   const handleAdjustmentSubmit = async () => {
@@ -116,7 +124,14 @@ export default function Inventory() {
         setAdjustmentQty('');
         setAdjustmentReason('');
         load();
-        if (selectedProduct) openProduct(selectedProduct);
+        if (selectedProduct) {
+          const [batchRes, adjRes] = await Promise.all([
+            window.api.getInventoryBatches(selectedProduct.id),
+            window.api.getStockAdjustments(selectedProduct.id)
+          ]);
+          if (batchRes.success) setBatches(batchRes.data);
+          if (adjRes.success) setAdjustments(adjRes.data);
+        }
       } else {
         addNotification("Error", res.error || "Failed to adjust stock", "error");
       }
@@ -320,68 +335,118 @@ export default function Inventory() {
           </CardHeader>
 
           <CardContent className="flex-1 overflow-y-auto p-0">
-            {batchesLoading ? (
-              <div className="p-8 text-center text-muted-foreground animate-pulse">Loading batches...</div>
-            ) : (
-              <div className="flex flex-col">
-                <div className="grid grid-cols-2 gap-4 p-5 bg-card border-b">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-xs font-semibold text-muted-foreground uppercase">Current Stock</span>
-                    <span className="text-2xl font-bold text-foreground">{selectedProduct.stock || 0} units</span>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-xs font-semibold text-muted-foreground uppercase">Selling Price</span>
-                    <span className="text-2xl font-bold text-primary">{fmtPKR(selectedProduct.price)}</span>
-                  </div>
-                  <div className="col-span-2 pt-4 border-t">
-                    <Button 
-                      className="w-full gap-2 bg-amber-600 hover:bg-amber-700 text-white"
-                      onClick={() => {
-                        setAdjustmentType('Wastage');
-                        setAdjustmentQty('');
-                        setAdjustmentReason('');
-                        setAdjustmentModalOpen(true);
-                      }}
-                    >
-                      <AlertTriangle size={16} /> Adjust / Fix Stock
-                    </Button>
-                  </div>
+            <div className="flex flex-col h-full">
+              <div className="grid grid-cols-2 gap-4 p-5 bg-card border-b shrink-0">
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-semibold text-muted-foreground uppercase">Current Stock</span>
+                  <span className="text-2xl font-bold text-foreground">{selectedProduct.stock || 0} units</span>
                 </div>
-
-                <div className="p-5 pb-20">
-                  <h4 className="text-sm font-bold mb-4 flex items-center gap-2"><Package size={16}/> Available Batches</h4>
-                  <div className="flex flex-col gap-4">
-                    {batches.length === 0 ? (
-                      <div className="text-sm text-muted-foreground p-4 text-center border rounded-lg border-dashed">No stock available for this product.</div>
-                    ) : (
-                      visibleBatches.map((b, i) => (
-                        <div key={b.id} className="bg-card border rounded-lg p-4 shadow-sm relative overflow-hidden">
-                          {i === 0 && batchesShowing === 10 && <div className="absolute right-0 top-0 bg-primary/10 text-primary text-[10px] font-bold px-2 py-1 rounded-bl-lg">NEXT TO SELL (FIFO)</div>}
-                          <div className="flex justify-between items-start mb-2 mt-1">
-                            <span className="font-bold text-sm text-foreground">Stock: {b.quantity_remaining} units</span>
-                            <Badge variant="outline" className="font-mono">{fmtPKR(b.purchase_price)} / unit</Badge>
-                          </div>
-                          <div className="flex flex-col gap-1 text-xs text-muted-foreground mt-3">
-                            <div className="flex items-center gap-2"><Calendar size={12}/> Added: {new Date(b.date_added).toLocaleDateString()}</div>
-                            {b.vendor_name && <div className="flex items-center gap-2"><Truck size={12}/> Vendor: {b.vendor_name}</div>}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                  {hasMoreBatches && (
-                    <div className="mt-6">
-                      <LoadMoreButton 
-                        hasMore={hasMoreBatches} 
-                        onLoadMore={loadMoreBatches} 
-                        showing={batchesShowing} 
-                        total={batchesTotal} 
-                      />
-                    </div>
-                  )}
+                <div className="flex flex-col gap-1">
+                  <span className="text-xs font-semibold text-muted-foreground uppercase">Selling Price</span>
+                  <span className="text-2xl font-bold text-primary">{fmtPKR(selectedProduct.price)}</span>
+                </div>
+                <div className="col-span-2 pt-4 border-t">
+                  <Button 
+                    className="w-full gap-2 bg-amber-600 hover:bg-amber-700 text-white"
+                    onClick={() => {
+                      setAdjustmentType('Wastage');
+                      setAdjustmentQty('');
+                      setAdjustmentReason('');
+                      setAdjustmentModalOpen(true);
+                    }}
+                  >
+                    <AlertTriangle size={16} /> Adjust / Fix Stock
+                  </Button>
                 </div>
               </div>
-            )}
+
+              {/* Tabs */}
+              <div className="flex border-b bg-muted/10 shrink-0">
+                <button 
+                  onClick={() => setActiveTab('batches')}
+                  className={cn("flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-all border-b-2", activeTab === 'batches' ? "border-primary text-primary bg-background" : "border-transparent text-muted-foreground hover:text-foreground")}
+                >
+                  Available Batches ({batches.length})
+                </button>
+                <button 
+                  onClick={() => setActiveTab('history')}
+                  className={cn("flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-all border-b-2", activeTab === 'history' ? "border-primary text-primary bg-background" : "border-transparent text-muted-foreground hover:text-foreground")}
+                >
+                  Audit History ({adjustments.length})
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                {activeTab === 'batches' ? (
+                  batchesLoading ? (
+                    <div className="p-8 text-center text-muted-foreground animate-pulse">Loading batches...</div>
+                  ) : (
+                    <div className="p-5 pb-20">
+                      <h4 className="text-sm font-bold mb-4 flex items-center gap-2"><Package size={16}/> Available Batches</h4>
+                      <div className="flex flex-col gap-4">
+                        {batches.length === 0 ? (
+                          <div className="text-sm text-muted-foreground p-4 text-center border rounded-lg border-dashed">No stock available for this product.</div>
+                        ) : (
+                          visibleBatches.map((b, i) => (
+                            <div key={b.id} className="bg-card border rounded-lg p-4 shadow-sm relative overflow-hidden">
+                              {i === 0 && batchesShowing === 10 && <div className="absolute right-0 top-0 bg-primary/10 text-primary text-[10px] font-bold px-2 py-1 rounded-bl-lg">NEXT TO SELL (FIFO)</div>}
+                              <div className="flex justify-between items-start mb-2 mt-1">
+                                <span className="font-bold text-sm text-foreground">Stock: {b.quantity_remaining} units</span>
+                                <Badge variant="outline" className="font-mono">{fmtPKR(b.purchase_price)} / unit</Badge>
+                              </div>
+                              <div className="flex flex-col gap-1 text-xs text-muted-foreground mt-3">
+                                <div className="flex items-center gap-2"><Calendar size={12}/> Added: {new Date(b.date_added).toLocaleDateString()}</div>
+                                {b.vendor_name && <div className="flex items-center gap-2"><Truck size={12}/> Vendor: {b.vendor_name}</div>}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                      {hasMoreBatches && (
+                        <div className="mt-6">
+                          <LoadMoreButton 
+                            hasMore={hasMoreBatches} 
+                            onLoadMore={loadMoreBatches} 
+                            showing={batchesShowing} 
+                            total={batchesTotal} 
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )
+                ) : (
+                  adjustmentsLoading ? (
+                    <div className="p-8 text-center text-muted-foreground animate-pulse">Loading history...</div>
+                  ) : (
+                    <div className="p-5 pb-20 space-y-4">
+                      {adjustments.length === 0 ? (
+                        <div className="text-sm text-muted-foreground p-8 text-center border rounded-lg border-dashed">No adjustment history found.</div>
+                      ) : (
+                        adjustments.map((adj) => (
+                          <div key={adj.id} className="relative pl-4 border-l-2 border-muted hover:border-primary/40 transition-colors">
+                            <div className={cn("absolute -left-[5px] top-1 h-2 w-2 rounded-full", adj.quantity < 0 ? "bg-red-500" : "bg-blue-500")} />
+                            <div className="flex justify-between items-start mb-1">
+                              <span className="text-xs font-bold">{adj.type}</span>
+                              <span className="text-[10px] text-muted-foreground">{new Date(adj.date_created).toLocaleString()}</span>
+                            </div>
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className={cn("text-sm font-black", adj.quantity < 0 ? "text-red-600" : "text-blue-600")}>
+                                {adj.quantity > 0 ? '+' : ''}{adj.quantity} units
+                              </span>
+                            </div>
+                            {adj.reason && (
+                              <div className="bg-muted/30 rounded-md p-2 text-xs italic text-muted-foreground">
+                                "{adj.reason}"
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )
+                )}
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}

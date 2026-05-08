@@ -89,13 +89,13 @@ export default function Purchases() {
 
   const updateQty = (id: string, rawValue: string) => {
     const qty = parseInt(rawValue.replace(/[^0-9]/g, '')) || 0;
-    setCart(cart.map((i) => i.id === id ? { ...i, quantity: qty } : i));
+    setCart(prev => prev.map((i) => i.id === id ? { ...i, quantity: qty } : i));
   };
 
   const updatePrice = (id: string, rawValue: string) => {
     const val = rawValue.replace(/[^0-9.]/g, '');
     const price = parseFloat(val) || 0;
-    setCart(cart.map((i) => i.id === id ? { ...i, purchase_price: price } : i));
+    setCart(prev => prev.map((i) => i.id === id ? { ...i, purchase_price: price } : i));
   };
 
   const total = cart.reduce((s, i) => s + i.purchase_price * i.quantity, 0);
@@ -231,13 +231,13 @@ export default function Purchases() {
                       <label className="text-[10px] uppercase font-bold text-muted-foreground">New Cost</label>
                       {priceDiff !== 0 && (
                         <span className={cn("text-[9px] font-black px-1 rounded", priceDiff > 0 ? "bg-red-500/10 text-red-600" : "bg-green-500/10 text-green-600")}>
-                          {priceDiff > 0 ? '▲' : '▼'} {Math.abs(priceDiff)}
+                          {priceDiff > 0 ? '▲' : '▼'} {Math.round(Math.abs(priceDiff))}
                         </span>
                       )}
                     </div>
                     <Input 
                       type="text" className={cn("h-8 text-sm font-bold", priceDiff !== 0 ? "border-amber-500/50 bg-amber-500/5" : "bg-muted/20")}
-                      value={item.purchase_price || ''} 
+                      value={item.purchase_price !== undefined ? Math.round(item.purchase_price) : ''} 
                       onChange={(e) => updatePrice(item.id, e.target.value)}
                       onFocus={e => e.target.select()}
                     />
@@ -254,10 +254,11 @@ export default function Purchases() {
                     <Input 
                       placeholder="New Sale Price"
                       className="w-24 h-7 text-[11px] font-bold border-primary/20 bg-primary/5 focus:border-primary"
-                      value={item.selling_price || ''}
+                      value={item.selling_price !== undefined ? Math.round(item.selling_price) : ''}
                       onChange={(e) => {
                         const val = e.target.value.replace(/[^0-9]/g, '');
-                        setCart(cart.map(i => i.id === item.id ? { ...i, selling_price: parseFloat(val) || 0 } : i));
+                        const newPrice = parseFloat(val) || 0;
+                        setCart(prev => prev.map(i => i.id === item.id ? { ...i, selling_price: newPrice } : i));
                       }}
                       onFocus={e => e.target.select()}
                     />
