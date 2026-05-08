@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
    BarChart3, Download, Printer, Calendar, TrendingUp,
    TrendingDown, DollarSign, Package, Users, Wallet,
@@ -40,7 +40,12 @@ export default function BalanceSheet() {
    const { t, language } = useLanguage();
    const [data, setData] = useState<BalanceSheetData | null>(null);
    const [loading, setLoading] = useState(true);
-   const [range, setRange] = useState<'today' | 'week' | 'month' | 'year' | 'all'>('month');
+   const [range, setRange] = useState<'today' | 'week' | 'month' | 'year' | 'all' | 'custom'>('month');
+   const [appliedRange, setAppliedRange] = useState<'today' | 'week' | 'month' | 'year' | 'all' | 'custom'>('month');
+   const [customFrom, setCustomFrom] = useState('');
+   const [customTo, setCustomTo] = useState('');
+   const [appliedCustomFrom, setAppliedCustomFrom] = useState('');
+   const [appliedCustomTo, setAppliedCustomTo] = useState('');
 
    // Zakat Logic
    const [showZakat, setShowZakat] = useState(false);
@@ -66,12 +71,14 @@ export default function BalanceSheet() {
    // Search & Filter for Recent Activity
    const [activitySearch, setActivitySearch] = useState('');
    const [activityFilter, setActivityFilter] = useState<'all' | 'sale' | 'purchase' | 'expense'>('all');
+   const fetchSeqRef = useRef(0);
 
    useEffect(() => {
       fetchData();
-   }, [range]);
+   }, [appliedRange, appliedCustomFrom, appliedCustomTo]);
 
    const fetchData = async () => {
+      const seq = ++fetchSeqRef.current;
       setLoading(true);
       try {
          let startDate: string | undefined;
@@ -79,20 +86,24 @@ export default function BalanceSheet() {
 
          const fmtDate = (d: dayjs.Dayjs) => d.format('YYYY-MM-DD HH:mm:ss');
 
-         if (range === 'today') startDate = fmtDate(dayjs().startOf('day'));
-         else if (range === 'week') startDate = fmtDate(dayjs().subtract(7, 'day').startOf('day'));
-         else if (range === 'month') startDate = fmtDate(dayjs().subtract(30, 'day').startOf('day'));
-         else if (range === 'year') startDate = fmtDate(dayjs().subtract(365, 'day').startOf('day'));
-         else startDate = undefined;
+         if (appliedRange === 'today') startDate = fmtDate(dayjs().startOf('day'));
+         else if (appliedRange === 'week') startDate = fmtDate(dayjs().subtract(7, 'day').startOf('day'));
+         else if (appliedRange === 'month') startDate = fmtDate(dayjs().subtract(30, 'day').startOf('day'));
+         else if (appliedRange === 'year') startDate = fmtDate(dayjs().subtract(365, 'day').startOf('day'));
+         else if (appliedRange === 'custom') {
+            startDate = appliedCustomFrom ? `${appliedCustomFrom} 00:00:00` : undefined;
+            endDate = appliedCustomTo ? `${appliedCustomTo} 23:59:59` : endDate;
+         } else startDate = undefined;
 
          const res = await window.api.getBalanceSheet({ startDate, endDate });
+         if (seq !== fetchSeqRef.current) return;
          if (res.success) {
             setData(res.data);
          }
       } catch (error) {
          console.error("Failed to fetch balance sheet", error);
       } finally {
-         setLoading(false);
+         if (seq === fetchSeqRef.current) setLoading(false);
       }
    };
 
@@ -183,7 +194,7 @@ export default function BalanceSheet() {
 
             <div className="flex flex-wrap items-center gap-2 bg-muted/30 p-1 rounded-lg border border-border/50">
                <div className="flex items-center gap-1">
-                  {(['today', 'week', 'month', 'year', 'all'] as const).map((r) => (
+                  {(['today', 'week', 'month', 'year', 'all', 'custom'] as const).map((r) => (
                      <Button
                         key={r}
                         variant={range === r ? 'default' : 'ghost'}
@@ -195,6 +206,24 @@ export default function BalanceSheet() {
                      </Button>
                   ))}
                </div>
+               {range === 'custom' && (
+                  <div className="flex items-center gap-2">
+                     <Input type="date" className="h-8 text-xs w-36" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+                     <Input type="date" className="h-8 text-xs w-36" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+                  </div>
+               )}
+               <Button
+                  variant="default"
+                  size="sm"
+                  className="h-8"
+                  onClick={() => {
+                     setAppliedRange(range);
+                     setAppliedCustomFrom(customFrom);
+                     setAppliedCustomTo(customTo);
+                  }}
+               >
+                  Calculate
+               </Button>
                <div className="w-px h-4 bg-border mx-1" />
                <Button variant="outline" size="sm" onClick={() => setShowZakat(true)} className="h-8 gap-2 bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/20">
                   <DollarSign size={14} /> {t('calculate_zakat')}
@@ -683,7 +712,7 @@ export default function BalanceSheet() {
                         </div>
                         <div className="text-left md:text-right">
                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Report Period</p>
-                           <p className="text-lg font-black capitalize text-primary">{range}</p>
+                           <p className="text-lg font-black capitalize text-primary">{appliedRange}</p>
                            <p className="text-[10px] text-slate-400 font-bold">{dayjs(data.period.start || new Date()).format('MMM DD, YYYY')} — {dayjs(data.period.end || new Date()).format('MMM DD, YYYY')}</p>
                         </div>
                      </div>

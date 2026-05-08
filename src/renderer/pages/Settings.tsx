@@ -40,6 +40,7 @@ const defaultSettings: SettingsData = {
 };
 
 const fmtPKR = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
+const BACKUPS_PAGE_SIZE = 15;
 
 export default function Settings() {
   const [settings, setSettings] = useState<SettingsData>(defaultSettings);
@@ -50,6 +51,7 @@ export default function Settings() {
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [availableBackups, setAvailableBackups] = useState<any[]>([]);
+  const [backupPage, setBackupPage] = useState(1);
   const [isFetchingBackups, setIsFetchingBackups] = useState(false);
   const [restoreProgress, setRestoreProgress] = useState<{ status: string, progress: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -93,14 +95,22 @@ export default function Settings() {
     setIsFetchingBackups(true);
     try {
       const res = await window.api.getAvailableBackups();
-      if (res.success) {
-        setAvailableBackups(res.backups);
-        if (res.backups.length === 0) {
+      // Backward-compatible handling in case older main process returns raw array.
+      const isArrayResponse = Array.isArray(res);
+      const success = isArrayResponse ? true : !!res?.success;
+      const backups = isArrayResponse ? res : (res?.backups || []);
+
+      if (success) {
+        setAvailableBackups(backups);
+        setBackupPage(1);
+        if (backups.length === 0) {
           addNotification("No Backups Found", "No POS backups were found in your Google Drive.", "info");
         }
       } else {
-        addNotification("Fetch Failed", res.message || "Could not list backups.", "error");
+        addNotification("Fetch Failed", res?.message || res?.error || "Could not list backups.", "error");
       }
+    } catch (err: any) {
+      addNotification("Fetch Failed", err?.message || "Could not list backups.", "error");
     } finally {
       setIsFetchingBackups(false);
     }
@@ -177,6 +187,13 @@ export default function Settings() {
        hour: '2-digit', minute: '2-digit', hour12: true 
     });
   };
+
+  const totalBackupPages = Math.max(1, Math.ceil(availableBackups.length / BACKUPS_PAGE_SIZE));
+  const currentBackupPage = Math.min(backupPage, totalBackupPages);
+  const pagedBackups = availableBackups.slice(
+    (currentBackupPage - 1) * BACKUPS_PAGE_SIZE,
+    currentBackupPage * BACKUPS_PAGE_SIZE
+  );
 
   const loadSettings = async () => {
     try {
@@ -522,16 +539,16 @@ export default function Settings() {
         <Card className="shadow-sm">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Store size={18} className="text-primary" /> Store Information
+              <Store size={18} className="text-primary" /> Retailer Shop Information
             </CardTitle>
             <CardDescription>Details printed externally</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <label className="text-sm font-semibold">Restaurant Name <span className="text-destructive">*</span></label>
+              <label className="text-sm font-semibold">Retailer Shop Name <span className="text-destructive">*</span></label>
               <div className="relative">
                 <Store className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground opacity-50" size={16} />
-                <Input required value={settings.store_name} onChange={(e) => setSettings({ ...settings, store_name: e.target.value })} placeholder="e.g. The Golden Fork" className="pl-9" />
+                <Input required value={settings.store_name} onChange={(e) => setSettings({ ...settings, store_name: e.target.value })} placeholder="e.g. OsaTech Retail Shop" className="pl-9" />
               </div>
             </div>
 
@@ -547,7 +564,7 @@ export default function Settings() {
                 {/* Mini Invoice Preview within form */}
                 <p className="text-[10px] font-semibold text-muted-foreground uppercase absolute top-2 left-3">Receipt Preview Header</p>
                 <div className="mt-4 text-center">
-                  <p className="font-bold text-sm text-foreground">{settings.store_name || 'Restaurant Name'}</p>
+                  <p className="font-bold text-sm text-foreground">{settings.store_name || 'Retailer Shop Name'}</p>
                   <p className="text-[10px] text-muted-foreground mt-0.5">{settings.store_phone || 'Phone Number'}</p>
                 </div>
               </div>
@@ -922,7 +939,7 @@ export default function Settings() {
               <CardContent className="p-0">
                  {availableBackups.length > 0 ? (
                     <div className="divide-y divide-border">
-                       {availableBackups.map((b) => (
+                       {pagedBackups.map((b) => (
                           <div key={b.id} className="flex items-center justify-between p-4 hover:bg-muted/30 transition-colors">
                              <div className="space-y-1">
                                 <p className="text-xs font-bold text-slate-700">{b.name}</p>
@@ -942,6 +959,39 @@ export default function Settings() {
                              </Button>
                           </div>
                        ))}
+                       {availableBackups.length > BACKUPS_PAGE_SIZE && (
+                          <div className="p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-muted/10">
+                             <p className="text-xs text-muted-foreground">
+                                Showing {Math.min((currentBackupPage - 1) * BACKUPS_PAGE_SIZE + 1, availableBackups.length)}-
+                                {Math.min(currentBackupPage * BACKUPS_PAGE_SIZE, availableBackups.length)} of {availableBackups.length}
+                             </p>
+                             <div className="flex items-center gap-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 text-xs"
+                                  disabled={currentBackupPage <= 1}
+                                  onClick={() => setBackupPage((p) => Math.max(1, p - 1))}
+                                >
+                                  Prev
+                                </Button>
+                                <span className="text-xs font-medium text-muted-foreground px-2">
+                                  Page {currentBackupPage} / {totalBackupPages}
+                                </span>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 text-xs"
+                                  disabled={currentBackupPage >= totalBackupPages}
+                                  onClick={() => setBackupPage((p) => Math.min(totalBackupPages, p + 1))}
+                                >
+                                  Next
+                                </Button>
+                             </div>
+                          </div>
+                       )}
                     </div>
                  ) : (
                     <div className="p-8 text-center space-y-2">

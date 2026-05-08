@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   DollarSign, ShoppingBag, TrendingUp, Package, Activity, RefreshCw,
@@ -25,14 +25,6 @@ import {
   Cell,
   Legend
 } from 'recharts';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../components/ui/select";
-
 interface DashboardProps { onLock: () => void; }
 
 const fmt = (n: number) => 'PKR ' + Math.round(n ?? 0).toLocaleString('en-PK');
@@ -40,7 +32,7 @@ const fmt = (n: number) => 'PKR ' + Math.round(n ?? 0).toLocaleString('en-PK');
 export default function Dashboard({ onLock }: DashboardProps) {
   // Date Filtering State
   // Date Filtering State
-  const [period, setPeriod] = useState<string>('today');
+  const [period, setPeriod] = useState<string>('all');
   const [customStart, setCustomStart] = useState<string>('');
   const [customEnd, setCustomEnd] = useState<string>('');
 
@@ -63,8 +55,12 @@ export default function Dashboard({ onLock }: DashboardProps) {
 
       const payload = sDate ? { startDate: sDate, endDate: eDate || new Date().toISOString() } : undefined;
       const res = await window.api.getDashboardStats(payload);
-      setStats(res?.success && res.data ? res.data : null);
-      if (isManualRefresh) addNotification('Dashboard refreshed', 'Latest metrics loaded.', 'success');
+      if (res?.success && res.data) {
+        setStats(res.data);
+        if (isManualRefresh) addNotification('Dashboard refreshed', 'Latest metrics loaded.', 'success');
+      } else if (isManualRefresh) {
+        addNotification('Refresh Failed', res?.error || 'Could not fetch dashboard analytics.', 'error');
+      }
     } catch (err) {
       console.error(err);
       addNotification('Refresh Failed', 'Could not fetch dashboard analytics.', 'error');
@@ -103,16 +99,30 @@ export default function Dashboard({ onLock }: DashboardProps) {
     };
   }, []);
 
-  const handlePeriodChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const val = e.target.value;
-    setPeriod(val);
-    if (val !== 'custom') loadStats(true, { p: val });
-  };
-
   const handleCustomFilter = () => {
     if (!customStart) { addNotification('Missing Date', 'Select a start date.', 'warning'); return; }
     loadStats(true, { p: 'custom', s: new Date(customStart).toISOString(), e: customEnd ? new Date(customEnd).toISOString() : '' });
   };
+
+  const salesTrendData = useMemo(() => {
+    const raw = Array.isArray(stats?.salesTrend) ? stats.salesTrend : [];
+    return raw
+      .filter((r: any) => r && r.date)
+      .map((r: any) => ({
+        ...r,
+        revenue: Number(r.revenue) || 0,
+      }));
+  }, [stats?.salesTrend]);
+
+  const paymentStatsData = useMemo(() => {
+    const raw = Array.isArray(stats?.paymentStats) ? stats.paymentStats : [];
+    return raw
+      .map((r: any) => ({
+        ...r,
+        revenue: Number(r.revenue) || 0,
+      }))
+      .filter((r: any) => r.revenue > 0);
+  }, [stats?.paymentStats]);
 
   // --- Build stat cards based on period ---
   let statCards: any[] = [];
@@ -202,6 +212,7 @@ export default function Dashboard({ onLock }: DashboardProps) {
         </div>
         <div className="flex flex-col sm:flex-row items-center gap-1 bg-muted/50 p-1 rounded-xl border border-border/40">
           {[
+            { id: 'all', label: 'All' },
             { id: 'today', label: 'Today' },
             { id: 'week', label: 'Weekly' },
             { id: 'month', label: 'Monthly' },
@@ -479,18 +490,23 @@ export default function Dashboard({ onLock }: DashboardProps) {
           </div>
 
           {/* ===== Charts Section (Moved to bottom) ===== */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6 items-stretch">
             {/* Revenue Trend Chart */}
-            <Card className="shadow-md overflow-hidden border-none bg-slate-900 text-white">
+            <Card className="shadow-md overflow-hidden border-none bg-slate-900 text-white min-h-[360px]">
               <CardHeader className="pb-2">
                 <CardTitle className="text-lg flex items-center gap-2">
                   <TrendingUp className="text-emerald-400" size={18} /> Revenue Trend
                 </CardTitle>
                 <CardDescription className="text-slate-400 text-xs">Daily performance metrics</CardDescription>
               </CardHeader>
-              <CardContent className="h-[300px] pt-4">
+              <CardContent className="h-[280px] md:h-[320px] pt-4">
+                {salesTrendData.length === 0 ? (
+                  <div className="h-full w-full flex items-center justify-center text-slate-300 text-sm">
+                    No trend data available for selected period.
+                  </div>
+                ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={stats.salesTrend}>
+                  <AreaChart data={salesTrendData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
                     <defs>
                       <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="5%" stopColor="#10b981" stopOpacity={0.8}/>
@@ -504,8 +520,11 @@ export default function Dashboard({ onLock }: DashboardProps) {
                       tickLine={false} 
                       axisLine={false}
                       stroke="#94a3b8"
+                      minTickGap={24}
+                      interval="preserveStartEnd"
                       tickFormatter={(str) => {
                         const date = new Date(str);
+                        if (Number.isNaN(date.getTime())) return '';
                         return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
                       }}
                     />
@@ -514,11 +533,16 @@ export default function Dashboard({ onLock }: DashboardProps) {
                       tickLine={false} 
                       axisLine={false} 
                       stroke="#94a3b8"
-                      tickFormatter={(value) => `Rs.${value}`}
+                      width={80}
+                      tickFormatter={(value) => `Rs.${Number(value).toLocaleString('en-PK')}`}
                     />
                     <Tooltip 
                       contentStyle={{ backgroundColor: '#1e293b', borderRadius: '12px', border: 'none', color: '#f8fafc' }}
                       itemStyle={{ color: '#10b981' }}
+                      labelFormatter={(label) => {
+                        const d = new Date(label as string);
+                        return Number.isNaN(d.getTime()) ? String(label) : d.toLocaleDateString('en-PK', { year: 'numeric', month: 'short', day: 'numeric' });
+                      }}
                       formatter={(value: any) => [fmt(value), 'Revenue']}
                     />
                     <Area 
@@ -531,42 +555,51 @@ export default function Dashboard({ onLock }: DashboardProps) {
                     />
                   </AreaChart>
                 </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
 
             {/* Payment Distribution Chart */}
-            <Card className="shadow-md border-none bg-slate-900 text-white">
+            <Card className="shadow-md border-none bg-slate-900 text-white min-h-[360px]">
               <CardHeader className="pb-2">
                 <CardTitle className="text-lg flex items-center gap-2">
                   <CreditCard className="text-blue-400" size={18} /> Payment Methods
                 </CardTitle>
                 <CardDescription className="text-slate-400 text-xs">Revenue share by type</CardDescription>
               </CardHeader>
-              <CardContent className="h-[300px]">
+              <CardContent className="h-[280px] md:h-[320px]">
+                {paymentStatsData.length === 0 ? (
+                  <div className="h-full w-full flex items-center justify-center text-slate-300 text-sm">
+                    No payment method data available for selected period.
+                  </div>
+                ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={stats.paymentStats}
+                      data={paymentStatsData}
                       cx="50%"
-                      cy="50%"
-                      innerRadius={70}
-                      outerRadius={90}
-                      paddingAngle={5}
+                      cy="46%"
+                      innerRadius={62}
+                      outerRadius={92}
+                      paddingAngle={3}
                       dataKey="revenue"
                       nameKey="payment_method"
                       stroke="none"
+                      labelLine={false}
                     >
-                      {stats.paymentStats?.map((entry: any, index: number) => (
+                      {paymentStatsData.map((entry: any, index: number) => (
                         <Cell key={`cell-${index}`} fill={['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'][index % 5]} />
                       ))}
                     </Pie>
                     <Tooltip 
                       contentStyle={{ backgroundColor: '#1e293b', borderRadius: '12px', border: 'none', color: '#f8fafc' }}
                       formatter={(value: any) => fmt(value)}
+                      labelFormatter={(label) => String(label)}
                     />
-                    <Legend iconType="circle" />
+                    <Legend iconType="circle" verticalAlign="bottom" height={40} wrapperStyle={{ fontSize: '11px', paddingTop: '6px' }} />
                   </PieChart>
                 </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
           </div>

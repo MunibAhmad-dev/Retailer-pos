@@ -24,7 +24,7 @@ import BalanceSheet from './pages/BalanceSheet';
 import About from './pages/About';
 import Subscription from './pages/Subscription';
 import RegisterHistory from './pages/RegisterHistory';
-import Financials from './pages/Financials';
+import MoreFeatures from './pages/MoreFeatures';
 import RegisterStatus from './pages/RegisterStatus';
 import Activation from './pages/Activation';
 import Returns from './pages/Returns';
@@ -114,7 +114,8 @@ export default function App() {
                   <Route path="/register" element={<ProtectedRoute routeName="register"><RegisterStatus /></ProtectedRoute>} />
                   <Route path="/returns" element={<ProtectedRoute routeName="returns"><Returns /></ProtectedRoute>} />
                   <Route path="/payments" element={<ProtectedRoute routeName="payments"><Payments /></ProtectedRoute>} />
-                  <Route path="/financials" element={<ProtectedRoute routeName="financials"><Financials /></ProtectedRoute>} />
+                  <Route path="/more-features" element={<ProtectedRoute routeName="financials"><MoreFeatures /></ProtectedRoute>} />
+                  <Route path="/financials" element={<Navigate to="/more-features" replace />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/subscription" element={<Subscription />} />
                   <Route path="/about" element={<About />} />

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { CircleDollarSign, Search, Filter, RefreshCcw, ArrowUpRight, ArrowDownLeft, FileText, Download, Plus, Printer, MessageCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -15,18 +15,27 @@ export default function Payments() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'custom'>('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [appliedDateFilter, setAppliedDateFilter] = useState<'all' | 'today' | 'custom'>('all');
+  const [appliedFromDate, setAppliedFromDate] = useState('');
+  const [appliedToDate, setAppliedToDate] = useState('');
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
   const [totalIncoming, setTotalIncoming] = useState(0);
   const [totalOutgoing, setTotalOutgoing] = useState(0);
   const { addNotification } = useNotifications();
   const PAGE_SIZE = 15;
+  const fetchSeqRef = useRef(0);
 
   useEffect(() => {
     loadPayments(true);
-  }, []);
+  }, [searchTerm, appliedDateFilter, appliedFromDate, appliedToDate]);
 
   const loadPayments = async (fresh = false) => {
+    const seq = ++fetchSeqRef.current;
     if (fresh) {
       setLoading(true);
       setOffset(0);
@@ -36,7 +45,15 @@ export default function Payments() {
 
     try {
       const currentOffset = fresh ? 0 : offset;
-      const res = await window.api.getAllPayments({ limit: PAGE_SIZE, offset: currentOffset });
+      const res = await window.api.getAllPayments({
+        limit: PAGE_SIZE,
+        offset: currentOffset,
+        search: searchTerm,
+        dateFilter: appliedDateFilter,
+        startDate: appliedFromDate ? `${appliedFromDate} 00:00:00` : undefined,
+        endDate: appliedToDate ? `${appliedToDate} 23:59:59` : undefined
+      });
+      if (seq !== fetchSeqRef.current) return;
       if (res.success) {
         if (fresh) {
           setPayments(res.data);
@@ -50,18 +67,17 @@ export default function Payments() {
         if (res.totalOutgoing !== undefined) setTotalOutgoing(res.totalOutgoing);
       }
     } catch (error) {
+      if (seq !== fetchSeqRef.current) return;
       addNotification("Error", "Failed to load payment history", "error");
     } finally {
-      setLoading(false);
-      setLoadingMore(false);
+      if (seq === fetchSeqRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   };
 
-  const filtered = payments.filter(p =>
-    p.party_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.type.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.notes?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filtered = useMemo(() => payments, [payments]);
 
   const exportCSV = () => {
     const headers = ['Type', 'Party Name', 'Date', 'Notes', 'Amount'];
@@ -82,7 +98,6 @@ export default function Payments() {
     const link = document.createElement('a');
     link.href = url;
     link.download = `payment_ledger_${new Date().toISOString().split('T')[0]}.csv`;
-    link.click();
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -275,14 +290,40 @@ export default function Payments() {
 
       <Card className="border-none shadow-xl bg-card/60 backdrop-blur-md overflow-hidden">
         <CardHeader className="border-b bg-muted/20 py-4 px-6 flex flex-row items-center justify-between gap-4">
-          <div className="relative w-full md:w-96">
+          <div className="w-full flex flex-col md:flex-row gap-2">
+            <div className="relative w-full md:w-96">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
             <Input
               placeholder="Search by name, type, or notes..."
               className="pl-10 h-10 bg-background/50 border-border/50 focus:border-primary/50 transition-all"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
             />
+            </div>
+            <select className="h-10 rounded-md border bg-background px-2 text-sm" value={dateFilter} onChange={(e) => setDateFilter(e.target.value as any)}>
+              <option value="all">All Dates</option>
+              <option value="today">Today</option>
+              <option value="custom">Custom</option>
+            </select>
+            {dateFilter === 'custom' && (
+              <>
+                <Input type="date" className="h-10 md:w-44" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+                <Input type="date" className="h-10 md:w-44" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+              </>
+            )}
+            <Button
+              variant="outline"
+              className="h-10"
+              onClick={() => {
+                setSearchTerm(searchInput.trim());
+                setAppliedDateFilter(dateFilter);
+                setAppliedFromDate(fromDate);
+                setAppliedToDate(toDate);
+                setOffset(0);
+              }}
+            >
+              Apply
+            </Button>
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground whitespace-nowrap">
             <Filter size={14} /> Showing {filtered.length} of {total}

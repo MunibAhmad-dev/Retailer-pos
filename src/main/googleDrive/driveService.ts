@@ -85,18 +85,36 @@ export class DriveService {
     if (!googleAuthService.isConnected()) return [];
     
     const drive = this.drive();
-    // 1. Get main folder ID
+    // 1) Ensure we have the root folder.
     const mainFolderId = await this.getOrCreateFolder('POS Backups');
-    
-    // 2. Find all files in that folder and its subfolders
+
+    // 2) Collect child device folders under "POS Backups".
+    const folderRes = await drive.files.list({
+      q: `'${mainFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      fields: 'files(id, name)',
+      spaces: 'drive',
+      pageSize: 200,
+    });
+    const folderIds = (folderRes.data.files || []).map((f) => f.id).filter(Boolean) as string[];
+
+    // Include root folder itself in case files were uploaded directly there.
+    const parentIds = [mainFolderId, ...folderIds];
+    if (parentIds.length === 0) return [];
+
+    const parentQuery = parentIds.map((id) => `'${id}' in parents`).join(' or ');
     const response = await drive.files.list({
-      q: `trashed = false and mimeType != 'application/vnd.google-apps.folder'`,
+      q: `(${parentQuery}) and trashed = false and mimeType != 'application/vnd.google-apps.folder'`,
       fields: 'files(id, name, size, createdTime, parents)',
       orderBy: 'createdTime desc',
       spaces: 'drive',
+      pageSize: 500,
     });
 
-    const files = response.data.files || [];
+    const files = (response.data.files || []).filter((f) => {
+      const n = (f.name || '').toLowerCase();
+      // Only show database backups in restore list to prevent restoring JSON/non-DB files.
+      return n.endsWith('.db');
+    });
     
     return files.map(f => ({
       id: f.id,

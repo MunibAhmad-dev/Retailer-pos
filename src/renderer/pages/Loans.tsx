@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { DollarSign, Search, UserCheck, Activity, ArrowRight, Wallet, History, AlertTriangle, FileText, Download, MessageCircle, Eye } from 'lucide-react';
+import { DollarSign, Search, UserCheck, Activity, ArrowRight, Wallet, History, AlertTriangle, FileText, Download, MessageCircle, Eye, X, Printer } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -23,8 +23,14 @@ export default function Loans() {
   const [searchTerm, setSearchTerm] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [showPdfPreviewModal, setShowPdfPreviewModal] = useState(false);
+  const [previewSearch, setPreviewSearch] = useState('');
+  const [previewStatus, setPreviewStatus] = useState<'all' | 'settled' | 'pending' | 'partial' | 'cancelled' | 'returned'>('all');
+  const [previewTab, setPreviewTab] = useState<'all' | 'receivables' | 'payables'>('all');
+  const [previewPage, setPreviewPage] = useState(1);
   const { addNotification } = useNotifications();
   const navigate = useNavigate();
+  const PREVIEW_PAGE_SIZE = 20;
 
   useEffect(() => {
     loadData();
@@ -72,26 +78,22 @@ export default function Loans() {
 
   const fmt = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
 
-  const printBalanceSheet = async () => {
-    const isReceivable = activeTab === 'receivables';
-    const title = isReceivable ? 'Accounts Receivable (Customers)' : 'Accounts Payable (Vendors)';
-    const total = isReceivable ? totalReceivable : totalPayable;
-    const items = isReceivable ? customers : vendors;
-
-    if (items.length === 0) {
-      addNotification('Warning', 'No records to print.', 'warning');
-      return;
-    }
-
+  const buildLedgerPdfHtml = (
+    title: string,
+    items: Array<AccountEntity & { kind?: 'receivables' | 'payables'; status?: string; remaining?: number }>,
+    total: number
+  ) => {
     const rowsHtml = items.map((item) => `
       <tr>
         <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.name}</td>
         <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.phone || '-'}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold; text-align: right;">PKR ${Math.round(item.balance || 0).toLocaleString('en-PK')}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.kind === 'payables' ? 'Payable' : 'Receivable'}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee;">${(item.status || 'pending').toUpperCase()}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #eee; font-weight: bold; text-align: right;">PKR ${Math.round(item.remaining ?? item.balance ?? 0).toLocaleString('en-PK')}</td>
       </tr>
     `).join('');
 
-    const html = `
+    return `
       <div style="font-family: sans-serif; padding: 20px;">
         <div style="text-align: center; margin-bottom: 30px;">
           <h1 style="margin: 0;">Financial Ledger</h1>
@@ -104,6 +106,8 @@ export default function Loans() {
             <tr style="background-color: #f8f9fa;">
               <th style="text-align: left; padding: 12px; border-bottom: 2px solid #ddd;">Name</th>
               <th style="text-align: left; padding: 12px; border-bottom: 2px solid #ddd;">Phone</th>
+              <th style="text-align: left; padding: 12px; border-bottom: 2px solid #ddd;">Type</th>
+              <th style="text-align: left; padding: 12px; border-bottom: 2px solid #ddd;">Status</th>
               <th style="text-align: right; padding: 12px; border-bottom: 2px solid #ddd;">Due Balance</th>
             </tr>
           </thead>
@@ -112,10 +116,93 @@ export default function Loans() {
           </tbody>
           <tfoot>
             <tr>
-              <td colspan="2" style="text-align: right; padding: 15px; font-weight: bold; font-size: 18px;">Total Outstanding:</td>
-              <td style="text-align: right; padding: 15px; font-weight: bold; font-size: 18px; color: ${isReceivable ? '#ef4444' : '#eab308'};">PKR ${Math.round(total).toLocaleString('en-PK')}</td>
+              <td colspan="4" style="text-align: right; padding: 15px; font-weight: bold; font-size: 18px;">Total Outstanding:</td>
+              <td style="text-align: right; padding: 15px; font-weight: bold; font-size: 18px; color: #2563eb;">PKR ${Math.round(total).toLocaleString('en-PK')}</td>
             </tr>
           </tfoot>
+        </table>
+      </div>
+    `;
+  };
+
+  const previewRows = useMemo(() => {
+    const q = previewSearch.trim().toLowerCase();
+    const mapRows = (list: AccountEntity[], kind: 'receivables' | 'payables') =>
+      list.map((i) => {
+        const remaining = Math.max(0, Number(i.balance) || 0);
+        const status = remaining <= 0.5 ? 'settled' : 'pending';
+        return {
+          ...i,
+          kind,
+          remaining,
+          status,
+          invoiceCount: '-',
+          totalAmount: remaining,
+          paidAmount: 0,
+          lastActivityDate: '-'
+        };
+      });
+
+    let rows = [...mapRows(customers, 'receivables'), ...mapRows(vendors, 'payables')];
+    if (previewTab !== 'all') rows = rows.filter(r => r.kind === previewTab);
+    if (previewStatus !== 'all') rows = rows.filter(r => r.status === previewStatus);
+    if (q) {
+      rows = rows.filter(r =>
+        r.name.toLowerCase().includes(q) ||
+        (r.phone || '').includes(q) ||
+        String(Math.round(r.remaining)).includes(q)
+      );
+    }
+    return rows.sort((a, b) => b.remaining - a.remaining);
+  }, [customers, vendors, previewSearch, previewStatus, previewTab]);
+
+  const previewTotalPages = Math.max(1, Math.ceil(previewRows.length / PREVIEW_PAGE_SIZE));
+  const previewVisibleRows = useMemo(() => {
+    const page = Math.min(previewPage, previewTotalPages);
+    const start = (page - 1) * PREVIEW_PAGE_SIZE;
+    return previewRows.slice(start, start + PREVIEW_PAGE_SIZE);
+  }, [previewRows, previewPage, previewTotalPages]);
+
+  const previewSummary = useMemo(() => {
+    const arPending = customers.reduce((acc, c) => acc + Math.max(0, Number(c.balance) || 0), 0);
+    const apPending = vendors.reduce((acc, v) => acc + Math.max(0, Number(v.balance) || 0), 0);
+    const settledCount = [...customers, ...vendors].filter(x => Math.max(0, Number(x.balance) || 0) <= 0.5).length;
+    const pendingCount = [...customers, ...vendors].filter(x => Math.max(0, Number(x.balance) || 0) > 0.5).length;
+    return {
+      arPending,
+      apPending,
+      netOutstanding: Math.max(0, arPending + apPending),
+      settledCount,
+      pendingCount
+    };
+  }, [customers, vendors]);
+
+  const exportFromPreview = async () => {
+    if (previewRows.length === 0) {
+      addNotification('Warning', 'No records to export.', 'warning');
+      return;
+    }
+
+    const arRows = previewRows.filter(r => r.kind === 'receivables');
+    const apRows = previewRows.filter(r => r.kind === 'payables');
+    const html = `
+      <div style="font-family: Inter, Arial, sans-serif; padding: 20px;">
+        <h1 style="margin:0 0 8px 0;">Financial Accounts Preview</h1>
+        <p style="margin:0 0 16px 0; color:#666;">Generated on ${new Date().toLocaleString()}</p>
+        <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px;">
+          <div style="border:1px solid #eee; border-radius:10px; padding:10px;"><div style="font-size:11px; color:#666;">Total Receivables</div><div style="font-weight:700;">${fmt(previewSummary.arPending)}</div></div>
+          <div style="border:1px solid #eee; border-radius:10px; padding:10px;"><div style="font-size:11px; color:#666;">Total Payables</div><div style="font-weight:700;">${fmt(previewSummary.apPending)}</div></div>
+          <div style="border:1px solid #eee; border-radius:10px; padding:10px;"><div style="font-size:11px; color:#666;">Net Outstanding</div><div style="font-weight:700;">${fmt(previewSummary.netOutstanding)}</div></div>
+        </div>
+        <h3 style="margin: 12px 0;">Accounts Receivable</h3>
+        <table style="width:100%; border-collapse:collapse; margin-bottom:12px;">
+          <thead><tr style="background:#f7f7f7;"><th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Name</th><th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Phone</th><th style="text-align:right;padding:8px;border-bottom:1px solid #ddd;">Remaining</th><th style="text-align:right;padding:8px;border-bottom:1px solid #ddd;">Status</th></tr></thead>
+          <tbody>${arRows.map(r => `<tr><td style="padding:8px;border-bottom:1px solid #eee;">${r.name}</td><td style="padding:8px;border-bottom:1px solid #eee;">${r.phone || '-'}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">${fmt(r.remaining)}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">${r.status.toUpperCase()}</td></tr>`).join('')}</tbody>
+        </table>
+        <h3 style="margin: 12px 0;">Accounts Payable</h3>
+        <table style="width:100%; border-collapse:collapse;">
+          <thead><tr style="background:#f7f7f7;"><th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Name</th><th style="text-align:left;padding:8px;border-bottom:1px solid #ddd;">Phone</th><th style="text-align:right;padding:8px;border-bottom:1px solid #ddd;">Remaining</th><th style="text-align:right;padding:8px;border-bottom:1px solid #ddd;">Status</th></tr></thead>
+          <tbody>${apRows.map(r => `<tr><td style="padding:8px;border-bottom:1px solid #eee;">${r.name}</td><td style="padding:8px;border-bottom:1px solid #eee;">${r.phone || '-'}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">${fmt(r.remaining)}</td><td style="padding:8px;border-bottom:1px solid #eee;text-align:right;">${r.status.toUpperCase()}</td></tr>`).join('')}</tbody>
         </table>
       </div>
     `;
@@ -128,6 +215,20 @@ export default function Loans() {
       } else {
         addNotification('Error', res.error, 'error');
       }
+    } catch (e: any) {
+      addNotification('Error', e.message, 'error');
+    }
+  };
+
+  const printPreview = async () => {
+    if (previewRows.length === 0) {
+      addNotification('Warning', 'No records to print.', 'warning');
+      return;
+    }
+    const html = buildLedgerPdfHtml('Financial Accounts Preview', previewRows as any, previewSummary.netOutstanding);
+    try {
+      const res = await window.api.printInvoice(html);
+      if (!res.success) addNotification('Error', res.error || 'Print failed', 'error');
     } catch (e: any) {
       addNotification('Error', e.message, 'error');
     }
@@ -270,9 +371,9 @@ export default function Loans() {
           <p className="text-muted-foreground text-sm mt-1">Manage accounts payable and receivable ledgers</p>
         </div>
 
-        <Button onClick={printBalanceSheet} variant="outline" className="gap-2 shadow-sm border-primary/20 hover:bg-primary/5">
+        <Button onClick={() => { setPreviewPage(1); setShowPdfPreviewModal(true); }} variant="outline" className="gap-2 shadow-sm border-primary/20 hover:bg-primary/5">
           <FileText size={16} className="text-primary" />
-          Export {activeTab === 'receivables' ? 'AR' : 'AP'} Ledger (PDF)
+          Save as PDF
         </Button>
       </div>
 
@@ -414,6 +515,108 @@ export default function Loans() {
           )}
         </CardContent>
       </Card>
+
+      {showPdfPreviewModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center p-2 sm:p-3 bg-background/80 backdrop-blur-sm animate-in fade-in" onClick={() => setShowPdfPreviewModal(false)}>
+          <Card className="w-[92vw] xl:w-[1020px] h-[72vh] shadow-2xl border-border/50 animate-in zoom-in-95 duration-200 flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <CardHeader className="border-b bg-muted/20 pb-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-xl font-bold">Accounts PDF Preview</CardTitle>
+                  <CardDescription>Professional AR/AP preview before export</CardDescription>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setShowPdfPreviewModal(false)}><X size={16} /></Button>
+              </div>
+            </CardHeader>
+            <CardContent className="p-5 space-y-4 overflow-y-auto flex-1">
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                <div className="rounded-xl border bg-rose-50/50 p-3 transition-all hover:-translate-y-0.5 hover:shadow-sm"><p className="text-[10px] uppercase text-muted-foreground">Total Receivables</p><p className="text-lg font-black text-rose-600">{fmt(previewSummary.arPending)}</p></div>
+                <div className="rounded-xl border bg-amber-50/50 p-3 transition-all hover:-translate-y-0.5 hover:shadow-sm"><p className="text-[10px] uppercase text-muted-foreground">Total Payables</p><p className="text-lg font-black text-amber-600">{fmt(previewSummary.apPending)}</p></div>
+                <div className="rounded-xl border bg-blue-50/50 p-3 transition-all hover:-translate-y-0.5 hover:shadow-sm"><p className="text-[10px] uppercase text-muted-foreground">Net Outstanding</p><p className="text-lg font-black text-blue-600">{fmt(previewSummary.netOutstanding)}</p></div>
+                <div className="rounded-xl border bg-emerald-50/50 p-3 transition-all hover:-translate-y-0.5 hover:shadow-sm"><p className="text-[10px] uppercase text-muted-foreground">Fully Settled</p><p className="text-lg font-black text-emerald-600">{previewSummary.settledCount}</p></div>
+                <div className="rounded-xl border bg-orange-50/50 p-3 transition-all hover:-translate-y-0.5 hover:shadow-sm"><p className="text-[10px] uppercase text-muted-foreground">Pending Accounts</p><p className="text-lg font-black text-orange-600">{previewSummary.pendingCount}</p></div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                <Input placeholder="Search customer/vendor or amount..." value={previewSearch} onChange={(e) => { setPreviewSearch(e.target.value); setPreviewPage(1); }} className="h-10" />
+                <select className="h-10 rounded-md border bg-background px-2 text-sm transition-colors hover:border-primary/40 focus:border-primary/60" value={previewTab} onChange={(e) => { setPreviewTab(e.target.value as any); setPreviewPage(1); }}>
+                  <option value="all">All Accounts</option>
+                  <option value="receivables">Receivables</option>
+                  <option value="payables">Payables</option>
+                </select>
+                <select className="h-10 rounded-md border bg-background px-2 text-sm transition-colors hover:border-primary/40 focus:border-primary/60" value={previewStatus} onChange={(e) => { setPreviewStatus(e.target.value as any); setPreviewPage(1); }}>
+                  <option value="all">All Status</option>
+                  <option value="settled">Settled</option>
+                  <option value="pending">Pending</option>
+                  <option value="partial">Partial</option>
+                  <option value="cancelled">Cancelled</option>
+                  <option value="returned">Returned</option>
+                </select>
+                <div className="text-xs text-muted-foreground flex items-center justify-end">{previewRows.length} records</div>
+              </div>
+
+              <div className="border rounded-xl overflow-hidden">
+                <div className="max-h-[56vh] overflow-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/40 border-b sticky top-0">
+                      <tr>
+                        <th className="text-left py-3 px-3">Name</th>
+                        <th className="text-left py-3 px-3">Type</th>
+                        <th className="text-right py-3 px-3">Invoice Count</th>
+                        <th className="text-right py-3 px-3">Total Amount</th>
+                        <th className="text-right py-3 px-3">Paid</th>
+                        <th className="text-right py-3 px-3">Remaining</th>
+                        <th className="text-left py-3 px-3">Status</th>
+                        <th className="text-left py-3 px-3">Last Activity</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewVisibleRows.length === 0 ? (
+                        <tr><td colSpan={8} className="text-center py-10 text-muted-foreground">No records found.</td></tr>
+                      ) : previewVisibleRows.map((r) => (
+                        <tr key={`${r.kind}-${r.id}`} className="border-b transition-colors hover:bg-muted/30">
+                          <td className="py-2.5 px-3 font-semibold">{r.name}</td>
+                          <td className="py-2.5 px-3 text-xs text-muted-foreground">{r.kind === 'receivables' ? 'Receivable' : 'Payable'}</td>
+                          <td className="py-2.5 px-3 text-right">{r.invoiceCount}</td>
+                          <td className="py-2.5 px-3 text-right">{fmt(r.totalAmount)}</td>
+                          <td className="py-2.5 px-3 text-right">{fmt(r.paidAmount)}</td>
+                          <td className="py-2.5 px-3 text-right font-bold">{fmt(r.remaining)}</td>
+                          <td className="py-2.5 px-3">
+                            <span className={cn(
+                              "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase",
+                              r.status === 'settled' ? "bg-emerald-100 text-emerald-700" :
+                              r.status === 'pending' ? "bg-amber-100 text-amber-700" :
+                              r.status === 'partial' ? "bg-orange-100 text-orange-700" :
+                              r.status === 'cancelled' ? "bg-rose-100 text-rose-700" :
+                              "bg-violet-100 text-violet-700"
+                            )}>
+                              {r.status}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-xs text-muted-foreground">{r.lastActivityDate}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex items-center justify-between p-2 border-t bg-muted/5">
+                  <span className="text-xs text-muted-foreground">Page {Math.min(previewPage, previewTotalPages)} of {previewTotalPages}</span>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" disabled={previewPage <= 1} onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}>Prev</Button>
+                    <Button size="sm" variant="outline" disabled={previewPage >= previewTotalPages} onClick={() => setPreviewPage((p) => Math.min(previewTotalPages, p + 1))}>Next</Button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="sticky bottom-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/70 border-t -mx-5 px-5 py-3 flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setPreviewPage(1)} className="hover:scale-[1.01] transition-transform">Preview</Button>
+                <Button variant="outline" className="gap-2" onClick={printPreview}><Printer size={14} /> Print</Button>
+                <Button className="gap-2" onClick={exportFromPreview}><Download size={14} /> Generate PDF</Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

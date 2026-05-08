@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Search, Users, Pencil, Trash2, Phone, MessageCircle, DollarSign,
   ArrowRight, History, ShoppingBag, CreditCard, X, Receipt, Eye,
@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter }
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { cn } from '../lib/utils';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { useNotifications } from '../components/NotificationProvider';
@@ -101,11 +102,26 @@ export default function Customers() {
   const [returnQuantities, setReturnQuantities] = useState<Record<number, string>>({});
   const [returnReason, setReturnReason] = useState('');
   const [isSubmittingReturn, setIsSubmittingReturn] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState('');
+  const [historyDateFilter, setHistoryDateFilter] = useState<'today' | 'this_week' | 'this_month' | 'last_month' | 'this_year' | 'custom'>('this_month');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<'all' | 'Settled' | 'Pending' | 'Cancelled' | 'Returned'>('all');
+  const [historyTypeFilter, setHistoryTypeFilter] = useState<'all' | 'Sales' | 'Payments' | 'Returns' | 'Deleted Payments' | 'Cancelled Bills'>('all');
+  const [historyFrom, setHistoryFrom] = useState('');
+  const [historyTo, setHistoryTo] = useState('');
+  const [historyPage, setHistoryPage] = useState(1);
+  const [expandedInvoiceIds, setExpandedInvoiceIds] = useState<Record<number, boolean>>({});
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { addNotification } = useNotifications();
   const navigate = useNavigate();
 
-  useEffect(() => { loadCustomers(); }, []);
+  useEffect(() => {
+    loadCustomers();
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, []);
 
   const loadCustomers = async () => {
     try {
@@ -218,9 +234,10 @@ export default function Customers() {
   };
 
   const handleSearch = (v: string) => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     setIsSearching(true);
     setSearchTerm(v);
-    setTimeout(() => setIsSearching(false), 200);
+    searchTimerRef.current = setTimeout(() => setIsSearching(false), 200);
   };
 
   const filteredCustomers = useMemo(() => customers.filter((c) =>
@@ -449,6 +466,143 @@ export default function Customers() {
 
   const visibleHistory = historyLogs.slice(0, historyVisible);
   const hasMoreHistory = historyVisible < historyLogs.length;
+  const actionHistory = useMemo(() => (customerDetails?.history || []) as any[], [customerDetails]);
+  const advancedHistoryRows = useMemo(() => {
+    if (!customerDetails) return [];
+    const sales = (customerDetails.sales || []).map((s: any) => ({
+      rowKind: 'SALE',
+      id: `sale-${s.id}`,
+      date: s.date_created,
+      invoiceId: s.id,
+      itemsText: (s.items || []).map((i: any) => i.product_name).join(', '),
+      itemsCount: (s.items || []).length,
+      total: Number(s.total) || 0,
+      paid: Number(s.amountPaid) || 0,
+      returned: Number(s.amountReturned) || 0,
+      remaining: Math.max(0, Number(s.remaining) || 0),
+      status: s.status === 'Cancelled' ? 'Cancelled' : (Number(s.amountReturned) || 0) > 0 ? 'Returned' : Math.max(0, Number(s.remaining) || 0) <= 0.5 ? 'Settled' : 'Pending',
+      notes: s.notes || '',
+      ref: `SI-${s.id}`,
+      raw: s
+    }));
+    const payments = (customerDetails.payments || []).map((p: any) => ({
+      rowKind: 'PAYMENT',
+      id: `payment-${p.id}`,
+      date: p.date_added || p.date_created,
+      invoiceId: p.sale_id || null,
+      itemsText: '',
+      itemsCount: 0,
+      total: 0,
+      paid: Number(p.amount) || 0,
+      returned: 0,
+      remaining: 0,
+      status: 'Settled',
+      notes: p.notes || '',
+      ref: `CP-${p.id}`,
+      raw: p
+    }));
+    const returns = (customerDetails.returns || []).map((r: any) => ({
+      rowKind: 'RETURN',
+      id: `return-${r.id}`,
+      date: r.date_created || r.date_returned,
+      invoiceId: r.sale_id || null,
+      itemsText: '',
+      itemsCount: 0,
+      total: 0,
+      paid: 0,
+      returned: Number(r.total_returned) || 0,
+      remaining: 0,
+      status: 'Returned',
+      notes: r.reason || r.notes || '',
+      ref: `SR-${r.id}`,
+      raw: r
+    }));
+    const history = (actionHistory || []).map((h: any) => ({
+      rowKind: h.type === 'PAYMENT_DELETED' ? 'DELETED_PAYMENT' : h.type === 'SALE_CANCELLED' ? 'CANCELLED_BILL' : 'HISTORY',
+      id: `history-${h.id}`,
+      date: h.date,
+      invoiceId: h.relatedId || null,
+      itemsText: '',
+      itemsCount: 0,
+      total: 0,
+      paid: h.type?.includes('PAYMENT') ? Number(h.amount) || 0 : 0,
+      returned: h.type?.includes('RETURN') ? Number(h.amount) || 0 : 0,
+      remaining: 0,
+      status: h.status === 'DELETED' ? 'Cancelled' : h.status === 'CANCELLED' ? 'Cancelled' : 'Settled',
+      notes: h.notes || h.type || '',
+      ref: `${h.relatedType || 'H'}-${h.relatedId || h.id}`,
+      raw: h
+    }));
+    return [...sales, ...payments, ...returns, ...history]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [customerDetails, actionHistory]);
+
+  const filteredAdvancedHistory = useMemo(() => {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(startOfDay);
+    startOfWeek.setDate(startOfDay.getDate() - startOfDay.getDay());
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+    const startOfYear = new Date(now.getFullYear(), 0, 1);
+
+    const inDateRange = (d: Date) => {
+      if (historyDateFilter === 'today') return d >= startOfDay;
+      if (historyDateFilter === 'this_week') return d >= startOfWeek;
+      if (historyDateFilter === 'this_month') return d >= startOfMonth;
+      if (historyDateFilter === 'last_month') return d >= startOfLastMonth && d <= endOfLastMonth;
+      if (historyDateFilter === 'this_year') return d >= startOfYear;
+      if (historyDateFilter === 'custom') {
+        const from = historyFrom ? new Date(`${historyFrom}T00:00:00`) : null;
+        const to = historyTo ? new Date(`${historyTo}T23:59:59`) : null;
+        if (from && d < from) return false;
+        if (to && d > to) return false;
+      }
+      return true;
+    };
+
+    const query = historyQuery.trim().toLowerCase();
+    return advancedHistoryRows.filter((row: any) => {
+      const d = new Date(row.date);
+      if (Number.isNaN(d.getTime()) || !inDateRange(d)) return false;
+      if (historyStatusFilter !== 'all' && row.status !== historyStatusFilter) return false;
+      if (historyTypeFilter !== 'all') {
+        if (historyTypeFilter === 'Sales' && row.rowKind !== 'SALE') return false;
+        if (historyTypeFilter === 'Payments' && row.rowKind !== 'PAYMENT') return false;
+        if (historyTypeFilter === 'Returns' && row.rowKind !== 'RETURN') return false;
+        if (historyTypeFilter === 'Deleted Payments' && row.rowKind !== 'DELETED_PAYMENT') return false;
+        if (historyTypeFilter === 'Cancelled Bills' && row.rowKind !== 'CANCELLED_BILL') return false;
+      }
+      if (!query) return true;
+      const pool = [
+        row.ref,
+        row.invoiceId ? String(row.invoiceId) : '',
+        row.itemsText || '',
+        row.notes || '',
+        String(row.total || ''),
+        String(row.paid || ''),
+        String(row.returned || '')
+      ].join(' ').toLowerCase();
+      return pool.includes(query);
+    });
+  }, [advancedHistoryRows, historyDateFilter, historyFrom, historyTo, historyStatusFilter, historyTypeFilter, historyQuery]);
+
+  const HISTORY_PAGE_SIZE = 20;
+  const historyTotalPages = Math.max(1, Math.ceil(filteredAdvancedHistory.length / HISTORY_PAGE_SIZE));
+  const pagedAdvancedHistory = useMemo(() => {
+    const safePage = Math.min(historyPage, historyTotalPages);
+    const start = (safePage - 1) * HISTORY_PAGE_SIZE;
+    return filteredAdvancedHistory.slice(start, start + HISTORY_PAGE_SIZE);
+  }, [filteredAdvancedHistory, historyPage, historyTotalPages]);
+
+  const statusBadgeClass = (status: string) => {
+    if (status === 'Settled') return 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100';
+    if (status === 'Pending') return 'bg-amber-100 text-amber-700 hover:bg-amber-100';
+    if (status === 'Cancelled') return 'bg-rose-100 text-rose-700 hover:bg-rose-100';
+    if (status === 'Returned') return 'bg-violet-100 text-violet-700 hover:bg-violet-100';
+    return 'bg-slate-100 text-slate-700 hover:bg-slate-100';
+  };
 
   return (
     <div className="h-full flex gap-6">
@@ -458,9 +612,9 @@ export default function Customers() {
           <div className="flex justify-between items-center mb-4">
             <div>
               <CardTitle className="text-3xl font-black tracking-tight flex items-center gap-2">
-                <Users className="text-primary" size={28} /> Customers & Credit
+                <Users className="text-primary" size={28} /> Customers
               </CardTitle>
-              <CardDescription className="text-sm mt-1">Manage customers, loans (Qaraz), and payments</CardDescription>
+              <CardDescription className="text-sm mt-1">Manage customers and payments</CardDescription>
             </div>
             <Button onClick={() => { setCurrent({ name: '', phone: '', email: '', address: '' }); setIsEditing(false); setShowDialog(true); }} className="gap-2 shadow-md">
               <Plus size={18} /> New Customer
@@ -542,26 +696,70 @@ export default function Customers() {
                     <span className="text-lg font-bold text-amber-600">{fmtPKR(customerDetails.totalReturned || 0)}</span>
                   </div>
                   <div className="col-span-2 mt-2 pt-4 border-t border-dashed flex items-center justify-between bg-muted/5 -mx-5 px-5 py-3">
-                    <span className="text-sm font-black uppercase text-muted-foreground">Remaining Balance</span>
-                    <span className={`text-2xl font-black ${customerDetails.balance > 0 ? 'text-destructive' : 'text-emerald-600'}`}>
-                      {fmtPKR(Math.max(0, customerDetails.balance || 0))}
-                    </span>
+                    <span className="text-sm font-black uppercase text-muted-foreground">Net Balance Owed (Qaraz)</span>
+                    {(customerDetails.balance || 0) > 0 ? (
+                      <span className="text-2xl font-black text-destructive">
+                        {fmtPKR(Math.max(0, customerDetails.balance || 0))}
+                      </span>
+                    ) : (
+                      <span className="text-sm font-black text-emerald-600">PKR 0 - Fully Settled</span>
+                    )}
                   </div>
+                </div>
+                <div className="p-5 border-b bg-muted/10">
+                  <Button
+                    className="w-full gap-2"
+                    onClick={() => setHistoryModalOpen(true)}
+                  >
+                    <History size={16} />
+                    Open Advanced History
+                    <Badge variant="secondary" className="ml-auto text-[10px]">{filteredAdvancedHistory.length} records</Badge>
+                  </Button>
                 </div>
 
 
                 {/* Combined Transaction History */}
                 <div className="p-5">
-                  <h4 className="text-sm font-bold mb-4 flex items-center gap-2 text-primary">
-                    <History size={16} /> Transaction History
-                    <Badge variant="secondary" className="ml-auto text-[10px]">{historyLogs.length} entries</Badge>
-                  </h4>
+                  <Tabs defaultValue="tx-history">
+                    <TabsList className="w-full grid grid-cols-2 mb-4">
+                      <TabsTrigger value="activity-log">History</TabsTrigger>
+                      <TabsTrigger value="tx-history">Transaction History</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="activity-log">
+                      <h4 className="text-sm font-bold mb-4 flex items-center gap-2 text-primary">
+                        <History size={16} /> History
+                        <Badge variant="secondary" className="ml-auto text-[10px]">{actionHistory.length} entries</Badge>
+                      </h4>
+                      {actionHistory.length === 0 ? (
+                        <div className="text-sm text-muted-foreground py-4 text-center border border-dashed rounded-xl">No history available yet.</div>
+                      ) : (
+                        <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                          {actionHistory.map((h: any) => (
+                            <div key={`ch-${h.id}`} className="rounded-lg border bg-card p-2.5 text-xs">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-bold">{h.type}</span>
+                                <span className="text-muted-foreground">{new Date(h.date).toLocaleString()}</span>
+                              </div>
+                              <div className="mt-1 text-muted-foreground">
+                                Amount: {fmtPKR(h.amount || 0)} | Related: {h.relatedType || '-'} #{h.relatedId || '-'} | Status: {h.status || 'COMPLETED'}
+                              </div>
+                              {h.notes ? <div className="mt-1">{h.notes}</div> : null}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </TabsContent>
+                    <TabsContent value="tx-history">
+                      <h4 className="text-sm font-bold mb-4 flex items-center gap-2 text-primary">
+                        <History size={16} /> Transaction History
+                        <Badge variant="secondary" className="ml-auto text-[10px]">{historyLogs.length} entries</Badge>
+                      </h4>
 
-                  <div className="flex flex-col gap-4">
-                    {historyLogs.length === 0 ? (
-                      <div className="text-sm text-muted-foreground py-8 text-center border border-dashed rounded-xl bg-muted/5">No activity found.</div>
-                    ) : (
-                      visibleHistory.map((item: any, idx: number) => {
+                      <div className="flex flex-col gap-4">
+                        {historyLogs.length === 0 ? (
+                          <div className="text-sm text-muted-foreground py-8 text-center border border-dashed rounded-xl bg-muted/5">No activity found.</div>
+                        ) : (
+                          visibleHistory.map((item: any, idx: number) => {
                         if (item.type === 'SALE') {
                           const s = item;
                           return (
@@ -698,20 +896,149 @@ export default function Customers() {
                           );
                         }
                         return null;
-                      })
-                    )}
-                  </div>
+                          })
+                        )}
+                      </div>
 
-                  {hasMoreHistory && (
-                    <Button variant="ghost" onClick={() => setHistoryVisible(v => v + HISTORY_PAGE)} className="w-full text-xs text-primary mt-4 border border-dashed rounded-xl h-10">
-                      <ChevronDown size={14} className="mr-1" /> Load more entries ({historyVisible} of {historyLogs.length})
-                    </Button>
-                  )}
+                      {hasMoreHistory && (
+                        <Button variant="ghost" onClick={() => setHistoryVisible(v => v + HISTORY_PAGE)} className="w-full text-xs text-primary mt-4 border border-dashed rounded-xl h-10">
+                          <ChevronDown size={14} className="mr-1" /> Load more entries ({historyVisible} of {historyLogs.length})
+                        </Button>
+                      )}
+                    </TabsContent>
+                  </Tabs>
                 </div>
               </div>
             )}
           </CardContent>
         </Card>
+      )}
+
+      {historyModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in" onClick={() => setHistoryModalOpen(false)}>
+          <Card className="w-full max-w-6xl shadow-2xl animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+            <CardHeader className="border-b pb-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle className="text-lg flex items-center gap-2"><History size={18} className="text-primary" /> Advanced History</CardTitle>
+                  <CardDescription>Monthly-first filters, search, and expandable invoice rows.</CardDescription>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setHistoryModalOpen(false)}><X size={16} /></Button>
+              </div>
+            </CardHeader>
+            <CardContent className="p-4">
+              <Tabs defaultValue="overview">
+                <TabsList className="w-full grid grid-cols-5 mb-3">
+                  <TabsTrigger value="overview">Overview</TabsTrigger>
+                  <TabsTrigger value="sales">Sales</TabsTrigger>
+                  <TabsTrigger value="payments">Payments</TabsTrigger>
+                  <TabsTrigger value="returns">Returns</TabsTrigger>
+                  <TabsTrigger value="timeline">Timeline</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="overview" className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <Input value={historyQuery} onChange={(e) => { setHistoryQuery(e.target.value); setHistoryPage(1); }} placeholder="Search invoice #, product, notes, amount, reference..." />
+                    <div className="grid grid-cols-2 gap-2">
+                      <select className="h-10 rounded-md border bg-background px-2 text-sm" value={historyDateFilter} onChange={(e) => { setHistoryDateFilter(e.target.value as any); setHistoryPage(1); }}>
+                        <option value="today">Today</option>
+                        <option value="this_week">This Week</option>
+                        <option value="this_month">This Month</option>
+                        <option value="last_month">Last Month</option>
+                        <option value="this_year">This Year</option>
+                        <option value="custom">Custom Range</option>
+                      </select>
+                      <select className="h-10 rounded-md border bg-background px-2 text-sm" value={historyStatusFilter} onChange={(e) => { setHistoryStatusFilter(e.target.value as any); setHistoryPage(1); }}>
+                        <option value="all">All Statuses</option>
+                        <option value="Settled">Settled</option>
+                        <option value="Pending">Pending</option>
+                        <option value="Cancelled">Cancelled</option>
+                        <option value="Returned">Returned</option>
+                      </select>
+                    </div>
+                  </div>
+                  {historyDateFilter === 'custom' && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input type="date" value={historyFrom} onChange={(e) => { setHistoryFrom(e.target.value); setHistoryPage(1); }} />
+                      <Input type="date" value={historyTo} onChange={(e) => { setHistoryTo(e.target.value); setHistoryPage(1); }} />
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                    {(['all', 'Sales', 'Payments', 'Returns', 'Deleted Payments', 'Cancelled Bills'] as const).map((t) => (
+                      <Button key={t} variant={historyTypeFilter === t ? 'default' : 'outline'} size="sm" className="text-xs" onClick={() => { setHistoryTypeFilter(t); setHistoryPage(1); }}>
+                        {t}
+                      </Button>
+                    ))}
+                  </div>
+
+                  <div className="border rounded-xl overflow-hidden">
+                    <div className="max-h-[60vh] overflow-auto">
+                      <Table>
+                        <TableHeader className="sticky top-0 bg-card z-10">
+                          <TableRow>
+                            <TableHead>Date</TableHead>
+                            <TableHead>Invoice #</TableHead>
+                            <TableHead>Items</TableHead>
+                            <TableHead className="text-right">Total</TableHead>
+                            <TableHead className="text-right">Paid</TableHead>
+                            <TableHead className="text-right">Returned</TableHead>
+                            <TableHead className="text-right">Remaining</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Type</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {pagedAdvancedHistory.length === 0 ? (
+                            <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-8">No records found for selected filters.</TableCell></TableRow>
+                          ) : pagedAdvancedHistory.map((row: any) => (
+                            <React.Fragment key={row.id}>
+                              <TableRow className={row.rowKind === 'SALE' ? 'cursor-pointer hover:bg-muted/40' : ''} onClick={() => {
+                                if (row.rowKind !== 'SALE') return;
+                                setExpandedInvoiceIds((prev) => ({ ...prev, [row.invoiceId]: !prev[row.invoiceId] }));
+                              }}>
+                                <TableCell className="text-xs whitespace-nowrap">{new Date(row.date).toLocaleString()}</TableCell>
+                                <TableCell className="font-semibold">{row.invoiceId ? `#${row.invoiceId}` : '-'}</TableCell>
+                                <TableCell className="max-w-[220px] truncate">{row.itemsCount || '-'}</TableCell>
+                                <TableCell className="text-right">{fmtPKR(row.total || 0)}</TableCell>
+                                <TableCell className="text-right text-emerald-700">{fmtPKR(row.paid || 0)}</TableCell>
+                                <TableCell className="text-right text-amber-700">{fmtPKR(row.returned || 0)}</TableCell>
+                                <TableCell className="text-right">{fmtPKR(Math.max(0, row.remaining || 0))}</TableCell>
+                                <TableCell><Badge className={cn('text-[10px] border-none', statusBadgeClass(row.status))}>{row.status}</Badge></TableCell>
+                                <TableCell className="text-xs text-muted-foreground">{row.rowKind.replace('_', ' ')}</TableCell>
+                              </TableRow>
+                              {row.rowKind === 'SALE' && expandedInvoiceIds[row.invoiceId] && (
+                                <TableRow>
+                                  <TableCell colSpan={9} className="bg-muted/20">
+                                    <div className="text-xs space-y-1">
+                                      <div><span className="font-bold">Products:</span> {(row.raw.items || []).map((i: any) => `${i.product_name} x${i.quantity}`).join(', ') || 'No items'}</div>
+                                      <div><span className="font-bold">Payment History:</span> {(row.raw.linkedPayments || []).map((p: any) => `${fmtPKR(p.amount)} (${new Date(p.date_added || p.date_created).toLocaleDateString()})`).join(', ') || 'None'}</div>
+                                      <div><span className="font-bold">Returns:</span> {(row.raw.linkedReturns || []).map((r: any) => `${fmtPKR(r.total_returned)} (${new Date(r.date_created).toLocaleDateString()})`).join(', ') || 'None'}</div>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              )}
+                            </React.Fragment>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div className="flex items-center justify-between p-2 border-t bg-muted/5">
+                      <span className="text-xs text-muted-foreground">Page {Math.min(historyPage, historyTotalPages)} of {historyTotalPages}</span>
+                      <div className="flex gap-2">
+                        <Button size="sm" variant="outline" disabled={historyPage <= 1} onClick={() => setHistoryPage((p) => Math.max(1, p - 1))}>Prev</Button>
+                        <Button size="sm" variant="outline" disabled={historyPage >= historyTotalPages} onClick={() => setHistoryPage((p) => Math.min(historyTotalPages, p + 1))}>Next</Button>
+                      </div>
+                    </div>
+                  </div>
+                </TabsContent>
+                <TabsContent value="sales" className="text-xs text-muted-foreground">Use Overview with Type filter set to Sales for full table and search.</TabsContent>
+                <TabsContent value="payments" className="text-xs text-muted-foreground">Use Overview with Type filter set to Payments or Deleted Payments.</TabsContent>
+                <TabsContent value="returns" className="text-xs text-muted-foreground">Use Overview with Type filter set to Returns.</TabsContent>
+                <TabsContent value="timeline" className="text-xs text-muted-foreground">The existing timeline in details remains available.</TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {/* ─── Sale Detail Modal ─── */}

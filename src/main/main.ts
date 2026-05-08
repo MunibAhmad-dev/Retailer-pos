@@ -45,6 +45,39 @@ const getLocalSqliteDate = (isoString?: string) => {
   return local.toISOString().replace('T', ' ').substring(0, 19);
 };
 
+const logEntityHistory = (
+  database: Database.Database,
+  entry: {
+    entityType: 'vendor' | 'customer';
+    entityId: number;
+    historyType: string;
+    amount?: number;
+    relatedRecordId?: number | null;
+    relatedRecordType?: string | null;
+    notes?: string;
+    actionStatus?: string;
+  }
+) => {
+  try {
+    database.prepare(`
+      INSERT INTO entity_history (
+        entity_type, entity_id, history_type, amount, related_record_id, related_record_type, notes, action_status, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', 'localtime'))
+    `).run(
+      entry.entityType,
+      entry.entityId,
+      entry.historyType,
+      Number(entry.amount) || 0,
+      entry.relatedRecordId ?? null,
+      entry.relatedRecordType ?? null,
+      entry.notes || '',
+      entry.actionStatus || 'COMPLETED'
+    );
+  } catch (error: any) {
+    logger.warn('Failed to write entity history:', error?.message || error);
+  }
+};
+
 // Global Crash Handlers to prevent complete app shutdown
 process.on('uncaughtException', (err) => {
   logger.error('FATAL UNCAUGHT EXCEPTION:', err);
@@ -620,6 +653,7 @@ function initializeDatabase() {
     db.pragma('journal_mode = WAL'); // Write-Ahead Logging for better concurrency
     db.pragma('synchronous = NORMAL'); // Good balance between safety and performance
     db.pragma('foreign_keys = ON');
+    db.pragma('busy_timeout = 5000');
     db.pragma('cache_size = -64000'); // 64MB cache
     db.pragma('temp_store = MEMORY');
 
@@ -692,7 +726,7 @@ function initializeDatabase() {
     db.exec(`
       CREATE TABLE IF NOT EXISTS settings (
         id INTEGER PRIMARY KEY DEFAULT 1,
-        store_name TEXT DEFAULT 'My Restaurant',
+        store_name TEXT DEFAULT 'Retailer Shop',
         store_phone TEXT DEFAULT '',
         store_address TEXT DEFAULT '',
         store_logo TEXT DEFAULT '',
@@ -884,6 +918,19 @@ function initializeDatabase() {
         date_added DATETIME DEFAULT (datetime('now', 'localtime')),
         notes TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS entity_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type TEXT NOT NULL,
+        entity_id INTEGER NOT NULL,
+        history_type TEXT NOT NULL,
+        amount REAL DEFAULT 0,
+        related_record_id INTEGER,
+        related_record_type TEXT,
+        notes TEXT,
+        action_status TEXT DEFAULT 'COMPLETED',
+        created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+      );
       
       -- Create indexes for better query performance
       CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
@@ -894,6 +941,12 @@ function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_sale_items_product ON sale_items(product_id);
       CREATE INDEX IF NOT EXISTS idx_customers_name ON customers(name);
       CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
+      CREATE INDEX IF NOT EXISTS idx_entity_history_entity ON entity_history(entity_type, entity_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_customer_payments_date ON customer_payments(date_added);
+      CREATE INDEX IF NOT EXISTS idx_vendor_payments_date ON vendor_payments(date_created);
+      CREATE INDEX IF NOT EXISTS idx_purchase_returns_date ON purchase_returns(date_created);
+      CREATE INDEX IF NOT EXISTS idx_sale_returns_date ON sale_returns(date_created);
+      CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(date_created);
     `);
 
     // Run migrations
@@ -926,18 +979,33 @@ function createWindow() {
       preload: preloadPath,
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
     },
     show: false,
   });
 
   mainWindow.webContents.on('did-finish-load', () => {
     console.log('Window loaded');
-    mainWindow?.webContents.executeJavaScript(`
-      console.log('API available:', !!window.api);
-      if (window.api) {
-        console.log('API methods:', Object.keys(window.api));
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      const u = new URL(url);
+      if (u.protocol === 'https:' || u.protocol === 'http:') {
+        shell.openExternal(url);
       }
-    `);
+    } catch {
+      logger.warn('Blocked invalid external URL');
+    }
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!mainWindow) return;
+    const current = mainWindow.webContents.getURL();
+    if (url !== current) {
+      event.preventDefault();
+    }
   });
 
   mainWindow.setMenuBarVisibility(false);
@@ -1329,7 +1397,7 @@ ipcMain.handle('update-settings', async (_, settings: any) => {
     `);
 
     stmt.run(
-      settings.store_name || 'My Restaurant',
+      settings.store_name || 'Retailer Shop',
       settings.store_phone || '',
       settings.store_address || '',
       settings.store_logo || '',
@@ -1624,12 +1692,12 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
 
     // Helper functions
     const sumSince = (since: string) => {
-      const result = db!.prepare("SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE date_created >= ? AND (status = 'Completed' OR status = 'Paid' OR status = 'Partial')").get(since) as any;
+      const result = db!.prepare("SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE date_created >= ? AND LOWER(COALESCE(status, '')) IN ('completed', 'paid', 'partial')").get(since) as any;
       return result.total;
     };
 
     const countSince = (since: string) => {
-      const result = db!.prepare("SELECT COUNT(*) as count FROM sales WHERE date_created >= ? AND (status = 'Completed' OR status = 'Paid' OR status = 'Partial')").get(since) as any;
+      const result = db!.prepare("SELECT COUNT(*) as count FROM sales WHERE date_created >= ? AND LOWER(COALESCE(status, '')) IN ('completed', 'paid', 'partial')").get(since) as any;
       return result.count;
     };
 
@@ -1643,8 +1711,8 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
       periodParams = [sqlStart];
     }
 
-    const filteredRevenue = (db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE (status = 'Completed' OR status = 'Paid' OR status = 'Partial') ${periodQuery}`).get(...periodParams) as any).total;
-    const filteredCount = (db.prepare(`SELECT COUNT(*) as count FROM sales WHERE (status = 'Completed' OR status = 'Paid' OR status = 'Partial') ${periodQuery}`).get(...periodParams) as any).count;
+    const filteredRevenue = (db.prepare(`SELECT COALESCE(SUM(total), 0) as total FROM sales WHERE LOWER(COALESCE(status, '')) IN ('completed', 'paid', 'partial') ${periodQuery}`).get(...periodParams) as any).total;
+    const filteredCount = (db.prepare(`SELECT COUNT(*) as count FROM sales WHERE LOWER(COALESCE(status, '')) IN ('completed', 'paid', 'partial') ${periodQuery}`).get(...periodParams) as any).count;
 
     let periodQueryS = periodQuery ? periodQuery.replace(/date_created/g, 's.date_created') : '';
 
@@ -1652,7 +1720,7 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
       SELECT COALESCE(SUM(si.quantity * (si.price - si.purchase_price)), 0) as profit
       FROM sale_items si
       INNER JOIN sales s ON si.sale_id = s.id
-      WHERE (s.status = 'Completed' OR s.status = 'Paid' OR s.status = 'Partial') ${periodQueryS}
+      WHERE LOWER(COALESCE(s.status, '')) IN ('completed', 'paid', 'partial') ${periodQueryS}
     `).get(...periodParams) as any).profit;
 
     const stats = {
@@ -1674,7 +1742,7 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
           COUNT(DISTINCT si.sale_id) as times_sold
         FROM sale_items si
         INNER JOIN sales s ON si.sale_id = s.id
-        WHERE (s.status = 'Completed' OR s.status = 'Paid' OR s.status = 'Partial') ${periodQueryS}
+        WHERE LOWER(COALESCE(s.status, '')) IN ('completed', 'paid', 'partial') ${periodQueryS}
         GROUP BY si.product_name
         ORDER BY qty_sold DESC
         LIMIT 5
@@ -1694,7 +1762,7 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
           SUM(total) as revenue,
           COUNT(*) as count
         FROM sales
-        WHERE (status = 'Completed' OR status = 'Paid' OR status = 'Partial') ${periodQuery}
+        WHERE LOWER(COALESCE(status, '')) IN ('completed', 'paid', 'partial') ${periodQuery}
         GROUP BY payment_method
       `).all(...periodParams),
       // ---- Inventory Analytics (Global Snapshot) ----
@@ -1774,7 +1842,7 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
       salesTrend: db.prepare(`
         SELECT date(date_created) as date, SUM(CAST(total AS REAL)) as revenue
         FROM sales
-        WHERE LOWER(status) = 'completed' AND date_created >= date('now', '-30 days')
+        WHERE LOWER(COALESCE(status, '')) IN ('completed', 'paid', 'partial') AND date_created >= date('now', '-30 days')
         GROUP BY date(date_created)
         ORDER BY date ASC
       `).all(),
@@ -2146,6 +2214,12 @@ function buildReceiptPdfHtml(content: string): string {
 ipcMain.handle('print-invoice', async (_, htmlContent: string) => {
   try {
     if (!mainWindow) throw new Error('No main window available');
+    if (typeof htmlContent !== 'string' || htmlContent.length === 0) {
+      throw new Error('Invalid print payload');
+    }
+    if (htmlContent.length > 500_000) {
+      throw new Error('Print payload too large');
+    }
 
     const printWindow = await loadHtmlWindow(buildReceiptHtml(htmlContent), 272);
 
@@ -2184,6 +2258,12 @@ ipcMain.handle('print-invoice', async (_, htmlContent: string) => {
 // â”€â”€ Save receipt as A4 PDF â”€â”€
 ipcMain.handle('save-invoice-pdf', async (_, htmlContent: string) => {
   try {
+    if (typeof htmlContent !== 'string' || htmlContent.length === 0) {
+      throw new Error('Invalid PDF payload');
+    }
+    if (htmlContent.length > 500_000) {
+      throw new Error('PDF payload too large');
+    }
     const { filePath, canceled } = await dialog.showSaveDialog({
       title: 'Save Receipt as PDF',
       defaultPath: `receipt-${Date.now()}.pdf`,
@@ -2259,7 +2339,7 @@ ipcMain.handle('delete-all-data', async () => {
     db.prepare('DELETE FROM products').run();
 
     // Reset Settings dynamically without dropping so the app doesn't crash
-    db.prepare("UPDATE settings SET store_name = 'My Restaurant', store_phone = '', store_address = '', store_logo = '', receipt_footer = 'Thank you for visiting!', pos_password = '1234' WHERE id = 1").run();
+    db.prepare("UPDATE settings SET store_name = 'Retailer Shop', store_phone = '', store_address = '', store_logo = '', receipt_footer = 'Thank you for visiting!', pos_password = '1234' WHERE id = 1").run();
 
     db.prepare('DELETE FROM sqlite_sequence').run(); // Reset AI counters
     db.prepare('PRAGMA foreign_keys = ON').run();
@@ -2363,24 +2443,25 @@ ipcMain.handle('seed-database', async () => {
 ipcMain.handle('export-data', async () => {
   try {
     if (!db) throw new Error('Database not initialized');
+    const tableRows = db.prepare(`
+      SELECT name
+      FROM sqlite_master
+      WHERE type = 'table'
+        AND name NOT LIKE 'sqlite_%'
+    `).all() as Array<{ name: string }>;
+
+    const tables: Record<string, any[]> = {};
+    for (const t of tableRows) {
+      const tableName = t.name;
+      tables[tableName] = db.prepare(`SELECT * FROM "${tableName}"`).all();
+    }
+
+    // Keep top-level table keys for backward compatibility with existing UI.
     const data = {
-      settings: db.prepare('SELECT * FROM settings').all(),
-      products: db.prepare('SELECT * FROM products').all(),
-      customers: db.prepare('SELECT * FROM customers').all(),
-      sales: db.prepare('SELECT * FROM sales').all(),
-      sale_items: db.prepare('SELECT * FROM sale_items').all(),
-      vendors: db.prepare('SELECT * FROM vendors').all(),
-      purchases: db.prepare('SELECT * FROM purchases').all(),
-      inventory_batches: db.prepare('SELECT * FROM inventory_batches').all(),
-      customer_payments: db.prepare('SELECT * FROM customer_payments').all(),
-      expenses: db.prepare('SELECT * FROM expenses').all(),
-      registers: db.prepare('SELECT * FROM registers').all(),
-      sale_returns: db.prepare('SELECT * FROM sale_returns').all(),
-      sale_return_items: db.prepare('SELECT * FROM sale_return_items').all(),
-      purchase_returns: db.prepare('SELECT * FROM purchase_returns').all(),
-      purchase_return_items: db.prepare('SELECT * FROM purchase_return_items').all(),
-      vendor_payments: db.prepare('SELECT * FROM vendor_payments').all(),
-      financial_transactions: db.prepare('SELECT * FROM financial_transactions').all(),
+      __format: 'pos_full_backup_v2',
+      exportedAt: new Date().toISOString(),
+      tables,
+      ...tables
     };
     logger.info('Data exported successfully');
     return { success: true, data };
@@ -2393,8 +2474,17 @@ ipcMain.handle('export-data', async () => {
 ipcMain.handle('import-data', async (_, data: any) => {
   try {
     if (!db) throw new Error('Database not initialized');
-    if (!data || !data.settings || !data.products || !data.customers || !data.sales || !data.sale_items) {
+    if (!data || typeof data !== 'object') {
       throw new Error('Invalid or corrupted import data format');
+    }
+
+    const importTables: Record<string, any[]> =
+      data.tables && typeof data.tables === 'object'
+        ? data.tables
+        : data;
+
+    if (!importTables || Object.keys(importTables).length === 0) {
+      throw new Error('No table data found in backup payload');
     }
 
     // Attempt backup before import
@@ -2409,105 +2499,95 @@ ipcMain.handle('import-data', async (_, data: any) => {
     db.transaction(() => {
       db!.prepare('PRAGMA foreign_keys = OFF').run();
 
-      // Clear existing
-      db!.prepare('DELETE FROM inventory_batches').run();
-      db!.prepare('DELETE FROM purchases').run();
-      db!.prepare('DELETE FROM vendors').run();
-      db!.prepare('DELETE FROM customer_payments').run();
-      db!.prepare('DELETE FROM expenses').run();
-      db!.prepare('DELETE FROM sale_items').run();
-      db!.prepare('DELETE FROM sales').run();
-      db!.prepare('DELETE FROM customers').run();
-      db!.prepare('DELETE FROM products').run();
-      db!.prepare('DELETE FROM settings').run();
-      db!.prepare('DELETE FROM registers').run();
-      db!.prepare('DELETE FROM sale_returns').run();
-      db!.prepare('DELETE FROM sale_return_items').run();
-      db!.prepare('DELETE FROM purchase_returns').run();
-      db!.prepare('DELETE FROM purchase_return_items').run();
-      db!.prepare('DELETE FROM vendor_payments').run();
-      db!.prepare('DELETE FROM financial_transactions').run();
+      const existingTableRows = db!.prepare(`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name NOT LIKE 'sqlite_%'
+      `).all() as Array<{ name: string }>;
+      const existingTables = new Set(existingTableRows.map((r) => r.name));
 
-      const now = new Date().toISOString();
-
-      // Insert Settings
-      const insertSetting = db!.prepare('INSERT OR REPLACE INTO settings (id, store_name, store_phone, store_address, store_logo, receipt_footer, pos_password) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      for (const s of data.settings) {
-        insertSetting.run(s.id, s.store_name, s.store_phone, s.store_address, s.store_logo, s.receipt_footer, s.pos_password);
+      // Clear existing data
+      for (const t of existingTableRows) {
+        db!.prepare(`DELETE FROM "${t.name}"`).run();
       }
 
-      // Insert Products
-      const insertProduct = db!.prepare('INSERT OR REPLACE INTO products (id, name, price, category, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)');
-      for (const p of data.products) {
-        insertProduct.run(p.id, p.name, p.price, p.category, p.created_at || now, p.updated_at || now);
+      const preferredOrder = [
+        'settings',
+        'products',
+        'customers',
+        'vendors',
+        'sales',
+        'sale_items',
+        'purchases',
+        'inventory_batches',
+        'customer_payments',
+        'vendor_payments',
+        'sale_returns',
+        'sale_return_items',
+        'purchase_returns',
+        'purchase_return_items',
+        'expenses',
+        'registers',
+        'financial_transactions',
+        'entity_history'
+      ];
+
+      const inputTableNames = Object.keys(importTables).filter((k) => existingTables.has(k) && Array.isArray(importTables[k]));
+      const orderedTables = [
+        ...preferredOrder.filter((k) => inputTableNames.includes(k)),
+        ...inputTableNames.filter((k) => !preferredOrder.includes(k)).sort()
+      ];
+
+      for (const tableName of orderedTables) {
+        const rows = importTables[tableName];
+        if (!Array.isArray(rows) || rows.length === 0) continue;
+
+        const cols = (db!.prepare(`PRAGMA table_info("${tableName}")`).all() as any[]).map((c) => c.name);
+        if (cols.length === 0) continue;
+        const colSet = new Set(cols);
+
+        for (const rawRow of rows) {
+          if (!rawRow || typeof rawRow !== 'object') continue;
+          const keys = Object.keys(rawRow).filter((k) => colSet.has(k));
+          if (keys.length === 0) continue;
+
+          const placeholders = keys.map(() => '?').join(',');
+          const sql = `INSERT OR REPLACE INTO "${tableName}" (${keys.map((k) => `"${k}"`).join(',')}) VALUES (${placeholders})`;
+          db!.prepare(sql).run(...keys.map((k) => (rawRow as any)[k]));
+        }
       }
 
-      // Insert Customers
-      const insertCustomer = db!.prepare('INSERT OR REPLACE INTO customers (id, name, phone, email, address, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      for (const c of data.customers) {
-        insertCustomer.run(c.id, c.name, c.phone, c.email, c.address, c.created_at || now, c.updated_at || now);
+      // Keep product stock consistent with restored batches when batch rows exist.
+      if (existingTables.has('inventory_batches') && existingTables.has('products')) {
+        db!.prepare(`
+          UPDATE products
+          SET stock = COALESCE((
+            SELECT SUM(CAST(quantity_remaining AS REAL))
+            FROM inventory_batches b
+            WHERE b.product_id = products.id
+          ), stock)
+          WHERE id IN (
+            SELECT DISTINCT product_id
+            FROM inventory_batches
+            WHERE product_id IS NOT NULL
+          )
+        `).run();
       }
 
-      // Insert Sales
-      const insertSale = db!.prepare('INSERT OR REPLACE INTO sales (id, customer_id, total, discount, tax, subtotal, date_created, payment_method, payment_status, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-      for (const s of data.sales) {
-        insertSale.run(s.id, s.customer_id, s.total, s.discount || 0, s.tax || 0, s.subtotal || s.total, s.date_created || now, s.payment_method, s.payment_status, s.status || 'Completed', s.notes);
-      }
-
-      // Insert Sale Items
-      const insertSaleItem = db!.prepare('INSERT OR REPLACE INTO sale_items (id, sale_id, product_id, product_name, quantity, price, purchase_price, is_custom, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-      for (const si of data.sale_items) {
-        insertSaleItem.run(si.id, si.sale_id, si.product_id, si.product_name, si.quantity, si.price, si.purchase_price || 0, si.is_custom, si.created_at || now);
-      }
-
-      // POS Expansion Tables
-      if (data.vendors) {
-        const insertVendor = db!.prepare('INSERT OR REPLACE INTO vendors (id, name, phone, address, created_at) VALUES (?, ?, ?, ?, ?)');
-        for (const v of data.vendors) insertVendor.run(v.id, v.name, v.phone, v.address, v.created_at || now);
-      }
-      if (data.purchases) {
-        const insertPurchase = db!.prepare('INSERT OR REPLACE INTO purchases (id, vendor_id, total, date_created) VALUES (?, ?, ?, ?)');
-        for (const p of data.purchases) insertPurchase.run(p.id, p.vendor_id, p.total, p.date_created || now);
-      }
-      if (data.inventory_batches) {
-        const insertBatch = db!.prepare('INSERT OR REPLACE INTO inventory_batches (id, product_id, vendor_id, purchase_id, quantity_added, quantity_remaining, purchase_price, date_added) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-        for (const b of data.inventory_batches) insertBatch.run(b.id, b.product_id, b.vendor_id, b.purchase_id, b.quantity_added, b.quantity_remaining, b.purchase_price, b.date_added || now);
-      }
-      if (data.customer_payments) {
-        const insertCP = db!.prepare('INSERT OR REPLACE INTO customer_payments (id, customer_id, amount, notes, date_added) VALUES (?, ?, ?, ?, ?)');
-        for (const cp of data.customer_payments) insertCP.run(cp.id, cp.customer_id, cp.amount, cp.notes, cp.date_added || now);
-      }
-      if (data.expenses) {
-        const insertExpense = db!.prepare('INSERT OR REPLACE INTO expenses (id, title, category, amount, date_added, notes) VALUES (?, ?, ?, ?, ?, ?)');
-        for (const e of data.expenses) insertExpense.run(e.id, e.title, e.category, e.amount, e.date_added || now, e.notes);
-      }
-      if (data.registers) {
-        const insertReg = db!.prepare('INSERT OR REPLACE INTO registers (id, opening_balance, opened_at, opened_by, actual_cash, closed_at, closed_by, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-        for (const r of data.registers) insertReg.run(r.id, r.opening_balance, r.opened_at, r.opened_by, r.actual_cash, r.closed_at, r.closed_by, r.status, r.notes);
-      }
-      if (data.sale_returns) {
-        const insertSR = db!.prepare('INSERT OR REPLACE INTO sale_returns (id, sale_id, total_returned, date_created, reason, notes) VALUES (?, ?, ?, ?, ?, ?)');
-        for (const sr of data.sale_returns) insertSR.run(sr.id, sr.sale_id, sr.total_returned, sr.date_created || now, sr.reason, sr.notes);
-      }
-      if (data.sale_return_items) {
-        const insertSRI = db!.prepare('INSERT OR REPLACE INTO sale_return_items (id, return_id, product_id, product_name, quantity, price) VALUES (?, ?, ?, ?, ?, ?)');
-        for (const sri of data.sale_return_items) insertSRI.run(sri.id, sri.return_id, sri.product_id, sri.product_name, sri.quantity, sri.price);
-      }
-      if (data.purchase_returns) {
-        const insertPR = db!.prepare('INSERT OR REPLACE INTO purchase_returns (id, purchase_id, total_returned, date_created, reason, notes) VALUES (?, ?, ?, ?, ?, ?)');
-        for (const pr of data.purchase_returns) insertPR.run(pr.id, pr.purchase_id, pr.total_returned, pr.date_created || now, pr.reason, pr.notes);
-      }
-      if (data.purchase_return_items) {
-        const insertPRI = db!.prepare('INSERT OR REPLACE INTO purchase_return_items (id, return_id, product_id, product_name, quantity, price) VALUES (?, ?, ?, ?, ?, ?)');
-        for (const pri of data.purchase_return_items) insertPRI.run(pri.id, pri.return_id, pri.product_id, pri.product_name, pri.quantity, pri.price);
-      }
-      if (data.vendor_payments) {
-        const insertVP = db!.prepare('INSERT OR REPLACE INTO vendor_payments (id, vendor_id, amount, date_created, notes) VALUES (?, ?, ?, ?, ?)');
-        for (const vp of data.vendor_payments) insertVP.run(vp.id, vp.vendor_id, vp.amount, vp.date_created || now, vp.notes);
-      }
-      if (data.financial_transactions) {
-        const insertFT = db!.prepare('INSERT OR REPLACE INTO financial_transactions (id, type, amount, date_created, notes) VALUES (?, ?, ?, ?, ?)');
-        for (const ft of data.financial_transactions) insertFT.run(ft.id, ft.type, ft.amount, ft.date_created || now, ft.notes);
+      if (existingTables.has('settings')) {
+        db!.prepare(`INSERT OR IGNORE INTO settings (id) VALUES (1)`).run();
+        db!.prepare(`
+          UPDATE settings
+          SET
+            store_name = COALESCE(NULLIF(store_name, ''), 'Retailer Shop'),
+            store_phone = COALESCE(store_phone, ''),
+            store_address = COALESCE(store_address, ''),
+            store_logo = COALESCE(store_logo, ''),
+            receipt_footer = COALESCE(NULLIF(receipt_footer, ''), 'Thank you for visiting!'),
+            pos_password = COALESCE(NULLIF(pos_password, ''), '1234')
+          WHERE id = 1
+        `).run();
       }
 
       db!.prepare('PRAGMA foreign_keys = ON').run();
@@ -2562,6 +2642,12 @@ ipcMain.handle('get-vendor-details', async (_, vendorId: number) => {
       WHERE p.vendor_id = ?
       ORDER BY pr.date_created DESC
     `).all(vendorId);
+    const historyRows = db.prepare(`
+      SELECT *
+      FROM entity_history
+      WHERE entity_type = 'vendor' AND entity_id = ?
+      ORDER BY created_at DESC, id DESC
+    `).all(vendorId) as any[];
 
     const purchaseItemsAll = db.prepare(`
       SELECT ib.*, p.name as product_name
@@ -2594,12 +2680,20 @@ ipcMain.handle('get-vendor-details', async (_, vendorId: number) => {
     const totalPurchased = purchases.filter((p: any) => p.status !== 'Cancelled').reduce((acc: number, p: any) => acc + (Number(p.total) || 0), 0);
     const totalPaid = payments.reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
     const totalReturned = returns.reduce((acc: number, r: any) => acc + (Number(r.total_returned) || 0), 0);
+    const unpaidBalance = enhancedPurchases.reduce((acc: number, p: any) => {
+      return acc + Math.max(0, Number(p.remaining) || 0);
+    }, 0);
 
-    // Net Account Balance
-    const accountBalance = totalPurchased - totalPaid - totalReturned;
-
-    // Invoice-based Debt Balance (Sum of positive remaining on each invoice)
-    const unpaidInvoicesBalance = enhancedPurchases.reduce((acc: number, p: any) => acc + Math.max(0, p.remaining), 0);
+    const history = historyRows.map((h: any) => ({
+      id: h.id,
+      type: h.history_type,
+      amount: Number(h.amount) || 0,
+      relatedId: h.related_record_id,
+      relatedType: h.related_record_type,
+      notes: h.notes || '',
+      status: h.action_status || 'COMPLETED',
+      date: h.created_at
+    }));
 
     return {
       success: true,
@@ -2608,11 +2702,11 @@ ipcMain.handle('get-vendor-details', async (_, vendorId: number) => {
         purchases: enhancedPurchases,
         payments,
         returns,
+        history,
         totalPurchased,
         totalPaid,
         totalReturned,
-        balance: unpaidInvoicesBalance, // Use invoice-based as primary
-        accountBalance
+        balance: unpaidBalance
       }
     };
   } catch (error: any) {
@@ -2624,7 +2718,17 @@ ipcMain.handle('add-vendor-payment', async (_, data: { vendor_id: number; amount
   try {
     if (!db) throw new Error('Database not initialized');
     const stmt = db.prepare('INSERT INTO vendor_payments (vendor_id, amount, notes, purchase_id, date_created) VALUES (?, ?, ?, ?, datetime(\'now\', \'localtime\'))');
-    stmt.run(data.vendor_id, data.amount, data.notes || '', data.purchase_id || null);
+    const info = stmt.run(data.vendor_id, data.amount, data.notes || '', data.purchase_id || null);
+    logEntityHistory(db, {
+      entityType: 'vendor',
+      entityId: data.vendor_id,
+      historyType: 'PAYMENT_ADDED',
+      amount: data.amount,
+      relatedRecordId: Number(info.lastInsertRowid),
+      relatedRecordType: 'vendor_payment',
+      notes: data.notes || (data.purchase_id ? `Payment for purchase #${data.purchase_id}` : 'Manual payment recorded'),
+      actionStatus: 'COMPLETED'
+    });
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -2634,6 +2738,18 @@ ipcMain.handle('add-vendor-payment', async (_, data: { vendor_id: number; amount
 ipcMain.handle('delete-vendor-payment', async (_, paymentId: number) => {
   try {
     if (!db) throw new Error('Database not initialized');
+    const payment = db.prepare('SELECT * FROM vendor_payments WHERE id = ?').get(paymentId) as any;
+    if (!payment) throw new Error('Payment not found');
+    logEntityHistory(db, {
+      entityType: 'vendor',
+      entityId: payment.vendor_id,
+      historyType: 'PAYMENT_DELETED',
+      amount: payment.amount,
+      relatedRecordId: payment.id,
+      relatedRecordType: 'vendor_payment',
+      notes: payment.notes || 'Deleted by user',
+      actionStatus: 'DELETED'
+    });
     db.prepare('DELETE FROM vendor_payments WHERE id = ?').run(paymentId);
     return { success: true };
   } catch (error: any) {
@@ -2644,7 +2760,19 @@ ipcMain.handle('delete-vendor-payment', async (_, paymentId: number) => {
 ipcMain.handle('cancel-purchase', async (_, purchaseId: number) => {
   try {
     if (!db) throw new Error('Database not initialized');
+    const purchase = db.prepare('SELECT id, vendor_id FROM purchases WHERE id = ?').get(purchaseId) as any;
+    if (!purchase) throw new Error('Purchase not found');
     db.prepare("UPDATE purchases SET status = 'Cancelled' WHERE id = ?").run(purchaseId);
+    logEntityHistory(db, {
+      entityType: 'vendor',
+      entityId: purchase.vendor_id,
+      historyType: 'PURCHASE_CANCELLED',
+      amount: 0,
+      relatedRecordId: purchase.id,
+      relatedRecordType: 'purchase',
+      notes: `Purchase #${purchase.id} cancelled`,
+      actionStatus: 'CANCELLED'
+    });
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -2947,6 +3075,12 @@ ipcMain.handle('get-customer-details', async (_, customerId: number) => {
       WHERE s.customer_id = ?
       ORDER BY sr.date_created DESC
     `).all(customerId);
+    const historyRows = db.prepare(`
+      SELECT *
+      FROM entity_history
+      WHERE entity_type = 'customer' AND entity_id = ?
+      ORDER BY created_at DESC, id DESC
+    `).all(customerId) as any[];
 
     const saleItemsAll = db.prepare(`
       SELECT si.*, s.customer_id
@@ -2979,9 +3113,21 @@ ipcMain.handle('get-customer-details', async (_, customerId: number) => {
     const totalTaken = sales.filter((s: any) => s.status !== 'Cancelled').reduce((acc: number, s: any) => acc + (Number(s.total) || 0), 0);
     const totalPaid = payments.reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0);
     const totalReturned = returns.reduce((acc: number, r: any) => acc + (Number(r.total_returned) || 0), 0);
-    const balance = totalTaken - totalPaid - totalReturned;
+    const unpaidBalance = enhancedSales.reduce((acc: number, s: any) => {
+      return acc + Math.max(0, Number(s.remaining) || 0);
+    }, 0);
+    const history = historyRows.map((h: any) => ({
+      id: h.id,
+      type: h.history_type,
+      amount: Number(h.amount) || 0,
+      relatedId: h.related_record_id,
+      relatedType: h.related_record_type,
+      notes: h.notes || '',
+      status: h.action_status || 'COMPLETED',
+      date: h.created_at
+    }));
 
-    return { success: true, data: { customer, sales: enhancedSales, payments, returns, totalTaken, totalPaid, totalReturned, balance } };
+    return { success: true, data: { customer, sales: enhancedSales, payments, returns, history, totalTaken, totalPaid, totalReturned, balance: unpaidBalance } };
   } catch (error: any) {
     return { success: false, error: error.message };
   }
@@ -2991,7 +3137,17 @@ ipcMain.handle('add-customer-payment', async (_, data: { customer_id: number; am
   try {
     if (!db) throw new Error('Database not initialized');
     const stmt = db.prepare('INSERT INTO customer_payments (customer_id, amount, notes, sale_id, date_added) VALUES (?, ?, ?, ?, datetime(\'now\', \'localtime\'))');
-    stmt.run(data.customer_id, data.amount, data.notes || '', data.sale_id || null);
+    const info = stmt.run(data.customer_id, data.amount, data.notes || '', data.sale_id || null);
+    logEntityHistory(db, {
+      entityType: 'customer',
+      entityId: data.customer_id,
+      historyType: 'PAYMENT_ADDED',
+      amount: data.amount,
+      relatedRecordId: Number(info.lastInsertRowid),
+      relatedRecordType: 'customer_payment',
+      notes: data.notes || (data.sale_id ? `Payment for sale #${data.sale_id}` : 'Manual payment recorded'),
+      actionStatus: 'COMPLETED'
+    });
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3001,6 +3157,18 @@ ipcMain.handle('add-customer-payment', async (_, data: { customer_id: number; am
 ipcMain.handle('delete-customer-payment', async (_, paymentId: number) => {
   try {
     if (!db) throw new Error('Database not initialized');
+    const payment = db.prepare('SELECT * FROM customer_payments WHERE id = ?').get(paymentId) as any;
+    if (!payment) throw new Error('Payment not found');
+    logEntityHistory(db, {
+      entityType: 'customer',
+      entityId: payment.customer_id,
+      historyType: 'PAYMENT_DELETED',
+      amount: payment.amount,
+      relatedRecordId: payment.id,
+      relatedRecordType: 'customer_payment',
+      notes: payment.notes || 'Deleted by user',
+      actionStatus: 'DELETED'
+    });
     db.prepare('DELETE FROM customer_payments WHERE id = ?').run(paymentId);
     return { success: true };
   } catch (error: any) {
@@ -3011,7 +3179,19 @@ ipcMain.handle('delete-customer-payment', async (_, paymentId: number) => {
 ipcMain.handle('cancel-sale', async (_, saleId: number) => {
   try {
     if (!db) throw new Error('Database not initialized');
+    const sale = db.prepare('SELECT id, customer_id FROM sales WHERE id = ?').get(saleId) as any;
+    if (!sale) throw new Error('Sale not found');
     db.prepare("UPDATE sales SET status = 'Cancelled' WHERE id = ?").run(saleId);
+    logEntityHistory(db, {
+      entityType: 'customer',
+      entityId: sale.customer_id,
+      historyType: 'SALE_CANCELLED',
+      amount: 0,
+      relatedRecordId: sale.id,
+      relatedRecordType: 'sale',
+      notes: `Sale #${sale.id} cancelled`,
+      actionStatus: 'CANCELLED'
+    });
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3251,6 +3431,7 @@ ipcMain.handle('create-sale-return', async (_, data: { sale_id: number; items: a
       `);
       const info = retStmt.run(data.sale_id, data.total_returned, data.reason || 'General Return', data.notes || '');
       const returnId = info.lastInsertRowid;
+      const saleForHistory = db!.prepare("SELECT id, customer_id FROM sales WHERE id = ?").get(data.sale_id) as any;
 
       // 2. Update items and stock
       const itemStmt = db!.prepare(`
@@ -3292,6 +3473,19 @@ ipcMain.handle('create-sale-return', async (_, data: { sale_id: number; items: a
         INSERT INTO financial_transactions (type, category, amount, description, register_id, date_created)
         VALUES ('Income', 'Sales Return', ?, ?, ?, datetime('now', 'localtime'))
       `).run(-data.total_returned, `Return for Sale #${data.sale_id}${data.reason ? ': ' + data.reason : ''}`, sale?.register_id || null);
+
+      if (saleForHistory?.customer_id) {
+        logEntityHistory(db!, {
+          entityType: 'customer',
+          entityId: saleForHistory.customer_id,
+          historyType: 'SALE_RETURN',
+          amount: data.total_returned,
+          relatedRecordId: Number(returnId),
+          relatedRecordType: 'sale_return',
+          notes: data.reason || data.notes || `Return for sale #${data.sale_id}`,
+          actionStatus: 'COMPLETED'
+        });
+      }
 
       return returnId;
     });
@@ -3353,6 +3547,7 @@ ipcMain.handle('create-purchase-return', async (_, data: { purchase_id: number; 
       `);
       const info = retStmt.run(data.purchase_id, data.total_returned, data.reason || 'General Return', data.notes || '');
       const returnId = info.lastInsertRowid;
+      const purchaseForHistory = db!.prepare("SELECT id, vendor_id FROM purchases WHERE id = ?").get(data.purchase_id) as any;
 
       // 2. Update items and stock
       const itemStmt = db!.prepare(`
@@ -3393,6 +3588,19 @@ ipcMain.handle('create-purchase-return', async (_, data: { purchase_id: number; 
         INSERT INTO financial_transactions (type, category, amount, description, register_id, date_created)
         VALUES ('Income', 'Purchase Return', ?, ?, ?, datetime('now', 'localtime'))
       `).run(data.total_returned, `Return for Purchase #${data.purchase_id}${data.reason ? ': ' + data.reason : ''}`, purchase?.register_id || null);
+
+      if (purchaseForHistory?.vendor_id) {
+        logEntityHistory(db!, {
+          entityType: 'vendor',
+          entityId: purchaseForHistory.vendor_id,
+          historyType: 'PURCHASE_RETURN',
+          amount: data.total_returned,
+          relatedRecordId: Number(returnId),
+          relatedRecordType: 'purchase_return',
+          notes: data.reason || data.notes || `Return for purchase #${data.purchase_id}`,
+          actionStatus: 'COMPLETED'
+        });
+      }
 
       return returnId;
     });
@@ -3558,10 +3766,44 @@ ipcMain.handle('get-all-payments', async (_, opts: any = {}) => {
     if (!db) throw new Error('Database not initialized');
     const limit = opts.limit || 50;
     const offset = opts.offset || 0;
+    const search = String(opts.search || '').trim().toLowerCase();
+    const dateFilter = String(opts.dateFilter || 'all');
+    const startDate = opts.startDate ? getLocalSqliteDate(opts.startDate) : null;
+    const endDate = opts.endDate ? getLocalSqliteDate(opts.endDate) : null;
+
+    const whereParts: string[] = [];
+    const whereParams: any[] = [];
+
+    if (search) {
+      whereParts.push(`(
+        LOWER(COALESCE(type, '')) LIKE ? OR
+        LOWER(COALESCE(party_name, '')) LIKE ? OR
+        LOWER(COALESCE(notes, '')) LIKE ? OR
+        CAST(id AS TEXT) LIKE ? OR
+        CAST(amount AS TEXT) LIKE ?
+      )`);
+      const s = `%${search}%`;
+      whereParams.push(s, s, s, s, s);
+    }
+
+    if (dateFilter === 'today') {
+      whereParts.push(`date(date_added) = date('now', 'localtime')`);
+    } else if (dateFilter === 'custom') {
+      if (startDate) {
+        whereParts.push(`date_added >= ?`);
+        whereParams.push(startDate);
+      }
+      if (endDate) {
+        whereParts.push(`date_added <= ?`);
+        whereParams.push(endDate);
+      }
+    }
+
+    const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
     // Aggregate customer payments, vendor payments, and returns into a single audit ledger
     // We map types to match the frontend badges: 'Customer Payment', 'Vendor Payment', 'Sale Refund', 'Purchase Return'
-    const ledger = db.prepare(`
+    const ledgerBase = `
       SELECT 'Customer Payment' as type, cp.amount, COALESCE(cp.date_added, (datetime('now', 'localtime'))) as date_added, c.name as party_name, cp.notes, cp.id
       FROM customer_payments cp
       LEFT JOIN customers c ON cp.customer_id = c.id
@@ -3579,29 +3821,37 @@ ipcMain.handle('get-all-payments', async (_, opts: any = {}) => {
       FROM purchase_returns pr
       JOIN purchases p ON pr.purchase_id = p.id
       LEFT JOIN vendors v ON p.vendor_id = v.id
+    `;
+
+    const ledger = db.prepare(`
+      SELECT *
+      FROM (${ledgerBase}) l
+      ${whereSql}
       ORDER BY date_added DESC
       LIMIT ? OFFSET ?
-    `).all(limit, offset);
+    `).all(...whereParams, limit, offset);
 
-    // Calculate summary totals
+    // Calculate summary totals on filtered result-set for consistent UI
     const stats = db.prepare(`
       SELECT 
-        (SELECT COALESCE(SUM(amount), 0) FROM customer_payments) as total_received,
-        (SELECT COALESCE(SUM(total_returned), 0) FROM sale_returns) as total_returned,
-        (SELECT COALESCE(SUM(total_returned), 0) FROM purchase_returns) as total_purchase_returns,
-        (SELECT COALESCE(SUM(total), 0) FROM purchases) as total_purchases
-    `).get() as any;
+        COALESCE(SUM(CASE WHEN type IN ('Customer Payment', 'Purchase Return') THEN amount ELSE 0 END), 0) as total_incoming,
+        COALESCE(SUM(CASE WHEN type IN ('Vendor Payment', 'Sale Refund') THEN amount ELSE 0 END), 0) as total_outgoing
+      FROM (${ledgerBase}) l
+      ${whereSql}
+    `).get(...whereParams) as any;
 
     const total = db.prepare(`
-      SELECT (SELECT COUNT(*) FROM customer_payments) + (SELECT COUNT(*) FROM purchases) + (SELECT COUNT(*) FROM sale_returns) + (SELECT COUNT(*) FROM purchase_returns) as count
-    `).get() as any;
+      SELECT COUNT(*) as count
+      FROM (${ledgerBase}) l
+      ${whereSql}
+    `).get(...whereParams) as any;
 
     return {
       success: true,
       data: ledger,
       total: total.count,
-      totalIncoming: stats.total_received + stats.total_purchase_returns,
-      totalOutgoing: stats.total_purchases + stats.total_returned
+      totalIncoming: Number(stats.total_incoming) || 0,
+      totalOutgoing: Number(stats.total_outgoing) || 0
     };
   } catch (error: any) {
     logger.error('Failed to get all payments:', error);
@@ -3632,8 +3882,19 @@ ipcMain.handle('get-google-drive-status', async () => {
 
 ipcMain.handle('trigger-google-drive-backup', async () => {
   try {
-    const dbPath = path.join(app.getPath('userData'), 'pos.db');
-    return await backupService.triggerBackup(dbPath);
+    if (!db) throw new Error('Database not initialized');
+    const tempBackupPath = path.join(app.getPath('temp'), `pos_cloud_snapshot_${Date.now()}.db`);
+    try {
+      // Create a consistent SQLite snapshot (WAL-safe) before uploading.
+      await (db as any).backup(tempBackupPath);
+      return await backupService.triggerBackup(tempBackupPath);
+    } finally {
+      try {
+        if (fs.existsSync(tempBackupPath)) fs.unlinkSync(tempBackupPath);
+      } catch (cleanupErr) {
+        logger.warn('Failed to clean temp cloud snapshot:', cleanupErr);
+      }
+    }
   } catch (error: any) {
     return { success: false, message: error.message };
   }
@@ -3641,18 +3902,52 @@ ipcMain.handle('trigger-google-drive-backup', async () => {
 
 ipcMain.handle('get-available-backups', async () => {
   try {
-    return await restoreService.getAvailableBackups();
+    const backups = await restoreService.getAvailableBackups();
+    return { success: true, backups };
   } catch (error: any) {
     logger.error('Failed to get available backups:', error);
-    return [];
+    return { success: false, message: error.message };
   }
 });
 
 ipcMain.handle('restore-cloud-backup', async (event, fileId: string) => {
   try {
-    return await restoreService.restoreBackup(fileId, event);
+    if (!fileId || typeof fileId !== 'string') {
+      throw new Error('Invalid backup file id');
+    }
+
+    const tempPath = path.join(app.getPath('temp'), `restore_${Date.now()}.db`);
+    const dbPath = path.join(app.getPath('userData'), 'pos.db');
+    const bakPath = path.join(app.getPath('userData'), `pos_pre_restore_${Date.now()}.db.bak`);
+
+    event.sender.send('restore-progress', { status: 'downloading', progress: 0 });
+    await driveService.downloadFile(fileId, tempPath, (progress) => {
+      event.sender.send('restore-progress', { status: 'downloading', progress });
+    });
+
+    event.sender.send('restore-progress', { status: 'restoring', progress: 100 });
+
+    if (db) {
+      db.close();
+      db = null;
+    }
+
+    if (fs.existsSync(dbPath)) {
+      fs.copyFileSync(dbPath, bakPath);
+    }
+
+    fs.copyFileSync(tempPath, dbPath);
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+
+    await initializeDatabase();
+    return { success: true, message: 'Restore completed. App will now reload.' };
   } catch (error: any) {
     logger.error('Failed to restore cloud backup:', error);
+    try {
+      if (!db) await initializeDatabase();
+    } catch (e) {
+      logger.error('Failed to re-initialize DB after restore error:', e);
+    }
     return { success: false, message: error.message };
   }
 });
@@ -3735,6 +4030,16 @@ ipcMain.handle('select-db-file', async () => {
 
 ipcMain.handle('import-db', async (_, sourcePath: string) => {
   try {
+    if (typeof sourcePath !== 'string' || sourcePath.trim().length === 0) {
+      throw new Error('Invalid database path');
+    }
+    const resolvedSource = path.resolve(sourcePath);
+    if (path.extname(resolvedSource).toLowerCase() !== '.db') {
+      throw new Error('Only .db database files are allowed');
+    }
+    if (!fs.existsSync(resolvedSource)) {
+      throw new Error('Selected database file does not exist');
+    }
     const destPath = path.join(app.getPath('userData'), 'pos.db');
 
     // Backup existing
@@ -3748,7 +4053,14 @@ ipcMain.handle('import-db', async (_, sourcePath: string) => {
       db = null;
     }
 
-    fs.copyFileSync(sourcePath, destPath);
+    // Use SQLite backup API from source DB for safer restore semantics
+    // (applies pending WAL content when present and creates a consistent destination file).
+    const sourceDb = new Database(resolvedSource, { readonly: true, fileMustExist: true });
+    try {
+      await (sourceDb as any).backup(destPath);
+    } finally {
+      sourceDb.close();
+    }
 
     // Re-initialize
     await initializeDatabase();

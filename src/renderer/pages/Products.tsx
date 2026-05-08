@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, Pencil, Trash2, Search, Package, Tag, Layers, BarChart2, TrendingUp, TrendingDown, AlertCircle, X } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
@@ -39,11 +40,22 @@ export default function Products() {
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [vendors, setVendors] = useState<any[]>([]);
   const nameRef = useRef<HTMLInputElement>(null);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [displayCount, setDisplayCount] = useState(20);
   const { addNotification } = useNotifications();
 
-  useEffect(() => { load(); }, []);
-  useEffect(() => { if (showDialog) setTimeout(() => nameRef.current?.focus(), 100); }, [showDialog]);
+  useEffect(() => {
+    load();
+    return () => {
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    };
+  }, []);
+  useEffect(() => {
+    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+    if (showDialog) {
+      focusTimerRef.current = setTimeout(() => nameRef.current?.focus(), 100);
+    }
+  }, [showDialog]);
 
   const load = async () => {
     setIsLoading(true);
@@ -65,12 +77,13 @@ export default function Products() {
     } catch (e) {} /* silent */ 
   };
 
-  const filtered = products.filter(
+  const normalizedSearch = searchTerm.toLowerCase();
+  const filtered = useMemo(() => products.filter(
     (p) =>
-      p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.category || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      p.name.toLowerCase().includes(normalizedSearch) ||
+      (p.category || '').toLowerCase().includes(normalizedSearch) ||
       (p.barcode || '').includes(searchTerm)
-  );
+  ), [products, normalizedSearch, searchTerm]);
 
   const displayedProducts = filtered.slice(0, displayCount);
 
@@ -78,8 +91,8 @@ export default function Products() {
     setDisplayCount(20);
   }, [searchTerm]);
 
-  const categories = [...new Set(products.map((p) => p.category).filter(Boolean))];
-  const lowStockCount = products.filter((p) => (p.stock ?? 0) < 10).length;
+  const categories = useMemo(() => [...new Set(products.map((p) => p.category).filter(Boolean))], [products]);
+  const lowStockCount = useMemo(() => products.filter((p) => (p.stock ?? 0) < 10).length, [products]);
 
   const openAdd = () => { setCurrent({ ...empty }); setIsEditing(false); setShowDialog(true); };
   const openEdit = (p: Product) => { setCurrent({ ...p }); setIsEditing(true); setShowDialog(true); };
@@ -339,13 +352,13 @@ export default function Products() {
       </Card>
 
       {/* Add/Edit Dialog */}
-      {showDialog && (
+      {showDialog && createPortal((
         <div 
-          className="fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-8 bg-slate-900/15 dark:bg-black/40 overflow-y-auto animate-in fade-in duration-200" 
+          className="fixed inset-0 z-[999] flex items-start justify-center p-4 sm:p-8 bg-black/5 overflow-y-auto animate-in fade-in duration-200" 
           onClick={() => !isSaving && setShowDialog(false)}
         >
           <Card 
-            className="w-full max-w-lg my-auto shadow-xl border bg-card animate-in zoom-in-95 duration-200" 
+            className="relative z-[1000] w-full max-w-lg my-auto shadow-xl border bg-card animate-in zoom-in-95 duration-200" 
             onClick={(e) => e.stopPropagation()}
           >
             <form onSubmit={handleSubmit}>
@@ -618,7 +631,7 @@ export default function Products() {
             </form>
           </Card>
         </div>
-      )}
+      ), document.body)}
 
       {/* ===== Analytics Section ===== */}
       <div className="flex items-center justify-between mt-2">

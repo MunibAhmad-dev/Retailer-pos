@@ -80,7 +80,7 @@ export default function Layout({ children }: LayoutProps) {
     { path: '/expenses', icon: Receipt, label: t('expenses') },
     { path: '/register', icon: Wallet, label: 'Cash Register' },
     { path: '/register-history', icon: History, label: 'Register History' },
-    { path: '/financials', icon: Landmark, label: 'Financial Management' },
+    { path: '/more-features', icon: Landmark, label: 'More Features' },
     { path: '/settings', icon: Settings, label: t('settings') },
     { path: '/subscription', icon: Key, label: 'Subscription' },
     { path: '/about', icon: Info, label: 'About Software' }

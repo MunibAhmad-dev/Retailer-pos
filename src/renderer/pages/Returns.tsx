@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Undo2, Search, Filter, Calendar, ArrowRight, Package, User, Truck, RefreshCcw, MoreHorizontal, Eye, Printer, Plus, MessageCircle, X, Trash2 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -13,6 +13,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Label } from '../components/ui/label';
 
 const fmtPKR = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
+const getReturnDate = (ret: any) => ret?.date_created || ret?.date_returned || ret?.date_added || null;
+const formatReturnDate = (ret: any) => {
+  const d = getReturnDate(ret);
+  if (!d) return '-';
+  const dt = new Date(d);
+  return Number.isNaN(dt.getTime()) ? '-' : dt.toLocaleString();
+};
 
 export default function Returns() {
   const [saleReturns, setSaleReturns] = useState<any[]>([]);
@@ -38,8 +45,10 @@ export default function Returns() {
   const [returnQtys, setReturnQtys] = useState<Record<number, string>>({});
   const [returnReason, setReturnReason] = useState('Damaged / Defective');
   const [processingReturn, setProcessingReturn] = useState(false);
+  const isMountedRef = useRef(true);
 
   useEffect(() => {
+    isMountedRef.current = true;
     loadReturns(true);
     
     // Check for sale_id in URL
@@ -48,6 +57,9 @@ export default function Returns() {
     if (saleId) {
       handleInitiateReturn(Number(saleId));
     }
+    return () => {
+      isMountedRef.current = false;
+    };
   }, [location.search]);
 
   const handleInitiateReturn = async (saleId: number) => {
@@ -55,6 +67,7 @@ export default function Returns() {
     try {
       const res = await window.api.getSaleItems(saleId);
       if (res.success) {
+        if (!isMountedRef.current) return;
         setReturnSaleId(saleId);
         setSaleItems(res.data);
         const initialQtys: Record<number, string> = {};
@@ -69,7 +82,7 @@ export default function Returns() {
     } catch (err) {
       addNotification("Error", "Failed to fetch sale details", "error");
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) setLoading(false);
     }
   };
 
@@ -135,6 +148,7 @@ export default function Returns() {
       ]);
       
       if (salesRes.success) {
+        if (!isMountedRef.current) return;
         if (fresh) setSaleReturns(salesRes.data);
         else setSaleReturns(prev => [...prev, ...salesRes.data]);
         setSalesTotal(salesRes.total);
@@ -142,6 +156,7 @@ export default function Returns() {
       }
       
       if (purchaseRes.success) {
+        if (!isMountedRef.current) return;
         if (fresh) setPurchaseReturns(purchaseRes.data);
         else setPurchaseReturns(prev => [...prev, ...purchaseRes.data]);
         setPurchaseTotal(purchaseRes.total);
@@ -150,7 +165,7 @@ export default function Returns() {
     } catch (error) {
       addNotification("Error", "Failed to load returns history", "error");
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) setLoading(false);
     }
   };
 
@@ -201,7 +216,7 @@ export default function Returns() {
       <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; max-width: 400px; margin: auto; border: 1px solid #eee;">
         <div style="text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px;">
           <h2 style="margin: 0; text-transform: uppercase;">Return Receipt</h2>
-          <p style="margin: 5px 0; font-size: 12px; color: #666;">Date: ${new Date(ret.date_returned).toLocaleString()}</p>
+          <p style="margin: 5px 0; font-size: 12px; color: #666;">Date: ${formatReturnDate(ret)}</p>
         </div>
         
         <div style="margin-bottom: 20px;">
@@ -272,7 +287,7 @@ export default function Returns() {
       `*Return ID:* #${ret.id}\n` +
       `*${isSale ? 'Sale' : 'Purchase'} Ref:* #${refId}\n` +
       `*Party:* ${partyName || 'N/A'}\n` +
-      `*Date:* ${new Date(ret.date_returned).toLocaleString()}\n\n` +
+      `*Date:* ${formatReturnDate(ret)}\n\n` +
       `*Items Returned:*\n${itemsList}\n` +
       `*Total ${isSale ? 'Refund' : 'Returned Value'}:* PKR ${Math.round(amount).toLocaleString()}\n` +
       `*Reason:* ${ret.reason || 'No reason provided'}\n\n` +
@@ -281,17 +296,18 @@ export default function Returns() {
     window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
   };
 
-  const filteredSales = saleReturns.filter(r =>
-    r.customer_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    String(r.sale_id).includes(searchTerm) ||
-    String(r.id).includes(searchTerm)
-  );
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const filteredSales = useMemo(() => saleReturns.filter(r =>
+    (r.customer_name || '').toLowerCase().includes(normalizedSearch) ||
+    String(r.sale_id).includes(normalizedSearch) ||
+    String(r.id).includes(normalizedSearch)
+  ), [saleReturns, normalizedSearch]);
 
-  const filteredPurchases = purchaseReturns.filter(r =>
-    r.vendor_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    String(r.purchase_id).includes(searchTerm) ||
-    String(r.id).includes(searchTerm)
-  );
+  const filteredPurchases = useMemo(() => purchaseReturns.filter(r =>
+    (r.vendor_name || '').toLowerCase().includes(normalizedSearch) ||
+    String(r.purchase_id).includes(normalizedSearch) ||
+    String(r.id).includes(normalizedSearch)
+  ), [purchaseReturns, normalizedSearch]);
 
   return (
     <div className="flex flex-col gap-6 animate-in fade-in duration-500">
@@ -365,7 +381,7 @@ export default function Returns() {
                           </div>
                         </TableCell>
                         <TableCell className="text-muted-foreground text-xs italic">
-                          {new Date(ret.date_returned).toLocaleString()}
+                          {formatReturnDate(ret)}
                         </TableCell>
                         <TableCell className="max-w-[200px] truncate text-xs italic text-muted-foreground">
                           {ret.reason || 'No reason provided'}
@@ -436,7 +452,7 @@ export default function Returns() {
                           </div>
                         </TableCell>
                         <TableCell className="text-muted-foreground text-xs italic">
-                          {new Date(ret.date_returned).toLocaleString()}
+                          {formatReturnDate(ret)}
                         </TableCell>
                         <TableCell className="max-w-[200px] truncate text-xs italic text-muted-foreground">
                           {ret.reason || 'No reason provided'}
