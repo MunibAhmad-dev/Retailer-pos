@@ -104,8 +104,14 @@ declare global {
       getLogo: () => Promise<ApiResponse<string>>;
 
       // Activation
-      isActivated: () => Promise<ApiResponse<{ activated: boolean }>>;
-      activateApp: (data: { businessName: string, activationKey: string }) => Promise<ApiResponse<void>>;
+      isActivated: () => Promise<ApiResponse<{ activated: boolean }>>,
+      activateApp: (data: { businessName: string, activationKey: string }) => Promise<ApiResponse<void>>,
+      
+      // New Licensing System V2
+      getFingerprint: () => Promise<ApiResponse<string>>,
+      activateAppV2: (licenseKey: string) => Promise<ApiResponse<void>>,
+      generateLicenseKey: (data: any) => Promise<ApiResponse<string>>,
+      onToggleLicenseIssuer: (callback: () => void) => () => void,
     };
   }
 }

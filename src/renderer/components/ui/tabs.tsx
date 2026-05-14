@@ -1,5 +1,5 @@
 import * as React from "react"
-import { motion, AnimatePresence } from "framer-motion"
+import { motion } from "framer-motion"
 import { cn } from "../../lib/utils"
 
 interface TabsContextProps {
@@ -42,7 +42,7 @@ const Tabs = ({
 const TabsList = ({ className, children }: { className?: string, children: React.ReactNode }) => {
   return (
     <div className={cn(
-      "inline-flex h-10 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground shadow-inner",
+      "inline-flex h-11 items-center justify-center rounded-xl border border-border/70 bg-muted/70 p-1 text-muted-foreground",
       className
     )}>
       {children}
@@ -71,7 +71,7 @@ const TabsTrigger = ({ value, className, children }: { value: string, className?
       {isActive && (
         <motion.div
           layoutId="active-tab"
-          className="absolute inset-0 rounded-md bg-background shadow-sm"
+          className="absolute inset-0 rounded-lg bg-background shadow-sm"
           transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
         />
       )}

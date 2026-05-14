@@ -6,65 +6,65 @@
 
 @layer base {
   :root {
-    --background: 210 40% 98%; /* slate-50 equivalent */
-    --foreground: 222.2 84% 4.9%;
+    --background: 210 38% 97%;
+    --foreground: 222 40% 14%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 222 40% 14%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 222 40% 14%;
 
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 207 88% 44%;
+    --primary-foreground: 210 40% 99%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 210 24% 93%;
+    --secondary-foreground: 222 35% 20%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 210 26% 93%;
+    --muted-foreground: 215 16% 42%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 205 48% 92%;
+    --accent-foreground: 222 40% 16%;
 
-    --destructive: 0 84.2% 60.2%;
+    --destructive: 0 75% 52%;
     --destructive-foreground: 210 40% 98%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 221.2 83.2% 53.3%;
+    --border: 214 26% 86%;
+    --input: 214 26% 86%;
+    --ring: 207 88% 44%;
 
-    --radius: 0.75rem; /* xl */
+    --radius: 0.9rem;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
+    --background: 220 23% 11%;
+    --foreground: 210 24% 95%;
 
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
+    --card: 221 22% 15%;
+    --card-foreground: 210 24% 95%;
 
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 221 22% 16%;
+    --popover-foreground: 210 24% 95%;
 
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
+    --primary: 200 96% 60%;
+    --primary-foreground: 222 47% 12%;
 
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 218 16% 22%;
+    --secondary-foreground: 210 20% 92%;
 
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    --muted: 218 16% 21%;
+    --muted-foreground: 215 16% 71%;
 
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 215 22% 25%;
+    --accent-foreground: 210 20% 95%;
 
-    --destructive: 0 62.8% 30.6%;
+    --destructive: 0 62% 44%;
     --destructive-foreground: 210 40% 98%;
 
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
+    --border: 217 18% 27%;
+    --input: 217 18% 27%;
+    --ring: 200 96% 60%;
   }
 }
 
@@ -72,23 +72,42 @@
   * {
     @apply border-border;
   }
+
   body {
     @apply bg-background text-foreground;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-image: radial-gradient(circle at 0% 0%, hsl(var(--accent) / 0.32), transparent 38%),
+      radial-gradient(circle at 100% 100%, hsl(var(--primary) / 0.12), transparent 42%);
+    background-attachment: fixed;
   }
+
+  #root {
+    min-height: 100vh;
+  }
+
   .custom-scrollbar::-webkit-scrollbar {
     height: 8px;
     width: 8px;
   }
+
   .custom-scrollbar::-webkit-scrollbar-track {
     background: transparent;
   }
+
   .custom-scrollbar::-webkit-scrollbar-thumb {
     background: hsl(var(--muted-foreground) / 0.3);
     border-radius: 4px;
   }
+
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: hsl(var(--muted-foreground) / 0.5);
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.2);
   }
 }
 
@@ -98,8 +117,15 @@
 }
 
 @keyframes animateIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 html.dark body {
@@ -122,35 +148,47 @@ body.urdu-font * {
   line-height: 2 !important;
 }
 
-.urdu-font h1, .urdu-font h2, .urdu-font h3, .urdu-font h4 {
+.urdu-font h1,
+.urdu-font h2,
+.urdu-font h3,
+.urdu-font h4 {
   line-height: 2.5 !important;
 }
 
 @keyframes spin-slow {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .animate-spin-slow {
   animation: spin-slow 3s linear infinite;
 }
+
 @media print {
   body {
     background: white !important;
     padding: 0 !important;
     margin: 0 !important;
   }
-  
+
   .print\:hidden {
     display: none !important;
   }
-  
+
   .print\:block {
     display: block !important;
   }
 
   /* Hide everything except the main content during print */
-  nav, .sidebar, button:not(.print-visible), .no-print {
+  nav,
+  .sidebar,
+  button:not(.print-visible),
+  .no-print {
     display: none !important;
   }
 

@@ -223,7 +223,7 @@ export default function Transactions() {
 
   const handleReturnSubmit = async () => {
     if (!selectedSale) return;
-    
+
     const itemsToReturn = saleItems
       .filter(item => returnQuantities[item.id] > 0)
       .map(item => ({
@@ -239,7 +239,7 @@ export default function Transactions() {
     }
 
     const totalRefunded = itemsToReturn.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-    
+
     setIsSubmittingReturn(true);
     try {
       const res = await window.api.createSaleReturn({
@@ -382,11 +382,11 @@ export default function Transactions() {
                           <Button variant="ghost" size="icon" onClick={() => saveReceiptPdf(s)} className="h-8 w-8 text-green-500 hover:text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20" title="Download PDF">
                             <Download size={15} />
                           </Button>
-                          <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            onClick={() => openReturnModal(s)} 
-                            className="h-8 w-8 text-amber-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20" 
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openReturnModal(s)}
+                            className="h-8 w-8 text-amber-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20"
                             title="Return Items"
                             disabled={s.status === 'Returned'}
                           >
@@ -473,7 +473,7 @@ export default function Transactions() {
                           <TableCell className="text-center text-amber-600 font-bold">{item.quantity_returned || 0}</TableCell>
                           <TableCell className="text-right">{fmtPKR(item.price)}</TableCell>
                           <TableCell className="text-right">
-                            <Input 
+                            <Input
                               type="text"
                               className={cn(
                                 "h-8 text-right font-bold border-primary/20",
@@ -505,8 +505,8 @@ export default function Transactions() {
                 <label className="text-sm font-semibold flex items-center gap-2">
                   <AlertCircle size={14} className="text-amber-500" /> Reason for Return
                 </label>
-                <Input 
-                  placeholder="e.g. Damaged item, customer change of mind..." 
+                <Input
+                  placeholder="e.g. Damaged item, customer change of mind..."
                   className="bg-muted/20"
                   value={returnReason}
                   onChange={(e) => setReturnReason(e.target.value)}
@@ -522,8 +522,8 @@ export default function Transactions() {
                 </div>
                 <div className="flex gap-3 w-full sm:w-auto">
                   <Button variant="outline" className="flex-1 sm:flex-none" onClick={() => setReturnModalOpen(false)}>Cancel</Button>
-                  <Button 
-                    className="flex-1 sm:flex-none gap-2" 
+                  <Button
+                    className="flex-1 sm:flex-none gap-2"
                     onClick={handleReturnSubmit}
                     disabled={isSubmittingReturn || saleItems.reduce((sum, item) => sum + (returnQuantities[item.id] || 0), 0) === 0}
                   >

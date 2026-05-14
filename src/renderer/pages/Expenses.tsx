@@ -22,7 +22,7 @@ const fmtPKR = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
 export default function Expenses() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   const [showAdd, setShowAdd] = useState(false);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('');
@@ -32,7 +32,7 @@ export default function Expenses() {
 
   const { addNotification } = useNotifications();
 
-  useEffect(() => { 
+  useEffect(() => {
     load();
     checkRegister();
   }, []);
@@ -66,10 +66,10 @@ export default function Expenses() {
       const amt = parseFloat(amount);
       if (isNaN(amt) || amt <= 0) return;
 
-      const res = await window.api.addExpense({ 
-        title, 
-        category, 
-        amount: amt, 
+      const res = await window.api.addExpense({
+        title,
+        category,
+        amount: amt,
         notes,
         register_id: currentRegister?.id || null
       });
@@ -141,7 +141,7 @@ export default function Expenses() {
       {showAdd && (
         <Card className="border-red-500/30 shadow-md animate-in slide-in-from-top-4">
           <CardHeader className="bg-red-500/5 pb-4 border-b">
-            <CardTitle className="text-lg text-red-600 flex items-center gap-2"><DollarSign size={18}/> Log New Expense</CardTitle>
+            <CardTitle className="text-lg text-red-600 flex items-center gap-2"><DollarSign size={18} /> Log New Expense</CardTitle>
             <CardDescription>This will be deducted from your Gross Profit in the P&L report.</CardDescription>
           </CardHeader>
           <form onSubmit={handleAdd}>
@@ -190,9 +190,9 @@ export default function Expenses() {
             </TableHeader>
             <TableBody>
               {loading ? (
-                 <TableRow><TableCell colSpan={6} className="h-32 text-center text-muted-foreground animate-pulse">Loading expenses...</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} className="h-32 text-center text-muted-foreground animate-pulse">Loading expenses...</TableCell></TableRow>
               ) : expenses.length === 0 ? (
-                 <TableRow><TableCell colSpan={6} className="h-32 text-center text-muted-foreground">No expenses recorded yet.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} className="h-32 text-center text-muted-foreground">No expenses recorded yet.</TableCell></TableRow>
               ) : visibleExpenses.map(e => (
                 <TableRow key={e.id} className="hover:bg-muted/50">
                   <TableCell className="font-mono text-xs">{new Date(e.date_added).toLocaleDateString()}</TableCell>
@@ -201,9 +201,9 @@ export default function Expenses() {
                   <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">{e.notes || '—'}</TableCell>
                   <TableCell className="text-right pr-6 font-bold text-red-600">-{fmtPKR(e.amount)}</TableCell>
                   <TableCell>
-                     <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => handleDelete(e.id)}>
-                       <Trash2 size={14} />
-                     </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" onClick={() => handleDelete(e.id)}>
+                      <Trash2 size={14} />
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}

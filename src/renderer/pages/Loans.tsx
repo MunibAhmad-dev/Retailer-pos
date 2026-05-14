@@ -530,11 +530,26 @@ export default function Loans() {
             </CardHeader>
             <CardContent className="p-5 space-y-4 overflow-y-auto flex-1">
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-                <div className="rounded-xl border bg-rose-50/50 p-3 transition-all hover:-translate-y-0.5 hover:shadow-sm"><p className="text-[10px] uppercase text-muted-foreground">Total Receivables</p><p className="text-lg font-black text-rose-600">{fmt(previewSummary.arPending)}</p></div>
-                <div className="rounded-xl border bg-amber-50/50 p-3 transition-all hover:-translate-y-0.5 hover:shadow-sm"><p className="text-[10px] uppercase text-muted-foreground">Total Payables</p><p className="text-lg font-black text-amber-600">{fmt(previewSummary.apPending)}</p></div>
-                <div className="rounded-xl border bg-blue-50/50 p-3 transition-all hover:-translate-y-0.5 hover:shadow-sm"><p className="text-[10px] uppercase text-muted-foreground">Net Outstanding</p><p className="text-lg font-black text-blue-600">{fmt(previewSummary.netOutstanding)}</p></div>
-                <div className="rounded-xl border bg-emerald-50/50 p-3 transition-all hover:-translate-y-0.5 hover:shadow-sm"><p className="text-[10px] uppercase text-muted-foreground">Fully Settled</p><p className="text-lg font-black text-emerald-600">{previewSummary.settledCount}</p></div>
-                <div className="rounded-xl border bg-orange-50/50 p-3 transition-all hover:-translate-y-0.5 hover:shadow-sm"><p className="text-[10px] uppercase text-muted-foreground">Pending Accounts</p><p className="text-lg font-black text-orange-600">{previewSummary.pendingCount}</p></div>
+                <div className="rounded-xl border bg-rose-50/50 dark:bg-rose-950/20 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-rose-200/50 dark:border-rose-900/50">
+                  <p className="text-[10px] uppercase text-muted-foreground font-black tracking-widest mb-1">Receivables</p>
+                  <p className="text-xl font-black text-rose-600 dark:text-rose-400">{fmt(previewSummary.arPending)}</p>
+                </div>
+                <div className="rounded-xl border bg-amber-50/50 dark:bg-amber-950/20 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-amber-200/50 dark:border-amber-900/50">
+                  <p className="text-[10px] uppercase text-muted-foreground font-black tracking-widest mb-1">Payables</p>
+                  <p className="text-xl font-black text-amber-600 dark:text-amber-400">{fmt(previewSummary.apPending)}</p>
+                </div>
+                <div className="rounded-xl border bg-blue-50/50 dark:bg-blue-950/20 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-blue-200/50 dark:border-blue-900/50">
+                  <p className="text-[10px] uppercase text-muted-foreground font-black tracking-widest mb-1">Net Balance</p>
+                  <p className="text-xl font-black text-blue-600 dark:text-blue-400">{fmt(previewSummary.netOutstanding)}</p>
+                </div>
+                <div className="rounded-xl border bg-emerald-50/50 dark:bg-emerald-950/20 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-emerald-200/50 dark:border-emerald-900/50">
+                  <p className="text-[10px] uppercase text-muted-foreground font-black tracking-widest mb-1">Settled</p>
+                  <p className="text-xl font-black text-emerald-600 dark:text-emerald-400">{previewSummary.settledCount}</p>
+                </div>
+                <div className="rounded-xl border bg-orange-50/50 dark:bg-orange-950/20 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-orange-200/50 dark:border-orange-900/50">
+                  <p className="text-[10px] uppercase text-muted-foreground font-black tracking-widest mb-1">Pending</p>
+                  <p className="text-xl font-black text-orange-600 dark:text-orange-400">{previewSummary.pendingCount}</p>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
@@ -559,41 +574,44 @@ export default function Loans() {
                 <div className="max-h-[56vh] overflow-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-muted/40 border-b sticky top-0">
-                      <tr>
-                        <th className="text-left py-3 px-3">Name</th>
-                        <th className="text-left py-3 px-3">Type</th>
-                        <th className="text-right py-3 px-3">Invoice Count</th>
-                        <th className="text-right py-3 px-3">Total Amount</th>
-                        <th className="text-right py-3 px-3">Paid</th>
-                        <th className="text-right py-3 px-3">Remaining</th>
-                        <th className="text-left py-3 px-3">Status</th>
-                        <th className="text-left py-3 px-3">Last Activity</th>
+                      <tr className="bg-muted/50 uppercase text-[10px] font-black tracking-widest text-muted-foreground">
+                        <th className="text-left py-4 px-4 border-b">Party Name</th>
+                        <th className="text-left py-4 px-4 border-b">Type</th>
+                        <th className="text-left py-4 px-4 border-b">Contact Info</th>
+                        <th className="text-right py-4 px-4 border-b">Remaining</th>
+                        <th className="text-center py-4 px-4 border-b">Account Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {previewVisibleRows.length === 0 ? (
-                        <tr><td colSpan={8} className="text-center py-10 text-muted-foreground">No records found.</td></tr>
+                        <tr><td colSpan={5} className="text-center py-10 text-muted-foreground">No records found.</td></tr>
                       ) : previewVisibleRows.map((r) => (
-                        <tr key={`${r.kind}-${r.id}`} className="border-b transition-colors hover:bg-muted/30">
-                          <td className="py-2.5 px-3 font-semibold">{r.name}</td>
-                          <td className="py-2.5 px-3 text-xs text-muted-foreground">{r.kind === 'receivables' ? 'Receivable' : 'Payable'}</td>
-                          <td className="py-2.5 px-3 text-right">{r.invoiceCount}</td>
-                          <td className="py-2.5 px-3 text-right">{fmt(r.totalAmount)}</td>
-                          <td className="py-2.5 px-3 text-right">{fmt(r.paidAmount)}</td>
-                          <td className="py-2.5 px-3 text-right font-bold">{fmt(r.remaining)}</td>
-                          <td className="py-2.5 px-3">
+                        <tr key={`${r.kind}-${r.id}`} className="border-b border-border/50 transition-colors hover:bg-muted/30">
+                          <td className="py-4 px-4">
+                            <p className="font-bold text-sm">{r.name}</p>
+                          </td>
+                          <td className="py-4 px-4">
+                            <Badge variant="outline" className={cn(
+                              "text-[9px] font-black uppercase px-2 py-0.5",
+                              r.kind === 'receivables' ? "text-rose-600 border-rose-200 bg-rose-50/50 dark:text-rose-400 dark:border-rose-900/50 dark:bg-rose-950/50" : "text-amber-600 border-amber-200 bg-amber-50/50 dark:text-amber-400 dark:border-amber-900/50 dark:bg-amber-950/50"
+                            )}>
+                              {r.kind === 'receivables' ? 'Receivable' : 'Payable'}
+                            </Badge>
+                          </td>
+                          <td className="py-4 px-4 text-xs font-medium text-muted-foreground">{r.phone || 'No Phone'}</td>
+                          <td className="py-4 px-4 text-right font-black text-base text-primary">{fmt(r.remaining)}</td>
+                          <td className="py-4 px-4 text-center">
                             <span className={cn(
-                              "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase",
-                              r.status === 'settled' ? "bg-emerald-100 text-emerald-700" :
-                              r.status === 'pending' ? "bg-amber-100 text-amber-700" :
-                              r.status === 'partial' ? "bg-orange-100 text-orange-700" :
-                              r.status === 'cancelled' ? "bg-rose-100 text-rose-700" :
-                              "bg-violet-100 text-violet-700"
+                              "inline-flex items-center rounded-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-tighter shadow-sm",
+                              r.status === 'settled' ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400" :
+                              r.status === 'pending' ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" :
+                              r.status === 'partial' ? "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400" :
+                              r.status === 'cancelled' ? "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-400" :
+                              "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400"
                             )}>
                               {r.status}
                             </span>
                           </td>
-                          <td className="py-2.5 px-3 text-xs text-muted-foreground">{r.lastActivityDate}</td>
                         </tr>
                       ))}
                     </tbody>

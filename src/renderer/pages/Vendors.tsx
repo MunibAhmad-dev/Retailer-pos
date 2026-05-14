@@ -738,139 +738,139 @@ export default function Vendors() {
                           <div className="text-sm text-muted-foreground py-8 text-center border border-dashed rounded-xl bg-muted/5">No activity found.</div>
                         ) : (
                           visibleHistory.map((item: any, idx: number) => {
-                        if (item.type === 'PURCHASE') {
-                          const p = item;
-                          return (
-                            <div key={`p-${p.id}`} className="bg-card border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all border-border/60 hover:border-primary/30">
-                              {/* Card Header */}
-                              <div className="p-4 bg-muted/5 flex justify-between items-start border-b border-dashed">
-                                <div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Purchase #{p.id}</span>
-                                    {p.status === 'Cancelled' ? (
-                                      <Badge className="bg-slate-200 text-slate-600 hover:bg-slate-200 text-[10px] py-0 h-4 border-none uppercase">Cancelled</Badge>
-                                    ) : p.status === 'Returned' || p.amountReturned > 0 ? (
-                                      <Badge className="bg-amber-500 text-white hover:bg-amber-600 text-[10px] py-0 h-4 border-none uppercase">Returned</Badge>
-                                    ) : Math.round(p.remaining) <= 0 ? (
-                                      <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 text-[10px] py-0 h-4 border-none uppercase">Settled</Badge>
-                                    ) : p.amountPaid > 0 ? (
-                                      <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100 text-[10px] py-0 h-4 border-none uppercase">Partial</Badge>
-                                    ) : (
-                                      <Badge className="bg-destructive/10 text-destructive hover:bg-destructive/10 text-[10px] py-0 h-4 border-none uppercase">Pending</Badge>
-                                    )}
-                                  </div>
-                                  <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1.5 font-medium">
-                                    <Calendar size={10} /> {new Date(p.date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' })}
-                                  </div>
-                                </div>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full hover:bg-primary/10 hover:text-primary" onClick={() => openPurchaseDetail(p)}>
-                                  <Eye size={14} />
-                                </Button>
-                              </div>
-
-                              {/* Card Body */}
-                              <div className="p-4 space-y-3">
-                                <div className="grid grid-cols-3 gap-2">
-                                  <div>
-                                    <p className="text-[10px] text-muted-foreground uppercase font-bold">Total</p>
-                                    <p className="text-sm font-bold">{fmtPKR(p.total)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[10px] text-muted-foreground uppercase font-bold">Paid</p>
-                                    <p className="text-sm font-bold text-emerald-600">{fmtPKR(p.amountPaid)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[10px] text-muted-foreground uppercase font-bold">Remaining</p>
-                                    <p className={`text-sm font-black ${Math.max(0, Number(p.remaining) || 0) > 0.5 ? 'text-destructive' : 'text-muted-foreground'}`}>
-                                      {fmtPKR(Math.max(0, Number(p.remaining) || 0))}
-                                    </p>
-                                  </div>
-                                </div>
-
-                                <div className="text-[11px] text-muted-foreground bg-muted/30 p-2 rounded-lg border border-border/40">
-                                  <p className="font-bold mb-0.5 flex items-center gap-1"><Layers size={10} /> Bill Items:</p>
-                                  <p className="line-clamp-2">
-                                    {p.items?.map((item: any) => `${item.product_name} (x${item.quantity})`).join(', ') || 'No item data available'}
-                                  </p>
-                                </div>
-
-                                <div className="flex gap-1.5 pt-1">
-                                  {p.status !== 'Cancelled' && p.remaining > 0.1 && (
-                                    <QuickPaymentInput
-                                      purchase={p}
-                                      onPay={(amt) => handleAddPayment(p.id, amt)}
-                                    />
-                                  )}
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-8 w-8 p-0 border-emerald-100 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
-                                    onClick={() => sendWhatsApp(p)}
-                                  >
-                                    <MessageCircle size={14} />
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-8 w-8 p-0 border-primary/20 text-primary hover:bg-primary/5"
-                                    onClick={() => printPurchaseInvoice(p)}
-                                  >
-                                    <Printer size={14} />
-                                  </Button>
-                                  {p.status !== 'Cancelled' && (
-                                    <Button
-                                      variant="ghost"
-                                      size="sm"
-                                      className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
-                                      onClick={() => handleCancelPurchase(p.id)}
-                                      title="Cancel Purchase"
-                                    >
-                                      <X size={12} />
+                            if (item.type === 'PURCHASE') {
+                              const p = item;
+                              return (
+                                <div key={`p-${p.id}`} className="bg-card border rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all border-border/60 hover:border-primary/30">
+                                  {/* Card Header */}
+                                  <div className="p-4 bg-muted/5 flex justify-between items-start border-b border-dashed">
+                                    <div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Purchase #{p.id}</span>
+                                        {p.status === 'Cancelled' ? (
+                                          <Badge className="bg-slate-200 text-slate-600 hover:bg-slate-200 text-[10px] py-0 h-4 border-none uppercase">Cancelled</Badge>
+                                        ) : p.status === 'Returned' || p.amountReturned > 0 ? (
+                                          <Badge className="bg-amber-500 text-white hover:bg-amber-600 text-[10px] py-0 h-4 border-none uppercase">Returned</Badge>
+                                        ) : Math.round(p.remaining) <= 0 ? (
+                                          <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 text-[10px] py-0 h-4 border-none uppercase">Settled</Badge>
+                                        ) : p.amountPaid > 0 ? (
+                                          <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100 text-[10px] py-0 h-4 border-none uppercase">Partial</Badge>
+                                        ) : (
+                                          <Badge className="bg-destructive/10 text-destructive hover:bg-destructive/10 text-[10px] py-0 h-4 border-none uppercase">Pending</Badge>
+                                        )}
+                                      </div>
+                                      <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1.5 font-medium">
+                                        <Calendar size={10} /> {new Date(p.date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                      </div>
+                                    </div>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full hover:bg-primary/10 hover:text-primary" onClick={() => openPurchaseDetail(p)}>
+                                      <Eye size={14} />
                                     </Button>
-                                  )}
+                                  </div>
+
+                                  {/* Card Body */}
+                                  <div className="p-4 space-y-3">
+                                    <div className="grid grid-cols-3 gap-2">
+                                      <div>
+                                        <p className="text-[10px] text-muted-foreground uppercase font-bold">Total</p>
+                                        <p className="text-sm font-bold">{fmtPKR(p.total)}</p>
+                                      </div>
+                                      <div>
+                                        <p className="text-[10px] text-muted-foreground uppercase font-bold">Paid</p>
+                                        <p className="text-sm font-bold text-emerald-600">{fmtPKR(p.amountPaid)}</p>
+                                      </div>
+                                      <div>
+                                        <p className="text-[10px] text-muted-foreground uppercase font-bold">Remaining</p>
+                                        <p className={`text-sm font-black ${Math.max(0, Number(p.remaining) || 0) > 0.5 ? 'text-destructive' : 'text-muted-foreground'}`}>
+                                          {fmtPKR(Math.max(0, Number(p.remaining) || 0))}
+                                        </p>
+                                      </div>
+                                    </div>
+
+                                    <div className="text-[11px] text-muted-foreground bg-muted/30 p-2 rounded-lg border border-border/40">
+                                      <p className="font-bold mb-0.5 flex items-center gap-1"><Layers size={10} /> Bill Items:</p>
+                                      <p className="line-clamp-2">
+                                        {p.items?.map((item: any) => `${item.product_name} (x${item.quantity})`).join(', ') || 'No item data available'}
+                                      </p>
+                                    </div>
+
+                                    <div className="flex gap-1.5 pt-1">
+                                      {p.status !== 'Cancelled' && p.remaining > 0.1 && (
+                                        <QuickPaymentInput
+                                          purchase={p}
+                                          onPay={(amt) => handleAddPayment(p.id, amt)}
+                                        />
+                                      )}
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-8 w-8 p-0 border-emerald-100 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700"
+                                        onClick={() => sendWhatsApp(p)}
+                                      >
+                                        <MessageCircle size={14} />
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-8 w-8 p-0 border-primary/20 text-primary hover:bg-primary/5"
+                                        onClick={() => printPurchaseInvoice(p)}
+                                      >
+                                        <Printer size={14} />
+                                      </Button>
+                                      {p.status !== 'Cancelled' && (
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                                          onClick={() => handleCancelPurchase(p.id)}
+                                          title="Cancel Purchase"
+                                        >
+                                          <X size={12} />
+                                        </Button>
+                                      )}
+                                    </div>
+                                  </div>
                                 </div>
-                              </div>
-                            </div>
-                          );
-                        } else if (item.type === 'PAYMENT') {
-                          return (
-                            <div key={`pay-${item.id}-${idx}`} className="bg-emerald-50/40 border border-emerald-100 p-3 rounded-xl flex justify-between items-center group">
-                              <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
-                                  <CheckCircle2 size={14} />
+                              );
+                            } else if (item.type === 'PAYMENT') {
+                              return (
+                                <div key={`pay-${item.id}-${idx}`} className="bg-emerald-50/40 border border-emerald-100 p-3 rounded-xl flex justify-between items-center group">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+                                      <CheckCircle2 size={14} />
+                                    </div>
+                                    <div>
+                                      <p className="text-xs font-black uppercase text-emerald-800">Payment Sent</p>
+                                      <p className="text-[10px] text-emerald-600/70">{new Date(item.date).toLocaleString()}</p>
+                                    </div>
+                                  </div>
+                                  <div className="text-right flex items-center gap-3">
+                                    <span className="text-sm font-black text-emerald-700">{fmtPKR(item.amount)}</span>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive opacity-0 group-hover:opacity-100" onClick={() => handleDeletePayment(item.id)}>
+                                      <Trash2 size={12} />
+                                    </Button>
+                                  </div>
                                 </div>
-                                <div>
-                                  <p className="text-xs font-black uppercase text-emerald-800">Payment Sent</p>
-                                  <p className="text-[10px] text-emerald-600/70">{new Date(item.date).toLocaleString()}</p>
+                              );
+                            } else if (item.type === 'RETURN') {
+                              return (
+                                <div key={`ret-${item.id}-${idx}`} className="bg-amber-50/40 border border-amber-100 p-3 rounded-xl flex justify-between items-center">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
+                                      <Undo2 size={14} />
+                                    </div>
+                                    <div>
+                                      <p className="text-xs font-black uppercase text-amber-800">Return Processed</p>
+                                      <p className="text-[10px] text-amber-600/70">{new Date(item.date).toLocaleString()}</p>
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <span className="text-sm font-black text-amber-700">-{fmtPKR(item.amount)}</span>
+                                  </div>
                                 </div>
-                              </div>
-                              <div className="text-right flex items-center gap-3">
-                                <span className="text-sm font-black text-emerald-700">{fmtPKR(item.amount)}</span>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive opacity-0 group-hover:opacity-100" onClick={() => handleDeletePayment(item.id)}>
-                                  <Trash2 size={12} />
-                                </Button>
-                              </div>
-                            </div>
-                          );
-                        } else if (item.type === 'RETURN') {
-                          return (
-                            <div key={`ret-${item.id}-${idx}`} className="bg-amber-50/40 border border-amber-100 p-3 rounded-xl flex justify-between items-center">
-                              <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
-                                  <Undo2 size={14} />
-                                </div>
-                                <div>
-                                  <p className="text-xs font-black uppercase text-amber-800">Return Processed</p>
-                                  <p className="text-[10px] text-amber-600/70">{new Date(item.date).toLocaleString()}</p>
-                                </div>
-                              </div>
-                              <div className="text-right">
-                                <span className="text-sm font-black text-amber-700">-{fmtPKR(item.amount)}</span>
-                              </div>
-                            </div>
-                          );
-                        }
-                        return null;
+                              );
+                            }
+                            return null;
                           })
                         )}
                       </div>

@@ -74,7 +74,7 @@ export default function Products() {
       if (ar?.success) setAnalytics(ar.data || []);
       const vr = await window.api.getVendors();
       if (vr?.success) setVendors(vr.data || []);
-    } catch (e) {} /* silent */ 
+    } catch (e) { } /* silent */
   };
 
   const normalizedSearch = searchTerm.toLowerCase();
@@ -251,13 +251,13 @@ export default function Products() {
                   {searchTerm ? 'No matching products.' : 'No products yet. Click "Add Product" to begin.'}
                 </TableCell></TableRow>
               ) : Object.entries(
-                  displayedProducts.reduce((acc: Record<string, Product[]>, p) => {
-                    const cat = p.category || (p.product_type ? p.product_type.charAt(0).toUpperCase() + p.product_type.slice(1) : 'Uncategorized');
-                    if (!acc[cat]) acc[cat] = [];
-                    acc[cat].push(p);
-                    return acc;
-                  }, {})
-                ).map(([cat, prods]) => (
+                displayedProducts.reduce((acc: Record<string, Product[]>, p) => {
+                  const cat = p.category || (p.product_type ? p.product_type.charAt(0).toUpperCase() + p.product_type.slice(1) : 'Uncategorized');
+                  if (!acc[cat]) acc[cat] = [];
+                  acc[cat].push(p);
+                  return acc;
+                }, {})
+              ).map(([cat, prods]) => (
                 <React.Fragment key={cat}>
                   <TableRow className="bg-muted/50 border-b-2 border-primary/20">
                     <TableCell colSpan={8} className="font-bold text-primary/80 uppercase tracking-wider text-xs py-2">
@@ -267,8 +267,8 @@ export default function Products() {
                   {prods.map((p) => {
                     const m = margin(p);
                     const isLow = (p.stock ?? 0) < 10;
-                    
-                    const specEntries = p.metadata ? Object.entries(p.metadata).filter(([k,v]) => k !== 'tags' && v) : [];
+
+                    const specEntries = p.metadata ? Object.entries(p.metadata).filter(([k, v]) => k !== 'tags' && v) : [];
                     const specTags = p.metadata?.tags && Array.isArray(p.metadata.tags) ? p.metadata.tags : [];
 
                     return (
@@ -277,7 +277,7 @@ export default function Products() {
                           <div className="font-semibold">{p.name}</div>
                           {p.barcode && <div className="text-xs text-muted-foreground font-mono mt-0.5">{p.barcode}</div>}
                           {(() => {
-                            const specEntries = p.metadata ? Object.entries(p.metadata).filter(([k,v]) => k !== 'tags' && v).map(([k,v]) => `${k.replace('_', ' ')}: ${v}`) : [];
+                            const specEntries = p.metadata ? Object.entries(p.metadata).filter(([k, v]) => k !== 'tags' && v).map(([k, v]) => `${k.replace('_', ' ')}: ${v}`) : [];
                             const specTags = p.metadata?.tags && Array.isArray(p.metadata.tags) ? p.metadata.tags : [];
                             const specStr = [...specEntries, ...specTags].join(' • ');
                             if (!specStr) return null;
@@ -338,8 +338,8 @@ export default function Products() {
 
           {displayCount < filtered.length && (
             <div className="p-6 border-t flex justify-center bg-muted/5">
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => setDisplayCount(prev => prev + 20)}
                 className="gap-2 shadow-sm"
               >
@@ -353,12 +353,12 @@ export default function Products() {
 
       {/* Add/Edit Dialog */}
       {showDialog && createPortal((
-        <div 
-          className="fixed inset-0 z-[999] flex items-start justify-center p-4 sm:p-8 bg-black/5 overflow-y-auto animate-in fade-in duration-200" 
+        <div
+          className="fixed inset-0 z-[999] flex items-start justify-center p-4 sm:p-8 bg-black/5 overflow-y-auto animate-in fade-in duration-200"
           onClick={() => !isSaving && setShowDialog(false)}
         >
-          <Card 
-            className="relative z-[1000] w-full max-w-lg my-auto shadow-xl border bg-card animate-in zoom-in-95 duration-200" 
+          <Card
+            className="relative z-[1000] w-full max-w-lg my-auto shadow-xl border bg-card animate-in zoom-in-95 duration-200"
             onClick={(e) => e.stopPropagation()}
           >
             <form onSubmit={handleSubmit}>
@@ -373,11 +373,11 @@ export default function Products() {
                       {isEditing ? 'Update product details below.' : 'Fill in all details to add to your catalogue.'}
                     </CardDescription>
                   </div>
-                  <Button 
-                    type="button" 
-                    variant="ghost" 
-                    size="icon" 
-                    className="rounded-full h-8 w-8 text-muted-foreground hover:bg-muted" 
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-full h-8 w-8 text-muted-foreground hover:bg-muted"
                     onClick={() => setShowDialog(false)}
                   >
                     <X size={18} />
@@ -413,7 +413,7 @@ export default function Products() {
                   <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground uppercase tracking-wider">
                     {PRODUCT_TYPES.find(t => t.id === current.product_type)?.icon} Core Details
                   </div>
-                  
+
                   <div className="grid grid-cols-2 gap-4">
                     <div className="col-span-2 space-y-1.5">
                       <label className="text-sm font-semibold">Product Name <span className="text-destructive">*</span></label>
@@ -486,7 +486,7 @@ export default function Products() {
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-sm font-semibold">Unit of Measure</label>
-                      <select 
+                      <select
                         className="w-full h-10 px-3 py-2 text-sm rounded-md border bg-background"
                         value={current.unit || ''}
                         onChange={(e) => setCurrent((p) => ({ ...p, unit: e.target.value }))}
@@ -538,7 +538,7 @@ export default function Products() {
 
                   <div className="space-y-1.5">
                     <label className="text-sm font-semibold">Preferred Supplier (Optional)</label>
-                    <select 
+                    <select
                       className="w-full h-10 px-3 py-2 text-sm rounded-md border bg-background"
                       value={current.vendor_id || ''}
                       onChange={(e) => setCurrent((p) => ({ ...p, vendor_id: e.target.value ? parseInt(e.target.value) : undefined }))}
@@ -558,13 +558,13 @@ export default function Products() {
                     <div className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
                       {sec.tags ? '🏷 ' : ''}{sec.title}
                     </div>
-                    
+
                     {sec.tags ? (
                       <div className="flex flex-wrap gap-2">
                         {sec.tags.map((tag: string) => {
                           const isSelected = current.metadata?.tags?.includes(tag);
                           return (
-                            <div 
+                            <div
                               key={tag}
                               onClick={() => {
                                 if (isSaving) return;
@@ -574,8 +574,8 @@ export default function Products() {
                               }}
                               className={cn(
                                 "px-3 py-1.5 text-xs rounded-full border cursor-pointer select-none transition-colors",
-                                isSelected 
-                                  ? "bg-primary/10 border-primary text-primary font-medium" 
+                                isSelected
+                                  ? "bg-primary/10 border-primary text-primary font-medium"
                                   : "bg-muted/30 hover:bg-muted text-muted-foreground"
                               )}
                             >

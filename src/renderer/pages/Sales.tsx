@@ -103,11 +103,11 @@ function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
     });
     if (data.discount > 0) msg += `\nDiscount: -${fmtPKR(data.discount)}`;
     msg += `\n*Total: ${fmtPKR(data.total)}*`;
-    
+
     // Format phone number (remove non-digits, ensure country code)
     let phone = data.customerPhone.replace(/\D/g, '');
     if (phone.startsWith('0')) phone = '92' + phone.substring(1);
-    
+
     const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
     window.open(url, '_blank');
   };
@@ -220,14 +220,14 @@ export default function Sales() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | ''>('');
   const [customerSearch, setCustomerSearch] = useState('');
-  
+
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'online'>('cash');
   const [discountValue, setDiscountValue] = useState<string>('');
   const [discountType, setDiscountType] = useState<'fixed' | 'percentage'>('fixed');
   const [isProcessing, setIsProcessing] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [amountPaid, setAmountPaid] = useState<string>('');
-  
+
   const [showAddCustomer, setShowAddCustomer] = useState(false);
   const [currentRegister, setCurrentRegister] = useState<any>(null);
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
@@ -248,10 +248,10 @@ export default function Sales() {
   const { addNotification } = useNotifications();
   const location = useLocation();
 
-  useEffect(() => { 
-    loadProducts(); 
-    loadCustomers(); 
-    loadSettings(); 
+  useEffect(() => {
+    loadProducts();
+    loadCustomers();
+    loadSettings();
     checkRegister();
   }, []);
 
@@ -267,8 +267,8 @@ export default function Sales() {
   };
 
   const loadCustomers = async () => {
-    try { 
-      const res = await window.api.getCustomers(); 
+    try {
+      const res = await window.api.getCustomers();
       if (res?.success) {
         setCustomers(res.data);
         const params = new URLSearchParams(location.search);
@@ -338,16 +338,16 @@ export default function Sales() {
         addNotification("Out of Stock", `${product.name} is out of stock.`, "error");
         return;
       }
-      setCart([...cart, { 
-        id: key, 
-        product_id: product.id, 
-        name: product.name, 
-        price: product.price, 
-        quantity: 1, 
-        is_custom: false, 
+      setCart([...cart, {
+        id: key,
+        product_id: product.id,
+        name: product.name,
+        price: product.price,
+        quantity: 1,
+        is_custom: false,
         stock: product.stock,
         metadata: product.metadata,
-        product_type: product.product_type 
+        product_type: product.product_type
       }]);
     }
   };
@@ -366,9 +366,9 @@ export default function Sales() {
     const qty = parseInt(rawValue.replace(/[^0-9]/g, '')) || 0;
     const item = cart.find(i => i.id === id);
     if (item && item.stock !== undefined && qty > item.stock) {
-        addNotification("Stock Limit", `Only ${item.stock} units available.`, "warning");
-        setCart(cart.map((i) => i.id === id ? { ...i, quantity: item.stock } : i));
-        return;
+      addNotification("Stock Limit", `Only ${item.stock} units available.`, "warning");
+      setCart(cart.map((i) => i.id === id ? { ...i, quantity: item.stock } : i));
+      return;
     }
     setCart(cart.map((i) => i.id === id ? { ...i, quantity: qty } : i));
   };
@@ -629,32 +629,32 @@ export default function Sales() {
     }
     return buildReceiptHtml(data);
   };
-const CATEGORY_COLORS: Record<string, { bg: string, border: string, badge: string }> = {
-  'chicken': { bg: 'from-orange-600 to-amber-500', border: 'border-orange-700', badge: 'bg-white/20 text-orange-100' },
-  'bottle': { bg: 'from-green-600 to-emerald-500', border: 'border-green-700', badge: 'bg-white/20 text-green-100' },
-  'rice': { bg: 'from-yellow-700 to-amber-600', border: 'border-yellow-800', badge: 'bg-white/20 text-yellow-100' },
-  'chawal': { bg: 'from-yellow-700 to-amber-600', border: 'border-yellow-800', badge: 'bg-white/20 text-yellow-100' },
-  'chargha': { bg: 'from-red-700 to-rose-600', border: 'border-red-800', badge: 'bg-white/20 text-red-100' },
-  'channy': { bg: 'from-amber-800 to-orange-700', border: 'border-amber-900', badge: 'bg-white/20 text-amber-100' },
-  'glass': { bg: 'from-cyan-600 to-sky-500', border: 'border-cyan-700', badge: 'bg-white/20 text-cyan-100' },
-  'drinks': { bg: 'from-blue-600 to-indigo-500', border: 'border-blue-700', badge: 'bg-white/20 text-blue-100' },
-};
+  const CATEGORY_COLORS: Record<string, { bg: string, border: string, badge: string }> = {
+    'chicken': { bg: 'from-orange-600 to-amber-500', border: 'border-orange-700', badge: 'bg-white/20 text-orange-100' },
+    'bottle': { bg: 'from-green-600 to-emerald-500', border: 'border-green-700', badge: 'bg-white/20 text-green-100' },
+    'rice': { bg: 'from-yellow-700 to-amber-600', border: 'border-yellow-800', badge: 'bg-white/20 text-yellow-100' },
+    'chawal': { bg: 'from-yellow-700 to-amber-600', border: 'border-yellow-800', badge: 'bg-white/20 text-yellow-100' },
+    'chargha': { bg: 'from-red-700 to-rose-600', border: 'border-red-800', badge: 'bg-white/20 text-red-100' },
+    'channy': { bg: 'from-amber-800 to-orange-700', border: 'border-amber-900', badge: 'bg-white/20 text-amber-100' },
+    'glass': { bg: 'from-cyan-600 to-sky-500', border: 'border-cyan-700', badge: 'bg-white/20 text-cyan-100' },
+    'drinks': { bg: 'from-blue-600 to-indigo-500', border: 'border-blue-700', badge: 'bg-white/20 text-blue-100' },
+  };
 
-const CARD_COLORS = [
-  { bg: 'from-violet-600 to-purple-500', border: 'border-violet-700', badge: 'bg-white/20 text-purple-100' },
-  { bg: 'from-teal-600 to-teal-400',     border: 'border-teal-700',   badge: 'bg-white/20 text-teal-100' },
-  { bg: 'from-pink-600 to-pink-400',     border: 'border-pink-700',   badge: 'bg-white/20 text-pink-100' },
-  { bg: 'from-blue-700 to-blue-500',     border: 'border-blue-800',   badge: 'bg-white/20 text-blue-100' },
-  { bg: 'from-emerald-600 to-emerald-400', border: 'border-emerald-700', badge: 'bg-white/20 text-emerald-100' },
-];
+  const CARD_COLORS = [
+    { bg: 'from-violet-600 to-purple-500', border: 'border-violet-700', badge: 'bg-white/20 text-purple-100' },
+    { bg: 'from-teal-600 to-teal-400', border: 'border-teal-700', badge: 'bg-white/20 text-teal-100' },
+    { bg: 'from-pink-600 to-pink-400', border: 'border-pink-700', badge: 'bg-white/20 text-pink-100' },
+    { bg: 'from-blue-700 to-blue-500', border: 'border-blue-800', badge: 'bg-white/20 text-blue-100' },
+    { bg: 'from-emerald-600 to-emerald-400', border: 'border-emerald-700', badge: 'bg-white/20 text-emerald-100' },
+  ];
 
-const colorForProduct = (product: Product) => {
-  const category = product.category?.toLowerCase().trim();
-  if (category && CATEGORY_COLORS[category]) {
-    return CATEGORY_COLORS[category];
-  }
-  return CARD_COLORS[product.id % CARD_COLORS.length];
-};
+  const colorForProduct = (product: Product) => {
+    const category = product.category?.toLowerCase().trim();
+    if (category && CATEGORY_COLORS[category]) {
+      return CATEGORY_COLORS[category];
+    }
+    return CARD_COLORS[product.id % CARD_COLORS.length];
+  };
 
   const handleAddCustomerInline = async () => {
     if (!newCustomerName.trim()) {
@@ -685,14 +685,14 @@ const colorForProduct = (product: Product) => {
     if (cart.length === 0 || isProcessing) return;
 
     setIsProcessing(true);
-    
+
     const amtPaid = amountPaid === "" ? (selectedCustomerId ? 0 : total) : parseFloat(amountPaid);
     let paymentStatus = 'Paid';
     if (!isNaN(amtPaid) && amtPaid < total) {
-       paymentStatus = 'Partial';
+      paymentStatus = 'Partial';
     }
     if (!isNaN(amtPaid) && amtPaid <= 0 && total > 0) {
-       paymentStatus = 'Pending';
+      paymentStatus = 'Pending';
     }
 
     try {
@@ -733,8 +733,8 @@ const colorForProduct = (product: Product) => {
         setSelectedCustomerId('');
 
         setTimeout(() => {
-            setShowCheckoutModal(false);
-            setIsProcessing(false);
+          setShowCheckoutModal(false);
+          setIsProcessing(false);
         }, 800);
       } else {
         addNotification("Transaction Failed", result.error || "A processing error occurred.", "error");
@@ -753,7 +753,7 @@ const colorForProduct = (product: Product) => {
     try {
       const res = await window.api.getSettings();
       if (res?.success && res.data) freshSettings = res.data;
-    } catch {}
+    } catch { }
     await window.api.printInvoice(buildInvoiceHtml({ ...receiptData, settings: freshSettings }));
   };
 
@@ -764,7 +764,7 @@ const colorForProduct = (product: Product) => {
     try {
       const res = await window.api.getSettings();
       if (res?.success && res.data) freshSettings = res.data;
-    } catch {}
+    } catch { }
     await window.api.saveInvoicePdf(buildInvoiceHtml({ ...receiptData, settings: freshSettings }));
   };
 
@@ -807,8 +807,8 @@ const colorForProduct = (product: Product) => {
             </div>
           </CardHeader>
           <div className="bg-muted/10 border-b p-2 overflow-x-auto no-scrollbar flex items-center gap-2">
-            <Button 
-              size="sm" 
+            <Button
+              size="sm"
               variant={searchTerm === '' ? "default" : "ghost"}
               onClick={() => handleSearch('')}
               className="h-8 rounded-full text-xs"
@@ -835,7 +835,7 @@ const colorForProduct = (product: Product) => {
               <span className="w-24 text-right">Price</span>
               <span className="w-10"></span>
             </div>
-            
+
             <AnimatedList
               items={visibleProducts}
               className="flex-1"
@@ -843,9 +843,9 @@ const colorForProduct = (product: Product) => {
               renderItem={(product: any) => {
                 const isOutOfStock = (product.stock ?? 999) <= 0;
                 const lowStock = !isOutOfStock && (product.stock ?? 999) < 10;
-                
+
                 return (
-                  <div 
+                  <div
                     className={cn(
                       "flex items-center p-3 rounded-xl border border-border/40 bg-card hover:border-primary/30 hover:shadow-md transition-all h-20",
                       isOutOfStock && "opacity-60 bg-muted/20 grayscale"
@@ -857,27 +857,27 @@ const colorForProduct = (product: Product) => {
                           {product.name}
                         </span>
                         <div className="flex items-center gap-1.5 mt-1 overflow-hidden">
-                           {product.barcode && (
-                             <span className="text-[9px] text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded border border-border/50 shrink-0">
-                               {product.barcode}
-                             </span>
-                           )}
-                           {product.unit && (
-                             <span className="text-[9px] text-primary/80 bg-primary/5 px-1.5 py-0.5 rounded font-bold border border-primary/10 shrink-0">
-                               {product.unit}
-                             </span>
-                           )}
-                           {(() => {
-                              const specEntries = product.metadata ? Object.entries(product.metadata).filter(([k,v]) => k !== 'tags' && v).map(([k,v]) => `${k.replace('_', ' ')}: ${v}`) : [];
-                              const specTags = product.metadata?.tags && Array.isArray(product.metadata.tags) ? product.metadata.tags : [];
-                              const specStr = [...specEntries, ...specTags].join(' • ');
-                              if (!specStr) return null;
-                              return (
-                                <span className="text-[9px] text-muted-foreground truncate capitalize" title={specStr}>
-                                  {specStr}
-                                </span>
-                              );
-                           })()}
+                          {product.barcode && (
+                            <span className="text-[9px] text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded border border-border/50 shrink-0">
+                              {product.barcode}
+                            </span>
+                          )}
+                          {product.unit && (
+                            <span className="text-[9px] text-primary/80 bg-primary/5 px-1.5 py-0.5 rounded font-bold border border-primary/10 shrink-0">
+                              {product.unit}
+                            </span>
+                          )}
+                          {(() => {
+                            const specEntries = product.metadata ? Object.entries(product.metadata).filter(([k, v]) => k !== 'tags' && v).map(([k, v]) => `${k.replace('_', ' ')}: ${v}`) : [];
+                            const specTags = product.metadata?.tags && Array.isArray(product.metadata.tags) ? product.metadata.tags : [];
+                            const specStr = [...specEntries, ...specTags].join(' • ');
+                            if (!specStr) return null;
+                            return (
+                              <span className="text-[9px] text-muted-foreground truncate capitalize" title={specStr}>
+                                {specStr}
+                              </span>
+                            );
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -892,8 +892,8 @@ const colorForProduct = (product: Product) => {
                       <div className={cn(
                         "inline-flex flex-col items-center justify-center min-w-[50px] p-1.5 rounded-xl border-2 shadow-sm",
                         isOutOfStock ? "bg-red-50 text-red-600 border-red-100" :
-                        lowStock ? "bg-amber-50 text-amber-600 border-amber-100 animate-pulse" :
-                        "bg-emerald-50 text-emerald-600 border-emerald-100"
+                          lowStock ? "bg-amber-50 text-amber-600 border-amber-100 animate-pulse" :
+                            "bg-emerald-50 text-emerald-600 border-emerald-100"
                       )}>
                         <span className="text-[11px] font-black leading-none">
                           {isOutOfStock ? 'OUT' : product.stock}
@@ -922,7 +922,7 @@ const colorForProduct = (product: Product) => {
                 else addNotification("Out of Stock", "This item is currently unavailable.", "error");
               }}
             />
-            
+
             {visibleProducts.length === 0 && (
               <div className="py-20 flex flex-col items-center justify-center text-muted-foreground bg-muted/5">
                 <Package size={48} className="opacity-10 mb-4" />
@@ -930,21 +930,21 @@ const colorForProduct = (product: Product) => {
                 <p className="text-xs">Try adjusting your search or category filter</p>
               </div>
             )}
-            
+
             <div className="p-4 bg-muted/10 border-t flex items-center justify-between">
               <div className="text-xs text-muted-foreground font-medium">
                 Showing <span className="text-foreground font-bold">{prodShowing}</span> of <span className="text-foreground font-bold">{prodTotal}</span> products
               </div>
               {hasMore && (
-                <Button 
-                  size="sm" 
+                <Button
+                  size="sm"
                   onClick={(e) => {
                     e.stopPropagation();
                     loadMore();
                   }}
                   className="gap-2 shadow-[0_4px_14px_0_rgba(0,118,255,0.39)] hover:shadow-[0_6px_20px_rgba(0,118,255,0.23)] hover:bg-[#0070f3] transition-all px-8 font-black bg-[#0070f3] text-white border-none h-10"
                 >
-                  <RefreshCw size={16} className="animate-spin-slow" /> 
+                  <RefreshCw size={16} className="animate-spin-slow" />
                   LOAD 10 MORE PRODUCTS
                 </Button>
               )}
@@ -988,22 +988,22 @@ const colorForProduct = (product: Product) => {
                     {item.is_custom && <Badge variant="secondary" className="text-[9px] px-1 h-4 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300">Custom</Badge>}
                   </div>
                   {(() => {
-                     const specEntries = item.metadata ? Object.entries(item.metadata).filter(([k,v]) => k !== 'tags' && v).map(([k,v]) => `${k.replace('_', ' ')}: ${v}`) : [];
-                     const specTags = item.metadata?.tags && Array.isArray(item.metadata.tags) ? item.metadata.tags : [];
-                     const specStr = [...specEntries, ...specTags].join(' • ');
-                     if (!specStr) return null;
-                     return (
-                       <div className="text-[9px] text-muted-foreground truncate mb-1 capitalize" title={specStr}>
-                         {specStr}
-                       </div>
-                     );
+                    const specEntries = item.metadata ? Object.entries(item.metadata).filter(([k, v]) => k !== 'tags' && v).map(([k, v]) => `${k.replace('_', ' ')}: ${v}`) : [];
+                    const specTags = item.metadata?.tags && Array.isArray(item.metadata.tags) ? item.metadata.tags : [];
+                    const specStr = [...specEntries, ...specTags].join(' • ');
+                    if (!specStr) return null;
+                    return (
+                      <div className="text-[9px] text-muted-foreground truncate mb-1 capitalize" title={specStr}>
+                        {specStr}
+                      </div>
+                    );
                   })()}
                 </div>
 
                 <div className="flex flex-col items-end gap-2">
                   <div className="flex items-center bg-background border rounded-lg overflow-hidden shadow-sm">
                     <button type="button" onClick={() => updateQty(item.id, String(item.quantity - 1))} className="p-1.5 px-2 hover:bg-muted active:bg-accent transition-colors"><Minus size={12} className="text-foreground/70" /></button>
-                    <input 
+                    <input
                       type="text"
                       value={item.quantity || ''}
                       onChange={(e) => updateQty(item.id, e.target.value)}
@@ -1014,7 +1014,7 @@ const colorForProduct = (product: Product) => {
                   </div>
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] font-bold text-muted-foreground">Rs.</span>
-                    <input 
+                    <input
                       type="text"
                       value={item.price || ''}
                       onChange={(e) => updatePrice(item.id, e.target.value)}
@@ -1187,19 +1187,19 @@ const colorForProduct = (product: Product) => {
                     </Button>
                   )}
                 </div>
-                
+
                 {showAddCustomer ? (
                   <div className="bg-muted/50 p-3 rounded-md border border-border space-y-2 animate-in fade-in">
-                    <Input 
-                      placeholder="Customer Name *" 
-                      value={newCustomerName} 
-                      onChange={(e) => setNewCustomerName(e.target.value)} 
+                    <Input
+                      placeholder="Customer Name *"
+                      value={newCustomerName}
+                      onChange={(e) => setNewCustomerName(e.target.value)}
                       className="h-8 text-sm"
                     />
-                    <Input 
-                      placeholder="Phone Number" 
-                      value={newCustomerPhone} 
-                      onChange={(e) => setNewCustomerPhone(e.target.value)} 
+                    <Input
+                      placeholder="Phone Number"
+                      value={newCustomerPhone}
+                      onChange={(e) => setNewCustomerPhone(e.target.value)}
                       className="h-8 text-sm"
                     />
                     <div className="flex gap-2 pt-1">
@@ -1211,8 +1211,8 @@ const colorForProduct = (product: Product) => {
                   <div className="relative space-y-2">
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} />
-                      <Input 
-                        placeholder="Type customer name or phone..." 
+                      <Input
+                        placeholder="Type customer name or phone..."
                         value={customerSearch}
                         onChange={(e) => {
                           setCustomerSearch(e.target.value);
@@ -1224,8 +1224,8 @@ const colorForProduct = (product: Product) => {
                         className="pl-9 h-10 text-sm bg-background border-border/50 shadow-sm"
                       />
                       {selectedCustomerId && (
-                        <Button 
-                          variant="ghost" size="icon" 
+                        <Button
+                          variant="ghost" size="icon"
                           className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 text-muted-foreground hover:text-foreground"
                           onClick={() => {
                             setSelectedCustomerId('');
@@ -1239,7 +1239,7 @@ const colorForProduct = (product: Product) => {
 
                     {customerSearch && !selectedCustomerId && (
                       <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-md shadow-xl max-h-[200px] overflow-y-auto animate-in fade-in zoom-in-95 duration-100">
-                        <div 
+                        <div
                           className="p-2 text-xs hover:bg-accent cursor-pointer flex items-center justify-between border-b border-border/50"
                           onClick={() => {
                             setSelectedCustomerId('');
@@ -1253,8 +1253,8 @@ const colorForProduct = (product: Product) => {
                           <div className="p-4 text-center text-xs text-muted-foreground italic">No customers found.</div>
                         ) : (
                           filteredCustomers.map(c => (
-                            <div 
-                              key={c.id} 
+                            <div
+                              key={c.id}
                               className="p-2.5 hover:bg-accent cursor-pointer border-b border-border/40 last:border-0 transition-colors"
                               onClick={() => {
                                 setSelectedCustomerId(c.id);
@@ -1268,11 +1268,11 @@ const colorForProduct = (product: Product) => {
                         )}
                       </div>
                     )}
-                    
+
                     {!customerSearch && !selectedCustomerId && (
-                       <p className="text-[10px] text-muted-foreground ml-1 italic">Type to find or add a customer above.</p>
+                      <p className="text-[10px] text-muted-foreground ml-1 italic">Type to find or add a customer above.</p>
                     )}
-                    
+
                     {selectedCustomerId && (
                       <div className="flex items-center gap-2 p-2 bg-primary/5 rounded-lg border border-primary/10 animate-in slide-in-from-top-2">
                         <div className="bg-primary/20 p-1.5 rounded-full">
@@ -1294,11 +1294,11 @@ const colorForProduct = (product: Product) => {
                   <span className="text-sm font-medium">Total Amount</span>
                   <span className="font-bold text-lg">{fmtPKR(total)}</span>
                 </div>
-                
+
                 <div className="space-y-2 mt-4">
                   <label className="text-sm font-semibold">Amount Paid (PKR)</label>
-                  <Input 
-                    type="text" 
+                  <Input
+                    type="text"
                     value={amountPaid}
                     onChange={(e) => {
                       const val = e.target.value.replace(/[^0-9]/g, '');
@@ -1312,9 +1312,9 @@ const colorForProduct = (product: Product) => {
                     </p>
                   ) : (
                     parseFloat(amountPaid) < total && (
-                       <p className="text-xs text-destructive font-medium">
-                         Warning: Walk-in customers cannot have partial payments. Please select a customer to track credit.
-                       </p>
+                      <p className="text-xs text-destructive font-medium">
+                        Warning: Walk-in customers cannot have partial payments. Please select a customer to track credit.
+                      </p>
                     )
                   )}
                 </div>
@@ -1322,8 +1322,8 @@ const colorForProduct = (product: Product) => {
             </CardContent>
             <CardFooter className="flex gap-3 pt-0">
               <Button variant="outline" className="w-full" onClick={() => setShowCheckoutModal(false)}>Cancel</Button>
-              <Button 
-                onClick={processPayment} 
+              <Button
+                onClick={processPayment}
                 disabled={isProcessing || (!selectedCustomerId && parseFloat(amountPaid) < total)}
                 className="w-full"
               >
@@ -1343,8 +1343,8 @@ const colorForProduct = (product: Product) => {
           onClose={handleCloseReceipt}
         />
       )}
-      <RegisterManager 
-        isOpen={isRegisterModalOpen} 
+      <RegisterManager
+        isOpen={isRegisterModalOpen}
         onClose={() => setIsRegisterModalOpen(false)}
         onRegisterStatusChange={setCurrentRegister}
       />

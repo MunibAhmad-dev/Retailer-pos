@@ -3,7 +3,7 @@ import { NavLink, useLocation, Link } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingCart, Package, Boxes, Users,
   CreditCard, BarChart3, Settings, User, Moon, Sun, Receipt,
-  Bell, Menu, X, CheckCircle2, AlertCircle, Info, ChevronLeft, ChevronRight, Truck, Key, TrendingUp, Lock, ShieldAlert, History, Landmark, Wallet, Undo2, CircleDollarSign
+  Bell, Menu, X, CheckCircle2, AlertCircle, Info, ChevronLeft, ChevronRight, Truck, Key, TrendingUp, Lock, ShieldAlert, History, Wallet, Undo2, CircleDollarSign
 } from 'lucide-react';
 import Logo from '../components/img/yasir_logo_transparent.png';
 import { useTheme } from './ThemeProvider';
@@ -34,12 +34,13 @@ export default function Layout({ children }: LayoutProps) {
   const { theme, setTheme } = useTheme();
   const { addNotification, notifications, unreadCount, markAsRead, markAllAsRead, clearAll } = useNotifications();
   const { t, language } = useLanguage();
-  
+
   const [logoData, setLogoData] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
   useEffect(() => {
-    async function fetchLogo() { 
+    async function fetchLogo() {
       if (window.api && window.api.getLogo) {
         try {
           const res = await window.api.getLogo();
@@ -59,7 +60,14 @@ export default function Layout({ children }: LayoutProps) {
     if (subState.isActive && !subState.isGracePeriod && subState.daysRemaining <= 5) {
       addNotification("Subscription Expiring Soon", `Your license expires in ${subState.daysRemaining} day(s). Please renew soon to avoid interruptions.`, "warning");
     }
+    if ((subState as any).internetReminder) {
+      addNotification("Internet Required", "Please connect to internet. Online license has not checked in for over 10 days.", "warning");
+    }
   }, []);
+
+  useEffect(() => {
+    setIsMobileNavOpen(false);
+  }, [location.pathname]);
 
   const subState = subService.getState();
 
@@ -80,7 +88,6 @@ export default function Layout({ children }: LayoutProps) {
     { path: '/expenses', icon: Receipt, label: t('expenses') },
     { path: '/register', icon: Wallet, label: 'Cash Register' },
     { path: '/register-history', icon: History, label: 'Register History' },
-    { path: '/more-features', icon: Landmark, label: 'More Features' },
     { path: '/settings', icon: Settings, label: t('settings') },
     { path: '/subscription', icon: Key, label: 'Subscription' },
     { path: '/about', icon: Info, label: 'About Software' }
@@ -88,18 +95,29 @@ export default function Layout({ children }: LayoutProps) {
 
   return (
     <div className="flex bg-background min-h-screen font-sans text-foreground transition-colors overflow-hidden">
+      {isMobileNavOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setIsMobileNavOpen(false)}
+          className="fixed inset-0 z-30 bg-black/45 backdrop-blur-[1px] md:hidden"
+        />
+      )}
+
       {/* Sidebar */}
-      <aside 
+      <aside
         className={cn(
-          "flex-shrink-0 bg-card border-r border-border flex flex-col transition-all duration-300 relative",
-          isSidebarCollapsed ? "w-[80px]" : "w-64"
+          "fixed md:static inset-y-0 left-0 z-40 flex-shrink-0 bg-card border-r border-border flex flex-col transition-all duration-300 ease-out",
+          isSidebarCollapsed ? "md:w-[80px]" : "md:w-64",
+          "w-[86vw] max-w-[320px] md:max-w-none",
+          isMobileNavOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         )}
       >
-        <div className="absolute -right-3 top-6 z-50 rounded-full border border-border bg-background shadow-md">
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            className="h-6 w-6 rounded-full" 
+        <div className="absolute -right-3 top-6 z-50 rounded-full border border-border bg-background shadow-md hidden md:block">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 rounded-full"
             onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
           >
             {isSidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
@@ -127,7 +145,7 @@ export default function Layout({ children }: LayoutProps) {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
             const isAllowed = subService.canAccess(item.path.replace('/', '')) || item.path === '/';
-            
+
             if (!isAllowed) {
               return (
                 <div
@@ -154,8 +172,8 @@ export default function Layout({ children }: LayoutProps) {
                 className={cn(
                   "flex items-center rounded-lg transition-all duration-200 group text-muted-foreground",
                   isSidebarCollapsed ? "justify-center py-3" : "px-4 py-3",
-                  isActive 
-                    ? "bg-primary text-primary-foreground shadow-md hover:bg-primary/90" 
+                  isActive
+                    ? "bg-primary text-primary-foreground shadow-md hover:bg-primary/90"
                     : "hover:bg-accent hover:text-accent-foreground"
                 )}
               >
@@ -173,14 +191,14 @@ export default function Layout({ children }: LayoutProps) {
         {/* Subscription Status Banner in Sidebar */}
         {!subState.isActive && subState.plan !== 'lifetime' && !isSidebarCollapsed && (
           <div className="mx-4 mb-4 p-4 rounded-xl bg-destructive/10 border border-destructive/20 animate-in fade-in slide-in-from-bottom-4 duration-500">
-             <div className="flex items-center gap-2 text-destructive mb-2">
-                <ShieldAlert size={16} />
-                <span className="text-[10px] font-black uppercase tracking-widest">Expired</span>
-             </div>
-             <p className="text-[11px] text-muted-foreground leading-tight mb-3">Your license has ended. Most features are locked.</p>
-             <Link to="/subscription">
-               <Button size="sm" variant="destructive" className="w-full h-8 text-[10px] uppercase font-bold tracking-tighter">Renew Now</Button>
-             </Link>
+            <div className="flex items-center gap-2 text-destructive mb-2">
+              <ShieldAlert size={16} />
+              <span className="text-[10px] font-black uppercase tracking-widest">Expired</span>
+            </div>
+            <p className="text-[11px] text-muted-foreground leading-tight mb-3">Your license has ended. Most features are locked.</p>
+            <Link to="/subscription">
+              <Button size="sm" variant="destructive" className="w-full h-8 text-[10px] uppercase font-bold tracking-tighter">Renew Now</Button>
+            </Link>
           </div>
         )}
 
@@ -189,7 +207,7 @@ export default function Layout({ children }: LayoutProps) {
           {!isSidebarCollapsed ? (
             <span className="text-xs font-medium text-muted-foreground">© 2025 OsaTech POS v1.0</span>
           ) : (
-             <span className="text-xs font-bold text-muted-foreground">v1</span>
+            <span className="text-xs font-bold text-muted-foreground">v1</span>
           )}
         </div>
       </aside>
@@ -197,12 +215,21 @@ export default function Layout({ children }: LayoutProps) {
       {/* Main Content Workspace */}
       <main className="flex-1 flex flex-col min-w-0 h-screen transition-all">
         {/* Top Header */}
-        <header className="h-20 bg-card/60 backdrop-blur-md border-b border-border flex items-center justify-between px-8 shrink-0 relative z-20">
+        <header className="h-16 md:h-20 bg-card/70 backdrop-blur-md border-b border-border flex items-center justify-between px-4 sm:px-6 md:px-8 shrink-0 relative z-20">
           <div className="flex items-center gap-4">
-             <div className="h-6 w-px bg-border mx-1 hidden sm:block"></div>
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-               {navigationItems.find((item) => item.path === location.pathname)?.label || 'Dashboard'}
-             </h1>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-9 w-9 rounded-lg md:hidden"
+              onClick={() => setIsMobileNavOpen(true)}
+              aria-label="Open navigation"
+            >
+              <Menu size={18} />
+            </Button>
+            <div className="h-6 w-px bg-border mx-1 hidden sm:block"></div>
+            <h1 className="text-lg sm:text-xl md:text-2xl font-semibold tracking-tight text-foreground truncate max-w-[58vw] sm:max-w-none">
+              {navigationItems.find((item) => item.path === location.pathname)?.label || 'Dashboard'}
+            </h1>
           </div>
 
           <div className="flex items-center gap-4">
@@ -212,9 +239,9 @@ export default function Layout({ children }: LayoutProps) {
         </header>
 
         {/* Dynamic Content Rendering Wrapper */}
-        <div className="flex-1 p-8 overflow-y-auto bg-background/50 relative">
-           <div className="mx-auto w-full max-w-7xl animate-in fade-in slide-in-from-bottom-4 duration-500 h-full flex flex-col">
-              <ErrorBoundary>
+        <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto bg-background/50 relative">
+          <div className="mx-auto w-full max-w-screen-2xl animate-in fade-in slide-in-from-bottom-4 duration-500 h-full flex flex-col">
+            <ErrorBoundary>
               {children}
             </ErrorBoundary>
           </div>
@@ -229,7 +256,7 @@ export default function Layout({ children }: LayoutProps) {
             </span>
           </div>
         )}
-        
+
         {subState.isExpired && !subState.isGracePeriod && subState.plan !== 'none' && (
           <div className="sticky bottom-0 z-50 bg-red-600 text-white p-3 text-center shadow-[0_-4px_12px_rgba(0,0,0,0.1)] flex items-center justify-center gap-2">
             <AlertCircle size={18} />

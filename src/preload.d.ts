@@ -103,6 +103,10 @@ export interface POSApi {
   // Activation
   isActivated: () => Promise<ApiResponse<{ activated: boolean }>>;
   activateApp: (data: { businessName: string, activationKey: string }) => Promise<ApiResponse<void>>;
+  getFingerprint: () => Promise<ApiResponse<string>>;
+  activateAppV2: (licenseKey: string) => Promise<ApiResponse<void>>;
+  generateLicenseKey: (data: any) => Promise<ApiResponse<string>>;
+  onToggleLicenseIssuer: (callback: () => void) => () => void;
 }
 
 declare global {

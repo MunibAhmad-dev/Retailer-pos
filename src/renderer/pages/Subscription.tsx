@@ -11,7 +11,6 @@ import { cn } from '../lib/utils';
 export default function Subscription() {
   const [subState, setSubState] = useState<SubscriptionState | null>(null);
   const [businessName, setBusinessName] = useState('');
-  const [inputBusinessName, setInputBusinessName] = useState('');
   const [activationKey, setActivationKey] = useState('');
   const [isActivating, setIsActivating] = useState(false);
   const { addNotification } = useNotifications();
@@ -44,9 +43,10 @@ export default function Subscription() {
 
     try {
       const settings = await window.api.getSettings();
-      if (settings.success && settings.data && settings.data.business_name) {
-        setBusinessName(settings.data.business_name);
-        setInputBusinessName(settings.data.business_name);
+      if (settings.success && settings.data) {
+        if (settings.data.business_name) {
+          setBusinessName(settings.data.business_name);
+        }
       }
     } catch (e) {
       console.error("Failed to load business name for subscription view");
@@ -55,11 +55,11 @@ export default function Subscription() {
 
   const handleActivate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activationKey || !inputBusinessName) return;
+    if (!activationKey) return;
 
     setIsActivating(true);
     try {
-      const res = await window.api.activateApp({ businessName: inputBusinessName, activationKey });
+      const res = await window.api.activateAppV2(activationKey.trim());
       if (res.success) {
         addNotification("Subscription Renewed", "Your license key has been successfully applied.", "success");
         setActivationKey('');
@@ -174,19 +174,10 @@ export default function Subscription() {
               <Key size={20} className="text-muted-foreground" />
               Renew License
             </CardTitle>
-            <CardDescription>Enter your new license key to add days to your subscription.</CardDescription>
+            <CardDescription>Enter your encrypted fingerprint-locked key.</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleActivate} className="space-y-4">
-              <div className="space-y-2">
-                <Input
-                  type="text"
-                  placeholder="Business Name (must match license)"
-                  value={inputBusinessName}
-                  onChange={(e) => setInputBusinessName(e.target.value)}
-                  className="font-medium"
-                />
-              </div>
               <div className="space-y-2">
                 <Input
                   type="text"
@@ -196,7 +187,7 @@ export default function Subscription() {
                   className="font-mono text-xs"
                 />
               </div>
-              <Button type="submit" disabled={!activationKey || !inputBusinessName || isActivating} className="w-full">
+              <Button type="submit" disabled={!activationKey || isActivating} className="w-full">
                 {isActivating ? 'Verifying...' : 'Apply License Key'}
               </Button>
             </form>

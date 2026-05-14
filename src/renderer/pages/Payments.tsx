@@ -106,7 +106,7 @@ export default function Payments() {
     let html = '';
     const dateStr = new Date(p.date_added).toLocaleString();
     const amountStr = fmtPKR(p.amount);
-    
+
     if (p.type === 'Customer Payment' || p.type === 'Vendor Payment') {
       html = `
         <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; border: 1px solid #e2e8f0; max-width: 600px; margin: auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">
@@ -292,13 +292,13 @@ export default function Payments() {
         <CardHeader className="border-b bg-muted/20 py-4 px-6 flex flex-row items-center justify-between gap-4">
           <div className="w-full flex flex-col md:flex-row gap-2">
             <div className="relative w-full md:w-96">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
-            <Input
-              placeholder="Search by name, type, or notes..."
-              className="pl-10 h-10 bg-background/50 border-border/50 focus:border-primary/50 transition-all"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-            />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
+              <Input
+                placeholder="Search by name, type, or notes..."
+                className="pl-10 h-10 bg-background/50 border-border/50 focus:border-primary/50 transition-all"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+              />
             </div>
             <select className="h-10 rounded-md border bg-background px-2 text-sm" value={dateFilter} onChange={(e) => setDateFilter(e.target.value as any)}>
               <option value="all">All Dates</option>
@@ -390,14 +390,14 @@ export default function Payments() {
                       {isIncoming ? '+' : '-'} {fmtPKR(p.amount)}
                     </TableCell>
                     <TableCell className="text-center pr-6">
-                       <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                         <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500" onClick={() => printReceipt(p)} title="Print Receipt">
-                           <Printer size={15} />
-                         </Button>
-                         <Button variant="ghost" size="icon" className="h-8 w-8 text-emerald-500" onClick={() => shareWhatsApp(p)} title="Share on WhatsApp">
-                           <MessageCircle size={15} />
-                         </Button>
-                       </div>
+                      <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500" onClick={() => printReceipt(p)} title="Print Receipt">
+                          <Printer size={15} />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-emerald-500" onClick={() => shareWhatsApp(p)} title="Share on WhatsApp">
+                          <MessageCircle size={15} />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );

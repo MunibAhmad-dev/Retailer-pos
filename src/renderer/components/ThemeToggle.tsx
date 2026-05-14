@@ -4,20 +4,21 @@ import { Button } from './ui/button';
 import { useTheme } from './ThemeProvider';
 
 export function ThemeToggle() {
-  const { theme, setTheme } = useTheme();
+  const { resolvedTheme, setTheme } = useTheme();
+  const isDark = resolvedTheme === 'dark';
 
   return (
     <Button
       variant="outline"
       size="icon"
-      className="rounded-full h-10 w-10 border-border bg-background hover:bg-accent transition-all duration-300"
-      onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-      title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+      className="rounded-xl h-10 w-10 border-border/80 bg-card hover:bg-accent transition-all duration-300"
+      onClick={() => setTheme(isDark ? 'light' : 'dark')}
+      title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
     >
-      {theme === 'dark' ? (
-        <Sun size={18} className="text-orange-300 animate-in zoom-in spin-in-90 duration-500" />
+      {isDark ? (
+        <Sun size={18} className="text-amber-300 animate-in zoom-in duration-300" />
       ) : (
-        <Moon size={18} className="text-slate-600 animate-in zoom-in spin-in-90 duration-500" />
+        <Moon size={18} className="text-slate-600 animate-in zoom-in duration-300" />
       )}
     </Button>
   );

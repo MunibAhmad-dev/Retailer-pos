@@ -76,6 +76,16 @@ const api = {
   // Activation
   isActivated: () => ipcRenderer.invoke('is-activated'),
   activateApp: (data: { businessName: string, activationKey: string }) => ipcRenderer.invoke('activate-app', data),
+  
+  // New Licensing System V2
+  getFingerprint: () => ipcRenderer.invoke('get-fingerprint'),
+  activateAppV2: (licenseKey: string) => ipcRenderer.invoke('activate-app-v2', licenseKey),
+  generateLicenseKey: (data: any) => ipcRenderer.invoke('generate-license-key', data),
+  onToggleLicenseIssuer: (callback: () => void) => {
+    const subscription = () => callback();
+    ipcRenderer.on('toggle-license-issuer', subscription);
+    return () => ipcRenderer.removeListener('toggle-license-issuer', subscription);
+  },
 
   // Cash Register
   getCurrentRegister: () => ipcRenderer.invoke('get-current-register'),

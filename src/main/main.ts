@@ -9,10 +9,14 @@ import { driveService } from './googleDrive/driveService';
 import { backupService } from './googleDrive/backupService';
 import { restoreService } from './googleDrive/restoreService';
 import MenuBuilder from './menu';
+import { LicenseManager } from './license_manager';
+
 
 const isDev = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
 let db: Database.Database | null = null;
+let licenseManager: LicenseManager | null = null;
+
 
 // Enhanced logging for production
 const logToFile = (level: string, args: any[]) => {
@@ -126,7 +130,20 @@ function checkDatabaseSchema(database: Database.Database) {
       ["financial_transactions", "amount", "REAL"],
       ["products", "product_type", "TEXT DEFAULT 'general'"],
       ["products", "metadata", "TEXT DEFAULT '{}'"],
-      ["stock_adjustments", "date_created", "DATETIME"]
+      ["stock_adjustments", "date_created", "DATETIME"],
+      ["inventory_batches", "notes", "TEXT DEFAULT ''"],
+      ["settings", "owner_full_name", "TEXT DEFAULT ''"],
+      ["settings", "owner_mobile", "TEXT DEFAULT ''"],
+      ["settings", "owner_email", "TEXT DEFAULT ''"],
+      ["settings", "owner_username", "TEXT DEFAULT 'admin'"],
+      ["settings", "owner_password", "TEXT DEFAULT ''"],
+      ["settings", "license_mode", "TEXT DEFAULT 'offline'"],
+      ["settings", "approval_status", "TEXT DEFAULT 'approved'"],
+      ["settings", "last_online_check", "DATETIME"],
+      ["settings", "cloud_backend_url", "TEXT DEFAULT ''"],
+      ["settings", "cloud_backend_token", "TEXT DEFAULT ''"],
+      ["settings", "cloud_last_sync", "DATETIME"],
+      ["settings", "cloud_connected", "INTEGER DEFAULT 0"]
     ];
     for (const [table, col, def] of repairs) {
       try {
@@ -636,6 +653,89 @@ function migrate(database: Database.Database) {
   }
 }
 
+function repairGhostForeignKeys(database: Database.Database) {
+  const tablesToRepair = [
+    {
+      name: 'inventory_batches',
+      createSql: `
+        CREATE TABLE inventory_batches (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          product_id INTEGER NOT NULL,
+          vendor_id INTEGER,
+          purchase_id INTEGER,
+          quantity_added INTEGER NOT NULL,
+          quantity_remaining INTEGER NOT NULL,
+          purchase_price REAL NOT NULL,
+          date_added DATETIME DEFAULT (datetime('now', 'localtime')),
+          notes TEXT DEFAULT '',
+          FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,
+          FOREIGN KEY(vendor_id) REFERENCES vendors(id) ON DELETE SET NULL,
+          FOREIGN KEY(purchase_id) REFERENCES purchases(id) ON DELETE SET NULL
+        )
+      `
+    },
+    {
+      name: 'sale_return_items',
+      createSql: `
+        CREATE TABLE sale_return_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          return_id INTEGER NOT NULL,
+          sale_item_id INTEGER,
+          product_id INTEGER,
+          product_name TEXT,
+          quantity INTEGER NOT NULL,
+          price REAL NOT NULL,
+          FOREIGN KEY(return_id) REFERENCES sale_returns(id) ON DELETE CASCADE,
+          FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL
+        )
+      `
+    },
+    {
+      name: 'purchase_return_items',
+      createSql: `
+        CREATE TABLE purchase_return_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          return_id INTEGER NOT NULL,
+          product_id INTEGER,
+          product_name TEXT,
+          quantity INTEGER NOT NULL,
+          purchase_price REAL NOT NULL,
+          FOREIGN KEY(return_id) REFERENCES purchase_returns(id) ON DELETE CASCADE,
+          FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL
+        )
+      `
+    }
+  ];
+
+  for (const t of tablesToRepair) {
+    try {
+      const fks = database.prepare(`PRAGMA foreign_key_list("${t.name}")`).all() as any[];
+      const hasGhostRef = fks.some((fk) => String(fk.table || '').toLowerCase().includes('_products_old'));
+      if (!hasGhostRef) continue;
+
+      logger.warn(`Detected ghost FK in ${t.name}. Rebuilding table...`);
+      database.exec('PRAGMA foreign_keys = OFF');
+
+      const backupName = `__${t.name}_fix_old`;
+      database.exec(`ALTER TABLE "${t.name}" RENAME TO "${backupName}"`);
+      database.exec(t.createSql);
+
+      const cols = (database.prepare(`PRAGMA table_info("${backupName}")`).all() as any[]).map((c) => c.name);
+      if (cols.length > 0) {
+        const colCsv = cols.map((c) => `"${c}"`).join(',');
+        database.exec(`INSERT INTO "${t.name}" (${colCsv}) SELECT ${colCsv} FROM "${backupName}"`);
+      }
+
+      database.exec(`DROP TABLE "${backupName}"`);
+      database.exec('PRAGMA foreign_keys = ON');
+      logger.info(`Rebuilt ${t.name} successfully to remove ghost FK refs.`);
+    } catch (err) {
+      logger.error(`Failed FK ghost repair for table ${t.name}:`, err);
+      try { database.exec('PRAGMA foreign_keys = ON'); } catch {}
+    }
+  }
+}
+
 function initializeDatabase() {
   try {
     const dbPath = path.join(app.getPath('userData'), 'pos.db');
@@ -730,6 +830,18 @@ function initializeDatabase() {
         store_phone TEXT DEFAULT '',
         store_address TEXT DEFAULT '',
         store_logo TEXT DEFAULT '',
+        owner_full_name TEXT DEFAULT '',
+        owner_mobile TEXT DEFAULT '',
+        owner_email TEXT DEFAULT '',
+        owner_username TEXT DEFAULT 'admin',
+        owner_password TEXT DEFAULT '',
+        license_mode TEXT DEFAULT 'offline',
+        approval_status TEXT DEFAULT 'approved',
+        last_online_check DATETIME,
+        cloud_backend_url TEXT DEFAULT '',
+        cloud_backend_token TEXT DEFAULT '',
+        cloud_last_sync DATETIME,
+        cloud_connected INTEGER DEFAULT 0,
         receipt_footer TEXT DEFAULT 'Thank you for visiting!',
         pos_password TEXT DEFAULT '1234',
         activation_key TEXT DEFAULT '',
@@ -829,6 +941,7 @@ function initializeDatabase() {
         quantity_remaining INTEGER NOT NULL,
         purchase_price REAL NOT NULL,
         date_added DATETIME DEFAULT (datetime('now', 'localtime')),
+        notes TEXT DEFAULT '',
         FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE,
         FOREIGN KEY(vendor_id) REFERENCES vendors(id) ON DELETE SET NULL,
         FOREIGN KEY(purchase_id) REFERENCES purchases(id) ON DELETE SET NULL
@@ -954,12 +1067,18 @@ function initializeDatabase() {
     migrate(db);
     db.exec('PRAGMA foreign_keys = ON');
 
+    // Extra repair pass for hidden FK metadata that can still reference _products_old
+    repairGhostForeignKeys(db);
+
     // Final integrity check
     if (!checkDatabaseSchema(db)) {
       throw new Error('Database schema verification failed after migrations');
     }
 
     logger.info('Database initialized and verified successfully');
+
+    // Initialize License Manager using the shared DB connection
+    licenseManager = new LicenseManager(db!);
   } catch (error) {
     logger.error('Failed to initialize database:', error);
     throw error;
@@ -1107,10 +1226,8 @@ function startBackgroundTasks() {
         logger.error('Background auto-export check failed:', err);
       }
     }, 30 * 60 * 1000); // 30 minutes check
-
-    logger.info('Background tasks initialized');
-  } catch (e) {
-    logger.error('Failed to start background tasks:', e);
+  } catch (error) {
+    logger.error('Failed to start background tasks:', error);
   }
 }
 
@@ -1128,7 +1245,7 @@ function verifyActivationKey(name: string, key: string): { valid: boolean, licen
     if (license.businessName && license.businessName.toLowerCase() === name.toLowerCase() && license.durationDays) {
       return { valid: true, license };
     } else {
-      logger.warn(`License name mismatch or missing duration: Expected "${name}", Got "${license.businessName}". Duration: ${license.durationDays}`);
+      logger.warn('License name mismatch or missing duration: Expected ' + name + ', Got ' + license.businessName + '. Duration: ' + license.durationDays);
     }
 
     return { valid: false, license: null };
@@ -1142,7 +1259,7 @@ function verifyActivationKey(name: string, key: string): { valid: boolean, licen
       if (parts.length === 3) {
         const year = parts[1];
         const hash = crypto.createHash('md5').update(cleanName).digest('hex').substring(0, 4);
-        if (key === `${firstName}-${year}-${hash}`) {
+        if (key === (firstName + '-' + year + '-' + hash)) {
           logger.info('Legacy MD5 license verified.');
           return { valid: true, license: { plan: 'lifetime', isLegacy: true } };
         }
@@ -1154,24 +1271,40 @@ function verifyActivationKey(name: string, key: string): { valid: boolean, licen
 
 ipcMain.handle('is-activated', async () => {
   try {
-    if (!db) throw new Error('Database not initialized');
+    if (!db || !licenseManager) {
+      logger.error('is-activated: Systems not initialized');
+      throw new Error('Systems not initialized');
+    }
+    
+    // Check V2 system first
+    const v2Result = await licenseManager.validateLocalLicense();
+    if (v2Result.valid) {
+      logger.info('is-activated: V2 license valid');
+      return { success: true, activated: true, license: v2Result.data };
+    } else {
+      logger.info('is-activated: V2 license invalid. Reason: ' + v2Result.reason);
+    }
+
+    // Fallback to legacy check
     const settings = db.prepare('SELECT activation_key, business_name, expiry_date FROM settings WHERE id = 1').get() as any;
 
     if (!settings || !settings.activation_key || !settings.business_name) {
+      logger.info('is-activated: No legacy license found in settings');
       return { success: true, activated: false, license: null };
     }
 
     const { valid, license } = verifyActivationKey(settings.business_name, settings.activation_key);
-
-    // For additive system, return the DB expiry_date instead of relying on token
+    
     if (valid && license && !license.isLegacy) {
       if (settings.expiry_date) {
         license.expiry = settings.expiry_date;
       }
     }
 
+    logger.info('is-activated: Legacy check result: ' + valid);
     return { success: true, activated: valid, license };
   } catch (error: any) {
+    logger.error('is-activated: Failed with error: ' + error.message);
     return { success: false, error: error.message };
   }
 });
@@ -1190,7 +1323,7 @@ ipcMain.handle('activate-app', async (_, { businessName, activationKey }: { busi
     if (license.isLegacy) {
       db.prepare('UPDATE settings SET business_name = ?, activation_key = ? WHERE id = 1')
         .run(businessName, activationKey);
-      logger.info(`Legacy app activated for: ${businessName}`);
+      logger.info('Legacy app activated for: ' + businessName);
       return { success: true };
     }
 
@@ -1202,15 +1335,11 @@ ipcMain.handle('activate-app', async (_, { businessName, activationKey }: { busi
       throw new Error('This license key has already been used.');
     }
 
-    // If we're activating a new JSON key, we always overwrite the old one
-    // even if the old one was "lifetime". The user is explicitly renewing/changing.
     usedIds.push(license.licenseId);
 
-    // Calculate new expiry
     const now = new Date();
     let currentExpiry: Date;
 
-    // If switching from legacy MD5 (which has no expiry_date) or expired, start from today
     if (!settings.expiry_date || settings.expiry_date === 'lifetime') {
       currentExpiry = now;
     } else {
@@ -1226,10 +1355,54 @@ ipcMain.handle('activate-app', async (_, { businessName, activationKey }: { busi
     db.prepare('UPDATE settings SET business_name = ?, activation_key = ?, expiry_date = ?, used_license_ids = ? WHERE id = 1')
       .run(businessName, activationKey, newExpiryIso, JSON.stringify(usedIds));
 
-    logger.info(`App activated for: ${businessName}. Added ${license.durationDays} days. New expiry: ${newExpiryIso}`);
+    logger.info('App activated for: ' + businessName + '. Added ' + license.durationDays + ' days. New expiry: ' + newExpiryIso);
     return { success: true };
   } catch (error: any) {
     logger.error('Activation failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-fingerprint', async () => {
+  try {
+    if (!licenseManager) throw new Error('License manager not initialized');
+    const fingerprint = await licenseManager.getDeviceFingerprint();
+    return { success: true, data: fingerprint };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('activate-app-v2', async (_, licenseKey: string) => {
+  try {
+    if (!licenseManager) throw new Error('License manager not initialized');
+    logger.info('activate-app-v2: Attempting activation...');
+    const result = await licenseManager.activateLicense(licenseKey);
+    if (result.success) {
+      logger.info('activate-app-v2: Activation successful');
+    } else {
+      logger.error('activate-app-v2: Activation failed. Error: ' + result.error);
+    }
+    return result;
+  } catch (error: any) {
+    logger.error('activate-app-v2: Fatal error: ' + error.message);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('generate-license-key', async (_, data: any) => {
+  try {
+    if (!licenseManager) throw new Error('License manager not initialized');
+    const license = licenseManager.buildLicense({
+      issuedTo: data?.issuedTo || data?.businessName || '',
+      issuedForFingerprint: data?.issuedForFingerprint || data?.fingerprint || '',
+      durationValue: Number(data?.durationValue || 1),
+      durationUnit: data?.durationUnit || 'days',
+      maxDevices: Number(data?.maxDevices || 1)
+    });
+    const licenseKey = licenseManager.encryptLicense(license);
+    return { success: true, data: licenseKey };
+  } catch (error: any) {
     return { success: false, error: error.message };
   }
 });
@@ -1369,6 +1542,24 @@ ipcMain.handle('delete-product', async (_, id: number) => {
 ipcMain.handle('get-settings', async () => {
   try {
     if (!db) throw new Error('Database not initialized');
+    db.prepare(`
+      UPDATE settings
+      SET
+        owner_full_name = COALESCE(owner_full_name, ''),
+          owner_mobile = COALESCE(owner_mobile, ''),
+          owner_email = COALESCE(owner_email, ''),
+          owner_username = COALESCE(NULLIF(owner_username, ''), 'admin'),
+          owner_password = COALESCE(owner_password, ''),
+          license_mode = COALESCE(NULLIF(license_mode, ''), 'offline'),
+          approval_status = COALESCE(NULLIF(approval_status, ''), 'approved'),
+          cloud_backend_url = COALESCE(cloud_backend_url, ''),
+          cloud_backend_token = COALESCE(cloud_backend_token, ''),
+          cloud_connected = COALESCE(cloud_connected, 0),
+          store_name = COALESCE(NULLIF(store_name, ''), 'Retailer Shop'),
+          store_phone = COALESCE(store_phone, ''),
+          store_address = COALESCE(store_address, '')
+      WHERE id = 1
+    `).run();
     const settings = db.prepare('SELECT * FROM settings WHERE id = 1').get();
     return { success: true, data: settings };
   } catch (error: any) {
@@ -1392,22 +1583,51 @@ ipcMain.handle('update-settings', async (_, settings: any) => {
           receipt_size = ?,
           low_stock_threshold = ?,
           auto_export_path = ?,
-          auto_export_enabled = ?
+          auto_export_enabled = ?,
+          owner_full_name = ?,
+          owner_mobile = ?,
+          owner_email = ?,
+          owner_password = ?,
+          license_mode = ?,
+          approval_status = ?,
+          last_online_check = ?,
+          cloud_backend_url = ?,
+          cloud_backend_token = ?,
+          cloud_last_sync = ?,
+          cloud_connected = ?
       WHERE id = 1
     `);
 
+    const existing = db.prepare('SELECT * FROM settings WHERE id = 1').get() as any;
+
     stmt.run(
-      settings.store_name || 'Retailer Shop',
-      settings.store_phone || '',
-      settings.store_address || '',
-      settings.store_logo || '',
-      settings.receipt_footer || 'Thank you for visiting!',
-      settings.pos_password || '1234',
-      settings.receipt_size || 'thermal',
-      settings.low_stock_threshold ?? 10,
-      settings.auto_export_path || '',
-      settings.auto_export_enabled ? 1 : 0
+      settings.store_name ?? existing?.store_name ?? 'Retailer Shop',
+      settings.store_phone ?? existing?.store_phone ?? '',
+      settings.store_address ?? existing?.store_address ?? '',
+      settings.store_logo ?? existing?.store_logo ?? '',
+      settings.receipt_footer ?? existing?.receipt_footer ?? 'Thank you for visiting!',
+      settings.pos_password ?? existing?.pos_password ?? '1234',
+      settings.receipt_size ?? existing?.receipt_size ?? 'thermal',
+      settings.low_stock_threshold ?? existing?.low_stock_threshold ?? 10,
+      settings.auto_export_path ?? existing?.auto_export_path ?? '',
+      settings.auto_export_enabled !== undefined ? (settings.auto_export_enabled ? 1 : 0) : (existing?.auto_export_enabled ? 1 : 0),
+      settings.owner_full_name ?? existing?.owner_full_name ?? '',
+      settings.owner_mobile ?? existing?.owner_mobile ?? '',
+      settings.owner_email ?? existing?.owner_email ?? '',
+      settings.owner_password ?? existing?.owner_password ?? '',
+      settings.license_mode ?? existing?.license_mode ?? 'offline',
+      settings.approval_status ?? existing?.approval_status ?? 'approved',
+      settings.last_online_check ?? existing?.last_online_check ?? null,
+      settings.cloud_backend_url ?? existing?.cloud_backend_url ?? '',
+      settings.cloud_backend_token ?? existing?.cloud_backend_token ?? '',
+      settings.cloud_last_sync ?? existing?.cloud_last_sync ?? null,
+      settings.cloud_connected !== undefined ? (settings.cloud_connected ? 1 : 0) : (existing?.cloud_connected ? 1 : 0)
     );
+
+    // Username is intentionally immutable from settings screen.
+    if (!existing?.owner_username) {
+      db.prepare("UPDATE settings SET owner_username = 'admin' WHERE id = 1").run();
+    }
 
     const updatedSettings = db.prepare('SELECT * FROM settings WHERE id = 1').get();
     logger.info('Settings updated');
@@ -1701,6 +1921,21 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
       return result.count;
     };
 
+    const profitSince = (since: string) => {
+      const result = db!.prepare(`
+        SELECT COALESCE(SUM(
+          si.quantity * (
+            si.price - COALESCE(NULLIF(si.purchase_price, 0), NULLIF(p.purchase_price, 0), 0)
+          )
+        ), 0) as profit
+        FROM sale_items si
+        INNER JOIN sales s ON si.sale_id = s.id
+        LEFT JOIN products p ON (p.id = si.product_id OR (si.product_id IS NULL AND p.name = si.product_name))
+        WHERE s.date_created >= ? AND LOWER(COALESCE(s.status, '')) IN ('completed', 'paid', 'partial')
+      `).get(since) as any;
+      return Number(result?.profit || 0);
+    };
+
     let periodQuery = '';
     let periodParams: any[] = [];
     if (sqlStart && sqlEnd) {
@@ -1717,16 +1952,74 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
     let periodQueryS = periodQuery ? periodQuery.replace(/date_created/g, 's.date_created') : '';
 
     const filteredProfit = (db.prepare(`
-      SELECT COALESCE(SUM(si.quantity * (si.price - si.purchase_price)), 0) as profit
+      SELECT COALESCE(SUM(
+        si.quantity * (
+          si.price - COALESCE(NULLIF(si.purchase_price, 0), NULLIF(p.purchase_price, 0), 0)
+        )
+      ), 0) as profit
       FROM sale_items si
       INNER JOIN sales s ON si.sale_id = s.id
+      LEFT JOIN products p ON (p.id = si.product_id OR (si.product_id IS NULL AND p.name = si.product_name))
       WHERE LOWER(COALESCE(s.status, '')) IN ('completed', 'paid', 'partial') ${periodQueryS}
     `).get(...periodParams) as any).profit;
+
+    const productSalesWindows = db.prepare(`
+      SELECT
+        p.id,
+        p.name,
+        p.stock,
+        COALESCE(SUM(CASE WHEN s.date_created >= ? THEN si.quantity ELSE 0 END), 0) as qty_week,
+        COALESCE(SUM(CASE WHEN s.date_created >= ? THEN si.quantity * si.price ELSE 0 END), 0) as amount_week,
+        COALESCE(SUM(CASE WHEN s.date_created >= ? THEN si.quantity ELSE 0 END), 0) as qty_month,
+        COALESCE(SUM(CASE WHEN s.date_created >= ? THEN si.quantity * si.price ELSE 0 END), 0) as amount_month,
+        MAX(s.date_created) as last_sold_at
+      FROM products p
+      LEFT JOIN sale_items si ON si.product_name = p.name
+      LEFT JOIN sales s ON s.id = si.sale_id AND LOWER(COALESCE(s.status, '')) IN ('completed', 'paid', 'partial')
+      GROUP BY p.id, p.name, p.stock
+      ORDER BY amount_month DESC, qty_month DESC, p.name ASC
+    `).all(weekStart, weekStart, monthStart, monthStart) as any[];
+
+    const monthlyMatrixRows = db.prepare(`
+      SELECT
+        si.product_name as product_name,
+        strftime('%Y-%m', s.date_created) as ym,
+        COALESCE(SUM(si.quantity), 0) as qty,
+        COALESCE(SUM(si.quantity * si.price), 0) as amount
+      FROM sale_items si
+      INNER JOIN sales s ON s.id = si.sale_id
+      WHERE LOWER(COALESCE(s.status, '')) IN ('completed', 'paid', 'partial')
+        AND s.date_created >= datetime('now', '-12 months')
+      GROUP BY si.product_name, ym
+      ORDER BY si.product_name ASC, ym ASC
+    `).all() as any[];
+
+    const bestMonthByProduct = new Map<string, any>();
+    for (const row of monthlyMatrixRows) {
+      const key = row.product_name;
+      const curr = bestMonthByProduct.get(key);
+      if (!curr || Number(row.amount) > Number(curr.amount)) {
+        bestMonthByProduct.set(key, row);
+      }
+    }
+
+    const deadProducts = productSalesWindows
+      .filter((p) => Number(p.qty_month || 0) === 0)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        stock: Number(p.stock || 0),
+        lastSoldAt: p.last_sold_at || null
+      }))
+      .slice(0, 100);
 
     const stats = {
       totalSalesToday: sumSince(todayStart),
       totalSalesWeek: sumSince(weekStart),
       totalSalesMonth: sumSince(monthStart),
+      totalActualRevenueToday: profitSince(todayStart),
+      totalActualRevenueWeek: profitSince(weekStart),
+      totalActualRevenueMonth: profitSince(monthStart),
       totalTransactions: (db.prepare('SELECT COUNT(*) as count FROM sales').get() as any).count,
       totalTransactionsToday: countSince(todayStart),
       totalProducts: (db.prepare('SELECT COUNT(*) as count FROM products').get() as any).count,
@@ -1775,6 +2068,10 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
       lowStockProducts: db.prepare(`
         SELECT id, name, stock, price FROM products WHERE stock <= 10 ORDER BY stock ASC LIMIT 8
       `).all(),
+      productSalesWindows,
+      monthlyItemSales: monthlyMatrixRows,
+      bestMonthByProduct: Array.from(bestMonthByProduct.values()),
+      deadProducts,
       // ---- Loan / Qaraz Analytics (Period Aware) ----
       totalOutstandingLoans: (db.prepare(`
         SELECT COALESCE(SUM(bal), 0) as total FROM (
@@ -2487,6 +2784,11 @@ ipcMain.handle('import-data', async (_, data: any) => {
       throw new Error('No table data found in backup payload');
     }
 
+    const importedProducts = Array.isArray(importTables.products) ? importTables.products : [];
+    const backupIncludesProductStock = importedProducts.some((row: any) =>
+      row && typeof row === 'object' && Object.prototype.hasOwnProperty.call(row, 'stock')
+    );
+
     // Attempt backup before import
     try {
       const backupPath = path.join(app.getPath('userData'), `backup_before_import_${Date.now()}.db`);
@@ -2558,8 +2860,8 @@ ipcMain.handle('import-data', async (_, data: any) => {
         }
       }
 
-      // Keep product stock consistent with restored batches when batch rows exist.
-      if (existingTables.has('inventory_batches') && existingTables.has('products')) {
+      // Rebuild product stock from batches only for legacy backups that do not include products.stock.
+      if (!backupIncludesProductStock && existingTables.has('inventory_batches') && existingTables.has('products')) {
         db!.prepare(`
           UPDATE products
           SET stock = COALESCE((
@@ -2989,9 +3291,9 @@ ipcMain.handle('create-stock-adjustment', async (_, data: { product_id: number; 
       } else {
         // Increase: Create a new correction batch
         db!.prepare(`
-          INSERT INTO inventory_batches (product_id, quantity_added, quantity_remaining, purchase_price, date_added, notes)
-          VALUES (?, ?, ?, ?, datetime('now', 'localtime'), ?)
-        `).run(product_id, absQty, absQty, product.purchase_price || 0, `Adjustment: ${reason}`);
+          INSERT INTO inventory_batches (product_id, quantity_added, quantity_remaining, purchase_price, date_added)
+          VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
+        `).run(product_id, absQty, absQty, product.purchase_price || 0);
       }
 
       // 3. Update master product stock count
@@ -3679,16 +3981,33 @@ ipcMain.handle('get-balance-sheet', async (_, args: { startDate?: string; endDat
     // Inventory Value (at cost) - no date filter needed
     const inventoryValue = (db.prepare("SELECT COALESCE(SUM(stock * purchase_price), 0) as total FROM products").get() as any).total;
 
-    // Receivables
+    // Receivables (customer-level net outstanding)
+    // This avoids false balances when payments are recorded without sale_id links.
     const receivables = (db.prepare(`
-        SELECT SUM(remaining) FROM (
-          SELECT CAST(s.total AS REAL) - 
-                 COALESCE((SELECT SUM(CAST(amount AS REAL)) FROM customer_payments WHERE sale_id = s.id), 0) -
-                 COALESCE((SELECT SUM(CAST(total_returned AS REAL)) FROM sale_returns WHERE sale_id = s.id), 0) as remaining
-          FROM sales s 
-          WHERE (s.status IS NULL OR LOWER(s.status) != 'cancelled')
-        ) WHERE remaining > 0.5
-    `).get() as any)['SUM(remaining)'] || 0;
+      SELECT COALESCE(SUM(bal), 0) as total FROM (
+        SELECT c.id,
+          COALESCE((
+            SELECT SUM(CAST(s.total AS REAL))
+            FROM sales s
+            WHERE s.customer_id = c.id
+              AND (s.status IS NULL OR LOWER(s.status) != 'cancelled')
+          ), 0)
+          -
+          COALESCE((
+            SELECT SUM(CAST(p.amount AS REAL))
+            FROM customer_payments p
+            WHERE p.customer_id = c.id
+          ), 0)
+          -
+          COALESCE((
+            SELECT SUM(CAST(sr.total_returned AS REAL))
+            FROM sale_returns sr
+            JOIN sales s2 ON sr.sale_id = s2.id
+            WHERE s2.customer_id = c.id
+          ), 0) as bal
+        FROM customers c
+      ) WHERE bal > 0.5
+    `).get() as any).total || 0;
 
     // Payables (AP)
     const payables = (db.prepare(`
@@ -3706,9 +4025,12 @@ ipcMain.handle('get-balance-sheet', async (_, args: { startDate?: string; endDat
 
     // COGS
     const cogs = (db.prepare(`
-      SELECT COALESCE(SUM(si.purchase_price * si.quantity), 0) as total 
+      SELECT COALESCE(SUM(
+        COALESCE(NULLIF(si.purchase_price, 0), NULLIF(p.purchase_price, 0), 0) * si.quantity
+      ), 0) as total 
       FROM sale_items si 
       JOIN sales s ON si.sale_id = s.id 
+      LEFT JOIN products p ON (p.id = si.product_id OR (si.product_id IS NULL AND p.name = si.product_name))
       WHERE s.status = 'Completed' AND ${salesDateFilter.replace(/date_created/g, 's.date_created')}
     `).get(...salesParams) as any).total;
 
@@ -3745,6 +4067,9 @@ ipcMain.handle('get-balance-sheet', async (_, args: { startDate?: string; endDat
         inventoryValue,
         receivables,
         payables,
+        zakatRate: 0.025,
+        zakatableAssetsGross: inventoryValue + receivables,
+        zakatableAssetsNet: Math.max(0, inventoryValue + receivables - payables),
         revenue,
         cogs,
         expenses,
@@ -3977,10 +4302,20 @@ ipcMain.handle('get-logo', async () => {
 app.whenReady().then(async () => {
   try {
     await initializeDatabase();
+    
     await createWindow();
 
     const menuBuilder = new MenuBuilder(mainWindow!);
     menuBuilder.buildMenu();
+    
+    // Hidden shortcut for License Issuer: Ctrl+Shift+L
+    mainWindow?.webContents.on('before-input-event', (event, input) => {
+      if (input.control && input.shift && input.key.toLowerCase() === 'l') {
+        mainWindow?.webContents.send('toggle-license-issuer');
+        event.preventDefault();
+      }
+    });
+
 
     startBackgroundTasks();
 

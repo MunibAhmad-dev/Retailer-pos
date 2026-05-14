@@ -37,7 +37,7 @@ export default function Purchases() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [cart, setCart] = useState<PurchaseItem[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  
+
   const [selectedVendorId, setSelectedVendorId] = useState<number | ''>('');
   const [vendorSearch, setVendorSearch] = useState('');
   const [amountPaid, setAmountPaid] = useState('');
@@ -75,14 +75,14 @@ export default function Purchases() {
     if (existing) {
       setCart(cart.map((i) => i.id === key ? { ...i, quantity: i.quantity + 1 } : i));
     } else {
-      setCart([...cart, { 
-        id: key, 
-        product_id: product.id, 
-        name: product.name, 
-        purchase_price: product.purchase_price || 0, 
+      setCart([...cart, {
+        id: key,
+        product_id: product.id,
+        name: product.name,
+        purchase_price: product.purchase_price || 0,
         selling_price: product.price || 0, // Initialize with current selling price
-        quantity: 1, 
-        stock: product.stock 
+        quantity: 1,
+        stock: product.stock
       }]);
     }
   };
@@ -155,8 +155,8 @@ export default function Purchases() {
           </div>
           <div className="relative mt-2">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
-            <Input 
-              placeholder="Search products by name or barcode..." 
+            <Input
+              placeholder="Search products by name or barcode..."
               className="pl-10 h-12 text-lg font-medium shadow-inner"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -167,7 +167,7 @@ export default function Purchases() {
         <CardContent className="flex-1 overflow-y-auto p-0 flex flex-col bg-muted/5">
           <div className="flex-1">
             {filteredProducts.slice(0, 30).map((product: Product) => (
-              <div 
+              <div
                 key={product.id}
                 className="flex justify-between items-center p-3 border-b hover:bg-muted/30 cursor-pointer transition-colors"
                 onClick={() => addProductToCart(product)}
@@ -192,10 +192,10 @@ export default function Purchases() {
       {/* Cart (Incoming Items) */}
       <Card className="flex flex-col lg:w-[400px] min-w-[340px] shrink-0 border-border/60 shadow-lg bg-card max-h-full">
         <CardHeader className="p-4 py-3 border-b bg-muted/30 flex-row flex justify-between items-center">
-          <CardTitle className="text-base font-bold flex items-center gap-2"><Truck size={18}/> Incoming Delivery</CardTitle>
+          <CardTitle className="text-base font-bold flex items-center gap-2"><Truck size={18} /> Incoming Delivery</CardTitle>
           {cart.length > 0 && <Button variant="ghost" size="sm" onClick={() => setCart([])} className="text-destructive h-7">Clear</Button>}
         </CardHeader>
-        
+
         <CardContent className="flex-1 overflow-y-auto p-3 space-y-2">
           {cart.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-60">
@@ -206,7 +206,7 @@ export default function Purchases() {
             const originalProduct = products.find(p => p.id === item.product_id);
             const originalCost = originalProduct?.purchase_price || 0;
             const priceDiff = item.purchase_price - originalCost;
-            
+
             return (
               <div key={item.id} className="flex flex-col gap-2 p-3 rounded-lg border bg-card shadow-sm border-border/60">
                 <div className="flex justify-between items-start font-bold text-sm leading-tight">
@@ -215,13 +215,13 @@ export default function Purchases() {
                     <Trash2 size={12} />
                   </Button>
                 </div>
-                
+
                 <div className="grid grid-cols-2 gap-3 mt-1">
                   <div className="space-y-1">
                     <label className="text-[10px] uppercase font-bold text-muted-foreground">Quantity</label>
-                    <Input 
+                    <Input
                       type="text" className="h-8 text-sm font-bold bg-muted/20"
-                      value={item.quantity || ''} 
+                      value={item.quantity || ''}
                       onChange={(e) => updateQty(item.id, e.target.value)}
                       onFocus={e => e.target.select()}
                     />
@@ -235,9 +235,9 @@ export default function Purchases() {
                         </span>
                       )}
                     </div>
-                    <Input 
+                    <Input
                       type="text" className={cn("h-8 text-sm font-bold", priceDiff !== 0 ? "border-amber-500/50 bg-amber-500/5" : "bg-muted/20")}
-                      value={item.purchase_price !== undefined ? Math.round(item.purchase_price) : ''} 
+                      value={item.purchase_price !== undefined ? Math.round(item.purchase_price) : ''}
                       onChange={(e) => updatePrice(item.id, e.target.value)}
                       onFocus={e => e.target.select()}
                     />
@@ -251,7 +251,7 @@ export default function Purchases() {
                     <span className="text-[9px] text-muted-foreground/60 italic">Curr: Rs.{Math.round(originalProduct?.price || 0)}</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Input 
+                    <Input
                       placeholder="New Sale Price"
                       className="w-24 h-7 text-[11px] font-bold border-primary/20 bg-primary/5 focus:border-primary"
                       value={item.selling_price !== undefined ? Math.round(item.selling_price) : ''}
@@ -274,8 +274,8 @@ export default function Purchases() {
             <span>Bill Total:</span>
             <span className="text-primary">Rs. {total.toLocaleString()}</span>
           </div>
-          <Button 
-            className="w-full h-12 text-lg font-bold bg-green-600 hover:bg-green-700" 
+          <Button
+            className="w-full h-12 text-lg font-bold bg-green-600 hover:bg-green-700"
             disabled={cart.length === 0}
             onClick={() => setShowCheckoutModal(true)}
           >
@@ -298,8 +298,8 @@ export default function Purchases() {
                 <div className="relative space-y-2">
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} />
-                    <Input 
-                      placeholder="Type vendor name..." 
+                    <Input
+                      placeholder="Type vendor name..."
                       value={vendorSearch}
                       onChange={(e) => {
                         setVendorSearch(e.target.value);
@@ -308,8 +308,8 @@ export default function Purchases() {
                       className="pl-9 h-11 text-sm bg-background border-border shadow-sm"
                     />
                     {selectedVendorId && (
-                      <Button 
-                        variant="ghost" size="icon" 
+                      <Button
+                        variant="ghost" size="icon"
                         className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 text-muted-foreground hover:text-foreground"
                         onClick={() => {
                           setSelectedVendorId('');
@@ -327,8 +327,8 @@ export default function Purchases() {
                         <div className="p-4 text-center text-xs text-muted-foreground italic">No vendors found.</div>
                       ) : (
                         filteredVendors.map(v => (
-                          <div 
-                            key={v.id} 
+                          <div
+                            key={v.id}
                             className="p-3 hover:bg-accent cursor-pointer border-b border-border/40 last:border-0 transition-colors flex items-center justify-between"
                             onClick={() => {
                               setSelectedVendorId(v.id);
@@ -363,20 +363,20 @@ export default function Purchases() {
                 </div>
                 <div className="space-y-2 mt-4">
                   <label className="text-sm font-semibold">Amount Paid Today (Rs.)</label>
-                  <Input 
-                    type="text" 
-                    value={amountPaid} 
+                  <Input
+                    type="text"
+                    value={amountPaid}
                     onChange={(e) => {
                       const val = e.target.value.replace(/[^0-9]/g, '');
                       setAmountPaid(val);
-                    }} 
+                    }}
                     placeholder="0"
                     className="font-bold text-lg"
                   />
                   {selectedVendorId && (
-                     <p className="text-xs text-muted-foreground mt-1">
-                       Remaining Rs. {Math.max(0, total - (parseFloat(amountPaid) || 0)).toLocaleString()} will be added to the vendor's payable balance.
-                     </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Remaining Rs. {Math.max(0, total - (parseFloat(amountPaid) || 0)).toLocaleString()} will be added to the vendor's payable balance.
+                    </p>
                   )}
                 </div>
               </div>
@@ -384,7 +384,7 @@ export default function Purchases() {
             <CardFooter className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowCheckoutModal(false)}>Cancel</Button>
               <Button onClick={processPurchase} disabled={isProcessing} className="flex-1 bg-green-600 hover:bg-green-700">
-                {isProcessing ? <RefreshCw className="animate-spin mr-2" size={16}/> : <CheckCircle className="mr-2" size={16}/>}
+                {isProcessing ? <RefreshCw className="animate-spin mr-2" size={16} /> : <CheckCircle className="mr-2" size={16} />}
                 Confirm
               </Button>
             </CardFooter>

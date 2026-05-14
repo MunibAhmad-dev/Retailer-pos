@@ -12,12 +12,18 @@ import { useNotifications } from '../components/NotificationProvider';
 import { useLanguage } from '../components/LanguageProvider';
 import { cn } from '../lib/utils';
 import * as XLSX from 'xlsx';
+import { subService } from '../services/subscription';
 
 interface SettingsData {
   store_name: string;
   store_phone: string;
   store_address: string;
   store_logo: string;
+  owner_full_name: string;
+  owner_mobile: string;
+  owner_email: string;
+  owner_username: string;
+  owner_password: string;
   receipt_footer: string;
   pos_password: string;
   low_stock_threshold: number;
@@ -30,6 +36,7 @@ interface SettingsData {
 
 const defaultSettings: SettingsData = {
   store_name: '', store_phone: '', store_address: '',
+  owner_full_name: '', owner_mobile: '', owner_email: '', owner_username: 'admin', owner_password: '',
   store_logo: '', receipt_footer: 'Thank you for visiting!', pos_password: '1234',
   low_stock_threshold: 10,
   receipt_size: 'thermal',
@@ -48,6 +55,7 @@ export default function Settings() {
   const [isSaving, setIsSaving] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [driveStatus, setDriveStatus] = useState<{ connected: boolean; lastBackup: string | null }>({ connected: false, lastBackup: null });
+  const [subscriptionInfo, setSubscriptionInfo] = useState<any>(null);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [availableBackups, setAvailableBackups] = useState<any[]>([]);
@@ -78,16 +86,17 @@ export default function Settings() {
       setDriveStatus(status);
     };
     fetchStatus();
+    subService.initialize().then((s) => setSubscriptionInfo(s)).catch(() => setSubscriptionInfo(subService.getState()));
     const interval = setInterval(fetchStatus, 10000); // Poll every 10s
-    
+
     // Subscribe to restore progress
     const unsubscribe = window.api.onRestoreProgress((data) => {
-       setRestoreProgress(data);
+      setRestoreProgress(data);
     });
 
     return () => {
-       clearInterval(interval);
-       unsubscribe();
+      clearInterval(interval);
+      unsubscribe();
     };
   }, []);
 
@@ -182,9 +191,9 @@ export default function Settings() {
     const date = new Date(dateStr);
     const now = new Date();
     const isToday = date.toDateString() === now.toDateString();
-    return (isToday ? "Today, " : "") + date.toLocaleString('en-PK', { 
-       day: '2-digit', month: 'short', year: 'numeric', 
-       hour: '2-digit', minute: '2-digit', hour12: true 
+    return (isToday ? "Today, " : "") + date.toLocaleString('en-PK', {
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: true
     });
   };
 
@@ -208,6 +217,11 @@ export default function Settings() {
           invoice_notes: (res.data as any).invoice_notes || '',
           auto_export_path: res.data.auto_export_path || '',
           auto_export_enabled: !!res.data.auto_export_enabled,
+          owner_full_name: (res.data as any).owner_full_name || '',
+          owner_mobile: (res.data as any).owner_mobile || '',
+          owner_email: (res.data as any).owner_email || '',
+          owner_username: (res.data as any).owner_username || 'admin',
+          owner_password: (res.data as any).owner_password || '',
         });
         if (res.data.store_logo) setPreviewLogo(res.data.store_logo);
       }
@@ -544,6 +558,25 @@ export default function Settings() {
             <CardDescription>Details printed externally</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-semibold">Full Name</label>
+                <Input
+                  value={settings.owner_full_name}
+                  onChange={(e) => setSettings({ ...settings, owner_full_name: e.target.value })}
+                  placeholder="e.g. Munib Ahmad"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold">Username (Locked)</label>
+                <Input
+                  value={settings.owner_username}
+                  disabled
+                  placeholder="admin"
+                />
+              </div>
+            </div>
+
             <div className="space-y-2">
               <label className="text-sm font-semibold">Retailer Shop Name <span className="text-destructive">*</span></label>
               <div className="relative">
@@ -559,6 +592,31 @@ export default function Settings() {
                   <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground opacity-50" size={16} />
                   <Input type="tel" value={settings.store_phone} onChange={(e) => setSettings({ ...settings, store_phone: e.target.value })} placeholder="+92 300 1234567" className="pl-9" />
                 </div>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-semibold">Mobile Number</label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground opacity-50" size={16} />
+                  <Input
+                    type="tel"
+                    value={settings.owner_mobile}
+                    onChange={(e) => setSettings({ ...settings, owner_mobile: e.target.value })}
+                    placeholder="+92 300 1234567"
+                    className="pl-9"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-semibold">Email (Optional)</label>
+                <Input
+                  type="email"
+                  value={settings.owner_email}
+                  onChange={(e) => setSettings({ ...settings, owner_email: e.target.value })}
+                  placeholder="owner@example.com"
+                />
               </div>
               <div className="space-y-2 border border-dashed rounded-lg p-3 bg-muted/10 relative overflow-hidden group">
                 {/* Mini Invoice Preview within form */}
@@ -815,224 +873,251 @@ export default function Settings() {
 
         {/* Google Drive Cloud Backup */}
         <Card className="shadow-lg border-blue-500/20 bg-blue-500/5 overflow-hidden">
-           <div className="h-1.5 w-full bg-blue-500" />
-           <CardHeader className="pb-4">
-              <div className="flex items-center justify-between">
-                 <div className="space-y-1">
-                    <CardTitle className="flex items-center gap-2 text-blue-700">
-                       <Cloud size={20} className="text-blue-500" /> Google Drive Backup
-                    </CardTitle>
-                    <CardDescription>Secure your data in the cloud automatically</CardDescription>
-                 </div>
-                 <Badge variant={driveStatus.connected ? "default" : "outline"} className={cn(
-                    "px-3 py-1 text-xs font-bold gap-1.5",
-                    driveStatus.connected ? "bg-emerald-500 hover:bg-emerald-600 border-none" : "text-muted-foreground border-slate-300"
-                 )}>
-                    {driveStatus.connected ? (
-                       <><CheckCircle2 size={12} /> Connected</>
-                    ) : (
-                       <><CloudOff size={12} /> Not Linked</>
-                    )}
-                 </Badge>
+          <div className="h-1.5 w-full bg-blue-500" />
+          <CardHeader className="pb-4">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <CardTitle className="flex items-center gap-2 text-blue-700">
+                  <Cloud size={20} className="text-blue-500" /> Google Drive Backup
+                </CardTitle>
+                <CardDescription>Secure your data in the cloud automatically</CardDescription>
               </div>
-           </CardHeader>
-           <CardContent className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                 <div className="p-4 rounded-xl bg-white/50 border border-blue-100 shadow-sm flex items-center gap-4">
-                    <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
-                       <Globe size={20} />
-                    </div>
-                    <div>
-                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Network Mode</p>
-                       <p className="text-sm font-bold text-slate-700">Cloud Sync Enabled</p>
-                    </div>
-                 </div>
-
-                 <div className="p-4 rounded-xl bg-white/50 border border-blue-100 shadow-sm flex items-center gap-4">
-                    <div className="h-10 w-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
-                       <ShieldCheck size={20} />
-                    </div>
-                    <div>
-                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Security</p>
-                       <p className="text-sm font-bold text-slate-700">AES-256 Local Encryption</p>
-                    </div>
-                 </div>
-
-                 <div className="p-4 rounded-xl bg-white/50 border border-blue-100 shadow-sm flex items-center gap-4">
-                    <div className="h-10 w-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
-                       <Activity size={20} />
-                    </div>
-                    <div>
-                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Last Backup</p>
-                       <p className="text-sm font-bold text-slate-700">{formatLastBackup(driveStatus.lastBackup)}</p>
-                    </div>
-                 </div>
+              <Badge variant={driveStatus.connected ? "default" : "outline"} className={cn(
+                "px-3 py-1 text-xs font-bold gap-1.5",
+                driveStatus.connected ? "bg-emerald-500 hover:bg-emerald-600 border-none" : "text-muted-foreground border-border"
+              )}>
+                {driveStatus.connected ? (
+                  <><CheckCircle2 size={12} /> Connected</>
+                ) : (
+                  <><CloudOff size={12} /> Not Linked</>
+                )}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-4 rounded-xl bg-card/70 border border-border shadow-sm flex items-center gap-4">
+                <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                  <Globe size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">Network Mode</p>
+                  <p className="text-sm font-bold text-foreground">Cloud Sync Enabled</p>
+                </div>
               </div>
 
-              <div className="flex flex-col sm:flex-row items-center gap-4 pt-2">
-                 {!driveStatus.connected ? (
-                    <Button 
-                       type="button" 
-                       onClick={handleConnectDrive} 
-                       disabled={isConnecting}
-                       className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200 gap-2 h-11 px-8 font-bold"
-                    >
-                       {isConnecting ? <Loader2 size={18} className="animate-spin" /> : <Globe size={18} />}
-                       {isConnecting ? 'Linking Account...' : 'Link Google Drive'}
-                    </Button>
-                 ) : (
-                    <>
-                       <Button 
-                          type="button" 
-                          onClick={handleDriveBackup} 
-                          disabled={isBackingUp}
-                          className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200 gap-2 h-11 px-8 font-bold"
-                       >
-                          {isBackingUp ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-                          {isBackingUp ? 'Syncing...' : 'Backup Now'}
-                       </Button>
-                       <p className="text-xs text-blue-600/70 font-semibold flex items-center gap-1.5 bg-blue-100/50 px-4 py-2.5 rounded-lg border border-blue-200">
-                          <CheckCircle2 size={14} /> Automatic weekly backups are enabled.
-                       </p>
-                    </>
-                 )}
+              <div className="p-4 rounded-xl bg-card/70 border border-border shadow-sm flex items-center gap-4">
+                <div className="h-10 w-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+                  <ShieldCheck size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">Security</p>
+                  <p className="text-sm font-bold text-foreground">AES-256 Local Encryption</p>
+                </div>
               </div>
 
-              {!driveStatus.connected && (
-                 <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800">
-                    <AlertCircle size={20} className="shrink-0 mt-0.5" />
-                    <div>
-                       <p className="text-xs font-black uppercase tracking-wider mb-1">Backup Recommendation</p>
-                       <p className="text-xs font-medium leading-relaxed">
-                          Your business data is currently stored only on this computer. Link Google Drive to protect against hardware failure, fire, or theft.
-                       </p>
-                    </div>
-                 </div>
+              <div className="p-4 rounded-xl bg-card/70 border border-border shadow-sm flex items-center gap-4">
+                <div className="h-10 w-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
+                  <Activity size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">Last Backup</p>
+                  <p className="text-sm font-bold text-foreground">{formatLastBackup(driveStatus.lastBackup)}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <div className="rounded-lg border border-border bg-card/70 p-3">
+                <p className="text-muted-foreground uppercase tracking-widest font-black text-[10px] mb-1">Cloud Connected</p>
+                <p className={cn("font-bold", driveStatus.connected ? "text-emerald-600" : "text-amber-600")}>
+                  {driveStatus.connected ? 'Yes' : 'No (Offline/Not Linked)'}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border bg-card/70 p-3">
+                <p className="text-muted-foreground uppercase tracking-widest font-black text-[10px] mb-1">Last Sync</p>
+                <p className="font-bold text-foreground">{subscriptionInfo?.lastSync ? new Date(subscriptionInfo.lastSync).toLocaleString() : 'Not synced yet'}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-card/70 p-3">
+                <p className="text-muted-foreground uppercase tracking-widest font-black text-[10px] mb-1">Subscription Plan</p>
+                <p className="font-bold capitalize text-foreground">{subscriptionInfo?.plan || 'none'}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-card/70 p-3">
+                <p className="text-muted-foreground uppercase tracking-widest font-black text-[10px] mb-1">Expiry Remaining</p>
+                <p className="font-bold text-foreground">
+                  {subscriptionInfo?.plan === 'lifetime' ? 'Unlimited' : `${Math.max(0, subscriptionInfo?.daysRemaining || 0)} day(s)`}
+                </p>
+              </div>
+              <div className="rounded-lg border border-border bg-card/70 p-3 md:col-span-2">
+                <p className="text-muted-foreground uppercase tracking-widest font-black text-[10px] mb-1">Backup Status</p>
+                <p className="font-bold text-foreground">{driveStatus.lastBackup ? `Last backup: ${formatLastBackup(driveStatus.lastBackup)}` : 'No backup recorded yet'}</p>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-center gap-4 pt-2">
+              {!driveStatus.connected ? (
+                <Button
+                  type="button"
+                  onClick={handleConnectDrive}
+                  disabled={isConnecting}
+                  className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200 gap-2 h-11 px-8 font-bold"
+                >
+                  {isConnecting ? <Loader2 size={18} className="animate-spin" /> : <Globe size={18} />}
+                  {isConnecting ? 'Linking Account...' : 'Link Google Drive'}
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    onClick={handleDriveBackup}
+                    disabled={isBackingUp}
+                    className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200 gap-2 h-11 px-8 font-bold"
+                  >
+                    {isBackingUp ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
+                    {isBackingUp ? 'Syncing...' : 'Backup Now'}
+                  </Button>
+                  <p className="text-xs text-blue-600/70 font-semibold flex items-center gap-1.5 bg-blue-100/50 px-4 py-2.5 rounded-lg border border-blue-200">
+                    <CheckCircle2 size={14} /> Automatic weekly backups are enabled.
+                  </p>
+                </>
               )}
-           </CardContent>
+            </div>
+
+            {!driveStatus.connected && (
+              <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800">
+                <AlertCircle size={20} className="shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs font-black uppercase tracking-wider mb-1">Backup Recommendation</p>
+                  <p className="text-xs font-medium leading-relaxed">
+                    Your business data is currently stored only on this computer. Link Google Drive to protect against hardware failure, fire, or theft.
+                  </p>
+                </div>
+              </div>
+            )}
+          </CardContent>
         </Card>
 
         {/* Cloud Recovery List */}
         {driveStatus.connected && (
-           <Card className="shadow-sm border-blue-200">
-              <CardHeader className="pb-3 bg-blue-50/50">
-                 <div className="flex items-center justify-between">
-                    <div>
-                       <CardTitle className="text-sm font-bold flex items-center gap-2">
-                          <Download size={16} className="text-blue-600" /> Available Cloud Backups
-                       </CardTitle>
-                       <CardDescription className="text-[10px]">Recent snapshots found on your Google Drive</CardDescription>
+          <Card className="shadow-sm border-blue-200">
+            <CardHeader className="pb-3 bg-blue-50/50">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm font-bold flex items-center gap-2">
+                    <Download size={16} className="text-blue-600" /> Available Cloud Backups
+                  </CardTitle>
+                  <CardDescription className="text-[10px]">Recent snapshots found on your Google Drive</CardDescription>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleFetchBackups}
+                  disabled={isFetchingBackups}
+                  className="h-8 text-xs gap-1.5"
+                >
+                  {isFetchingBackups ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                  Refresh List
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {availableBackups.length > 0 ? (
+                <div className="divide-y divide-border">
+                  {pagedBackups.map((b) => (
+                    <div key={b.id} className="flex items-center justify-between p-4 hover:bg-muted/30 transition-colors">
+                      <div className="space-y-1">
+                        <p className="text-xs font-bold text-slate-700">{b.name}</p>
+                        <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                          <span className="flex items-center gap-1"><Database size={10} /> {formatSize(b.size)}</span>
+                          <span className="flex items-center gap-1"><Zap size={10} /> {new Date(b.date).toLocaleString()}</span>
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        className="h-8 text-xs px-4"
+                        onClick={() => handleRestoreCloudBackup(b.id)}
+                      >
+                        Restore
+                      </Button>
                     </div>
-                    <Button 
-                       type="button" 
-                       variant="outline" 
-                       size="sm" 
-                       onClick={handleFetchBackups}
-                       disabled={isFetchingBackups}
-                       className="h-8 text-xs gap-1.5"
-                    >
-                       {isFetchingBackups ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                       Refresh List
-                    </Button>
-                 </div>
-              </CardHeader>
-              <CardContent className="p-0">
-                 {availableBackups.length > 0 ? (
-                    <div className="divide-y divide-border">
-                       {pagedBackups.map((b) => (
-                          <div key={b.id} className="flex items-center justify-between p-4 hover:bg-muted/30 transition-colors">
-                             <div className="space-y-1">
-                                <p className="text-xs font-bold text-slate-700">{b.name}</p>
-                                <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-                                   <span className="flex items-center gap-1"><Database size={10} /> {formatSize(b.size)}</span>
-                                   <span className="flex items-center gap-1"><Zap size={10} /> {new Date(b.date).toLocaleString()}</span>
-                                </div>
-                             </div>
-                             <Button 
-                                type="button" 
-                                size="sm" 
-                                variant="secondary" 
-                                className="h-8 text-xs px-4"
-                                onClick={() => handleRestoreCloudBackup(b.id)}
-                             >
-                                Restore
-                             </Button>
-                          </div>
-                       ))}
-                       {availableBackups.length > BACKUPS_PAGE_SIZE && (
-                          <div className="p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-muted/10">
-                             <p className="text-xs text-muted-foreground">
-                                Showing {Math.min((currentBackupPage - 1) * BACKUPS_PAGE_SIZE + 1, availableBackups.length)}-
-                                {Math.min(currentBackupPage * BACKUPS_PAGE_SIZE, availableBackups.length)} of {availableBackups.length}
-                             </p>
-                             <div className="flex items-center gap-2">
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-8 text-xs"
-                                  disabled={currentBackupPage <= 1}
-                                  onClick={() => setBackupPage((p) => Math.max(1, p - 1))}
-                                >
-                                  Prev
-                                </Button>
-                                <span className="text-xs font-medium text-muted-foreground px-2">
-                                  Page {currentBackupPage} / {totalBackupPages}
-                                </span>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  className="h-8 text-xs"
-                                  disabled={currentBackupPage >= totalBackupPages}
-                                  onClick={() => setBackupPage((p) => Math.min(totalBackupPages, p + 1))}
-                                >
-                                  Next
-                                </Button>
-                             </div>
-                          </div>
-                       )}
+                  ))}
+                  {availableBackups.length > BACKUPS_PAGE_SIZE && (
+                    <div className="p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-muted/10">
+                      <p className="text-xs text-muted-foreground">
+                        Showing {Math.min((currentBackupPage - 1) * BACKUPS_PAGE_SIZE + 1, availableBackups.length)}-
+                        {Math.min(currentBackupPage * BACKUPS_PAGE_SIZE, availableBackups.length)} of {availableBackups.length}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs"
+                          disabled={currentBackupPage <= 1}
+                          onClick={() => setBackupPage((p) => Math.max(1, p - 1))}
+                        >
+                          Prev
+                        </Button>
+                        <span className="text-xs font-medium text-muted-foreground px-2">
+                          Page {currentBackupPage} / {totalBackupPages}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 text-xs"
+                          disabled={currentBackupPage >= totalBackupPages}
+                          onClick={() => setBackupPage((p) => Math.min(totalBackupPages, p + 1))}
+                        >
+                          Next
+                        </Button>
+                      </div>
                     </div>
-                 ) : (
-                    <div className="p-8 text-center space-y-2">
-                       <Cloud size={24} className="mx-auto text-muted-foreground opacity-20" />
-                       <p className="text-xs text-muted-foreground font-medium">No backups listed. Click Refresh to scan Drive.</p>
-                    </div>
-                 )}
-              </CardContent>
-           </Card>
+                  )}
+                </div>
+              ) : (
+                <div className="p-8 text-center space-y-2">
+                  <Cloud size={24} className="mx-auto text-muted-foreground opacity-20" />
+                  <p className="text-xs text-muted-foreground font-medium">No backups listed. Click Refresh to scan Drive.</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         )}
 
         {/* Restore Progress Overlay */}
         {restoreProgress && (
-           <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-6">
-              <Card className="w-full max-w-md shadow-2xl border-primary/20">
-                 <CardHeader className="text-center">
-                    <CardTitle className="text-lg font-bold flex items-center justify-center gap-3">
-                       <Loader2 className="animate-spin text-primary" size={24} />
-                       {restoreProgress.status === 'downloading' ? 'Downloading from Cloud...' : 'Restoring Database...'}
-                    </CardTitle>
-                    <CardDescription>Please do not close the application during this process.</CardDescription>
-                 </CardHeader>
-                 <CardContent className="space-y-6 pb-8">
-                    <div className="space-y-2">
-                       <div className="flex justify-between text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                          <span>{restoreProgress.status}</span>
-                          <span>{restoreProgress.progress}%</span>
-                       </div>
-                       <div className="h-3 w-full bg-muted rounded-full overflow-hidden border">
-                          <div 
-                             className="h-full bg-primary transition-all duration-300 shadow-[0_0_10px_rgba(59,130,246,0.5)]" 
-                             style={{ width: `${restoreProgress.progress}%` }} 
-                          />
-                       </div>
-                    </div>
-                    <p className="text-[10px] text-center text-muted-foreground font-medium animate-pulse">
-                       Finalizing local file operations... This may take a moment.
-                    </p>
-                 </CardContent>
-              </Card>
-           </div>
+          <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-6">
+            <Card className="w-full max-w-md shadow-2xl border-primary/20">
+              <CardHeader className="text-center">
+                <CardTitle className="text-lg font-bold flex items-center justify-center gap-3">
+                  <Loader2 className="animate-spin text-primary" size={24} />
+                  {restoreProgress.status === 'downloading' ? 'Downloading from Cloud...' : 'Restoring Database...'}
+                </CardTitle>
+                <CardDescription>Please do not close the application during this process.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6 pb-8">
+                <div className="space-y-2">
+                  <div className="flex justify-between text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    <span>{restoreProgress.status}</span>
+                    <span>{restoreProgress.progress}%</span>
+                  </div>
+                  <div className="h-3 w-full bg-muted rounded-full overflow-hidden border">
+                    <div
+                      className="h-full bg-primary transition-all duration-300 shadow-[0_0_10px_rgba(59,130,246,0.5)]"
+                      style={{ width: `${restoreProgress.progress}%` }}
+                    />
+                  </div>
+                </div>
+                <p className="text-[10px] text-center text-muted-foreground font-medium animate-pulse">
+                  Finalizing local file operations... This may take a moment.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         {/* Danger Zone */}
