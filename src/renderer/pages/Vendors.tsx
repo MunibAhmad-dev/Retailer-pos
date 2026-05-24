@@ -2,12 +2,14 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Plus, Search, Pencil, Trash2, Phone, MessageCircle, DollarSign,
   ArrowRight, History, ShoppingBag, CreditCard, X, Truck, Package,
-  ChevronDown, Eye, Calendar, Hash, Layers, Undo2, RefreshCw, FileText, CheckCircle2, Check, Printer
+  ChevronDown, Eye, Calendar, Hash, Layers, Undo2, RefreshCw, FileText, CheckCircle2, Check, Printer, Download
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { useNotifications } from '../components/NotificationProvider';
@@ -15,6 +17,7 @@ import { useNavigate } from 'react-router-dom';
 import { usePagination } from '../hooks/usePagination';
 import { LoadMoreButton, SearchSpinner } from '../components/Pagination';
 import { cn } from '../lib/utils';
+import { formatVendorDataForPDF, generateVendorPDFHTML } from '../lib/pdfExportService.ts';
 
 interface Vendor {
   id?: number;
@@ -26,6 +29,14 @@ interface Vendor {
 
 const HISTORY_PAGE = 15;
 const fmtPKR = (n: any) => 'PKR ' + (Math.round(Number(n) || 0)).toLocaleString('en-PK');
+const formatPurchaseRef = (id: number | string, dateString?: string) => {
+  const d = dateString ? new Date(dateString) : new Date();
+  const safeDate = Number.isNaN(d.getTime()) ? new Date() : d;
+  const datePart = `${safeDate.getFullYear()}${String(safeDate.getMonth() + 1).padStart(2, '0')}${String(safeDate.getDate()).padStart(2, '0')}`;
+  const numericId = Number(id);
+  const idPart = Number.isFinite(numericId) ? String(Math.max(0, Math.trunc(numericId))).padStart(5, '0') : String(id || '').trim();
+  return `PO-${datePart}-${idPart || '00000'}`;
+};
 
 function QuickPaymentInput({ purchase, onPay }: { purchase: any, onPay: (amount: string) => void }) {
   const [val, setVal] = React.useState('');
@@ -111,6 +122,10 @@ export default function Vendors() {
   const [historyPage, setHistoryPage] = useState(1);
   const [expandedInvoiceIds, setExpandedInvoiceIds] = useState<Record<number, boolean>>({});
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [summaryDateFilter, setSummaryDateFilter] = useState<'today' | 'weekly' | 'custom' | 'months'>('today');
+  const [summaryMonths, setSummaryMonths] = useState<string>('1');
+  const [summaryFrom, setSummaryFrom] = useState('');
+  const [summaryTo, setSummaryTo] = useState('');
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const { addNotification } = useNotifications();
@@ -168,14 +183,20 @@ export default function Vendors() {
     if (!selectedPurchase) return;
 
     const itemsToReturn = purchaseItems
-      .filter(item => (parseInt(String(returnQuantities[item.id])) || 0) > 0)
-      .map(item => ({
-        id: item.id,
-        product_id: item.product_id,
-        product_name: item.product_name,
-        quantity: parseInt(String(returnQuantities[item.id])) || 0,
-        purchase_price: item.purchase_price
-      }));
+      .filter((item, idx) => {
+        const itemKey = item.id || item.product_id || idx;
+        return (parseInt(String(returnQuantities[itemKey])) || 0) > 0;
+      })
+      .map((item, idx) => {
+        const itemKey = item.id || item.product_id || idx;
+        return {
+          id: item.id,
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: parseInt(String(returnQuantities[itemKey])) || 0,
+          purchase_price: item.purchase_price
+        };
+      });
 
     if (itemsToReturn.length === 0) {
       addNotification("Warning", "Please select at least one item to return", "warning");
@@ -355,6 +376,27 @@ export default function Vendors() {
     }
   };
 
+  const exportPDF = async () => {
+    if (!vendorDetails) {
+      addNotification('Error', 'Vendor details are still loading.', 'error');
+      return;
+    }
+
+    try {
+      const pdfData = formatVendorDataForPDF(vendorDetails);
+      const html = generateVendorPDFHTML(pdfData);
+      const res = await window.api.saveInvoicePdf(html);
+      if (res.success) {
+        addNotification('PDF Saved', 'Vendor statement PDF saved successfully.', 'success');
+      } else if (res.error !== 'Cancelled') {
+        addNotification('Error', res.error || 'Failed to save vendor statement.', 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      addNotification('Error', 'Failed to export vendor statement.', 'error');
+    }
+  };
+
   const sendWhatsApp = (purchase?: any) => {
     if (!selectedVendor?.phone) { addNotification('No Phone', "Vendor doesn't have a phone number.", 'warning'); return; }
     const cleanPhone = selectedVendor.phone.replace(/[^0-9]/g, '');
@@ -439,11 +481,15 @@ export default function Vendors() {
   const actionHistory = useMemo(() => (vendorDetails?.history || []) as any[], [vendorDetails]);
   const advancedHistoryRows = useMemo(() => {
     if (!vendorDetails) return [];
+    const purchaseRefById = new Map<number, string>(
+      (vendorDetails.purchases || []).map((p: any) => [Number(p.id), formatPurchaseRef(p.id, p.date_created)])
+    );
     const purchases = (vendorDetails.purchases || []).map((p: any) => ({
       rowKind: 'PURCHASE',
       id: `purchase-${p.id}`,
       date: p.date_created,
       invoiceId: p.id,
+      displayRef: formatPurchaseRef(p.id, p.date_created),
       itemsText: (p.items || []).map((i: any) => i.product_name).join(', '),
       itemsCount: (p.items || []).length,
       total: Number(p.total) || 0,
@@ -452,7 +498,7 @@ export default function Vendors() {
       remaining: Math.max(0, Number(p.remaining) || 0),
       status: p.status === 'Cancelled' ? 'Cancelled' : (Number(p.amountReturned) || 0) > 0 ? 'Returned' : Math.max(0, Number(p.remaining) || 0) <= 0.5 ? 'Settled' : 'Pending',
       notes: '',
-      ref: `PO-${p.id}`,
+      ref: formatPurchaseRef(p.id, p.date_created),
       raw: p
     }));
     const payments = (vendorDetails.payments || []).map((p: any) => ({
@@ -460,6 +506,7 @@ export default function Vendors() {
       id: `payment-${p.id}`,
       date: p.date_created,
       invoiceId: p.purchase_id || null,
+      displayRef: p.purchase_id ? purchaseRefById.get(Number(p.purchase_id)) || formatPurchaseRef(p.purchase_id, p.date_created) : `VP-${p.id}`,
       itemsText: '',
       itemsCount: 0,
       total: 0,
@@ -476,6 +523,7 @@ export default function Vendors() {
       id: `return-${r.id}`,
       date: r.date_created || r.date_returned,
       invoiceId: r.purchase_id || null,
+      displayRef: r.purchase_id ? purchaseRefById.get(Number(r.purchase_id)) || formatPurchaseRef(r.purchase_id, r.date_created || r.date_returned) : `PR-${r.id}`,
       itemsText: '',
       itemsCount: 0,
       total: 0,
@@ -492,6 +540,9 @@ export default function Vendors() {
       id: `history-${h.id}`,
       date: h.date,
       invoiceId: h.relatedId || null,
+      displayRef: h.relatedId && String(h.relatedType || '').toUpperCase().includes('PURCHASE')
+        ? purchaseRefById.get(Number(h.relatedId)) || formatPurchaseRef(h.relatedId, h.date)
+        : `${h.relatedType || 'H'}-${h.relatedId || h.id}`,
       itemsText: '',
       itemsCount: 0,
       total: 0,
@@ -546,6 +597,7 @@ export default function Vendors() {
       }
       if (!query) return true;
       const pool = [
+        row.displayRef || '',
         row.ref,
         row.invoiceId ? String(row.invoiceId) : '',
         row.itemsText || '',
@@ -558,6 +610,46 @@ export default function Vendors() {
     });
   }, [advancedHistoryRows, historyDateFilter, historyFrom, historyTo, historyStatusFilter, historyTypeFilter, historyQuery]);
 
+  const summaryStats = useMemo(() => {
+    if (!vendorDetails) return { totalPurchased: 0, totalPaid: 0, totalReturned: 0 };
+
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const startOfWeek = new Date(startOfDay);
+    startOfWeek.setDate(startOfDay.getDate() - 6);
+    const monthsBack = Math.min(12, Math.max(1, Number(summaryMonths) || 1));
+    const startOfMonths = new Date(now);
+    startOfMonths.setHours(0, 0, 0, 0);
+    startOfMonths.setMonth(startOfMonths.getMonth() - monthsBack);
+
+    const inSummaryRange = (dateRaw: any) => {
+      const d = new Date(dateRaw);
+      if (Number.isNaN(d.getTime())) return false;
+      if (summaryDateFilter === 'today') return d >= startOfDay;
+      if (summaryDateFilter === 'weekly') return d >= startOfWeek;
+      if (summaryDateFilter === 'months') return d >= startOfMonths;
+      if (summaryDateFilter === 'custom') {
+        const from = summaryFrom ? new Date(`${summaryFrom}T00:00:00`) : null;
+        const to = summaryTo ? new Date(`${summaryTo}T23:59:59`) : null;
+        if (from && d < from) return false;
+        if (to && d > to) return false;
+      }
+      return true;
+    };
+
+    const totalPurchased = (vendorDetails.purchases || [])
+      .filter((p: any) => (p.status || '').toLowerCase() !== 'cancelled' && inSummaryRange(p.date_created))
+      .reduce((sum: number, p: any) => sum + (Number(p.total) || 0), 0);
+    const totalPaid = (vendorDetails.payments || [])
+      .filter((p: any) => inSummaryRange(p.date_created))
+      .reduce((sum: number, p: any) => sum + (Number(p.amount) || 0), 0);
+    const totalReturned = (vendorDetails.returns || [])
+      .filter((r: any) => inSummaryRange(r.date_created || r.date_returned))
+      .reduce((sum: number, r: any) => sum + (Number(r.total_returned) || 0), 0);
+
+    return { totalPurchased, totalPaid, totalReturned };
+  }, [vendorDetails, summaryDateFilter, summaryMonths, summaryFrom, summaryTo]);
+
   const HISTORY_PAGE_SIZE = 20;
   const historyTotalPages = Math.max(1, Math.ceil(filteredAdvancedHistory.length / HISTORY_PAGE_SIZE));
   const pagedAdvancedHistory = useMemo(() => {
@@ -567,11 +659,19 @@ export default function Vendors() {
   }, [filteredAdvancedHistory, historyPage, historyTotalPages]);
 
   const statusBadgeClass = (status: string) => {
-    if (status === 'Settled') return 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100';
-    if (status === 'Pending') return 'bg-amber-100 text-amber-700 hover:bg-amber-100';
-    if (status === 'Cancelled') return 'bg-rose-100 text-rose-700 hover:bg-rose-100';
-    if (status === 'Returned') return 'bg-violet-100 text-violet-700 hover:bg-violet-100';
-    return 'bg-slate-100 text-slate-700 hover:bg-slate-100';
+    if (status === 'Settled') return 'border-transparent bg-emerald-600 text-white shadow-sm hover:bg-emerald-600';
+    if (status === 'Pending') return 'border-transparent bg-amber-500 text-white shadow-sm hover:bg-amber-500';
+    if (status === 'Cancelled') return 'border-transparent bg-rose-600 text-white shadow-sm hover:bg-rose-600';
+    if (status === 'Returned') return 'border-transparent bg-violet-600 text-white shadow-sm hover:bg-violet-600';
+    return 'border-transparent bg-slate-600 text-white shadow-sm hover:bg-slate-600';
+  };
+
+  const typeBadgeClass = (type: string) => {
+    if (type === 'PURCHASE') return 'border-transparent bg-blue-600 text-white shadow-sm hover:bg-blue-600';
+    if (type === 'PAYMENT') return 'border-transparent bg-emerald-600 text-white shadow-sm hover:bg-emerald-600';
+    if (type === 'RETURN') return 'border-transparent bg-violet-600 text-white shadow-sm hover:bg-violet-600';
+    if (type === 'DELETED_PAYMENT' || type === 'CANCELLED_BILL') return 'border-transparent bg-rose-600 text-white shadow-sm hover:bg-rose-600';
+    return 'border-transparent bg-slate-600 text-white shadow-sm hover:bg-slate-600';
   };
 
   return (
@@ -653,17 +753,56 @@ export default function Vendors() {
               <div className="flex flex-col">
                 {/* Financials */}
                 <div className="grid grid-cols-2 gap-4 p-5 bg-card border-b">
+                  <div className="col-span-2 flex flex-col gap-2 pb-2">
+                    <div className="text-[10px] font-bold uppercase text-muted-foreground">Summary Filter</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Select value={summaryDateFilter} onValueChange={(v: any) => setSummaryDateFilter(v)}>
+                        <SelectTrigger className="h-8 w-[130px] text-xs rounded-md">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="months">By Months</SelectItem>
+                          <SelectItem value="today">Today</SelectItem>
+                          <SelectItem value="weekly">Weekly</SelectItem>
+                          <SelectItem value="custom">Custom</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {summaryDateFilter === 'months' && (
+                        <Select value={summaryMonths} onValueChange={setSummaryMonths}>
+                          <SelectTrigger className="h-8 w-[160px] text-xs rounded-md">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                              <SelectItem key={m} value={String(m)}>
+                                Last {m} {m === 1 ? 'Month' : 'Months'}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                      {summaryDateFilter === 'custom' && (
+                        <>
+                          <Input type="date" className="h-8 text-xs w-32" value={summaryFrom} onChange={(e) => setSummaryFrom(e.target.value)} />
+                          <Input type="date" className="h-8 text-xs w-32" value={summaryTo} onChange={(e) => setSummaryTo(e.target.value)} />
+                        </>
+                      )}
+                      <Badge className={(vendorDetails.balance || 0) > 0 ? 'bg-destructive/10 text-destructive border-none' : 'bg-emerald-100 text-emerald-700 border-none'}>
+                        {(vendorDetails.balance || 0) > 0 ? 'Qaraz (Unpaid)' : 'Settled (Paid)'}
+                      </Badge>
+                    </div>
+                  </div>
                   <div className="flex flex-col gap-1">
                     <span className="text-xs font-semibold text-muted-foreground uppercase">Total Purchased</span>
-                    <span className="text-lg font-bold">{fmtPKR(vendorDetails.totalPurchased || 0)}</span>
+                    <span className="text-lg font-bold">{fmtPKR(summaryStats.totalPurchased || 0)}</span>
                   </div>
                   <div className="flex flex-col gap-1 text-right">
                     <span className="text-xs font-semibold text-muted-foreground uppercase">Total Paid</span>
-                    <span className="text-lg font-bold text-emerald-600">{fmtPKR(vendorDetails.totalPaid || 0)}</span>
+                    <span className="text-lg font-bold text-emerald-600">{fmtPKR(summaryStats.totalPaid || 0)}</span>
                   </div>
                   <div className="flex flex-col gap-1">
                     <span className="text-[10px] font-bold text-muted-foreground uppercase text-amber-600">Stock Returns (-)</span>
-                    <span className="text-lg font-bold text-amber-600">{fmtPKR(vendorDetails.totalReturned || 0)}</span>
+                    <span className="text-lg font-bold text-amber-600">{fmtPKR(summaryStats.totalReturned || 0)}</span>
                   </div>
                   <div className="col-span-2 mt-2 pt-4 border-t border-dashed flex items-center justify-between bg-muted/5 -mx-5 px-5 py-3">
                     <span className="text-sm font-black uppercase text-muted-foreground">
@@ -695,6 +834,15 @@ export default function Vendors() {
                     <History size={16} />
                     Open Advanced History
                     <Badge variant="secondary" className="ml-auto text-[10px]">{filteredAdvancedHistory.length} records</Badge>
+                  </Button>
+                </div>
+                <div className="p-5 border-b bg-muted/10">
+                  <Button
+                    className="w-full gap-2 bg-blue-600 hover:bg-blue-700"
+                    onClick={exportPDF}
+                  >
+                    <Download size={16} />
+                    Export Statement as PDF
                   </Button>
                 </div>
                 <div className="p-5">
@@ -840,12 +988,12 @@ export default function Vendors() {
                                       <CheckCircle2 size={14} />
                                     </div>
                                     <div>
-                                      <p className="text-xs font-black uppercase text-emerald-800">Payment Sent</p>
-                                      <p className="text-[10px] text-emerald-600/70">{new Date(item.date).toLocaleString()}</p>
+                                      <p className="text-xs font-black uppercase text-black dark:text-emerald-300" style={{ color: '#000' }}>Payment Sent</p>
+                                      <p className="text-[10px] text-black/70 dark:text-emerald-300/70" style={{ color: '#000' }}>{new Date(item.date).toLocaleString()}</p>
                                     </div>
                                   </div>
                                   <div className="text-right flex items-center gap-3">
-                                    <span className="text-sm font-black text-emerald-700">{fmtPKR(item.amount)}</span>
+                                    <span className="text-sm font-black text-black dark:text-emerald-300" style={{ color: '#000' }}>{fmtPKR(item.amount)}</span>
                                     <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive opacity-0 group-hover:opacity-100" onClick={() => handleDeletePayment(item.id)}>
                                       <Trash2 size={12} />
                                     </Button>
@@ -889,48 +1037,41 @@ export default function Vendors() {
         </Card>
       )}
 
-      {historyModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in" onClick={() => setHistoryModalOpen(false)}>
-          <Card className="w-full max-w-6xl shadow-2xl animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
-            <CardHeader className="border-b pb-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <CardTitle className="text-lg flex items-center gap-2"><History size={18} className="text-primary" /> Advanced History</CardTitle>
-                  <CardDescription>Monthly-first filters, search, and expandable invoice rows.</CardDescription>
-                </div>
-                <Button variant="ghost" size="icon" onClick={() => setHistoryModalOpen(false)}><X size={16} /></Button>
-              </div>
-            </CardHeader>
-            <CardContent className="p-4">
-              <Tabs defaultValue="overview">
-                <TabsList className="w-full grid grid-cols-5 mb-3">
-                  <TabsTrigger value="overview">Overview</TabsTrigger>
-                  <TabsTrigger value="purchases">Purchases</TabsTrigger>
-                  <TabsTrigger value="payments">Payments</TabsTrigger>
-                  <TabsTrigger value="returns">Returns</TabsTrigger>
-                  <TabsTrigger value="timeline">Timeline</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="overview" className="space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <Input value={historyQuery} onChange={(e) => { setHistoryQuery(e.target.value); setHistoryPage(1); }} placeholder="Search invoice #, product, notes, amount, reference..." />
-                    <div className="grid grid-cols-2 gap-2">
-                      <select className="h-10 rounded-md border bg-background px-2 text-sm" value={historyDateFilter} onChange={(e) => { setHistoryDateFilter(e.target.value as any); setHistoryPage(1); }}>
-                        <option value="today">Today</option>
-                        <option value="this_week">This Week</option>
-                        <option value="this_month">This Month</option>
-                        <option value="last_month">Last Month</option>
-                        <option value="this_year">This Year</option>
-                        <option value="custom">Custom Range</option>
-                      </select>
-                      <select className="h-10 rounded-md border bg-background px-2 text-sm" value={historyStatusFilter} onChange={(e) => { setHistoryStatusFilter(e.target.value as any); setHistoryPage(1); }}>
-                        <option value="all">All Statuses</option>
-                        <option value="Settled">Settled</option>
-                        <option value="Pending">Pending</option>
-                        <option value="Cancelled">Cancelled</option>
-                        <option value="Returned">Returned</option>
-                      </select>
-                    </div>
+      <Dialog open={historyModalOpen} onOpenChange={setHistoryModalOpen}>
+        <DialogContent className="max-w-[min(1180px,96vw)] max-h-[92vh] overflow-hidden p-0 gap-0">
+          <DialogHeader className="border-b px-5 py-4 pr-12">
+            <DialogTitle className="flex items-center gap-2 text-lg">
+              <History size={18} className="text-primary" /> Advanced History
+            </DialogTitle>
+            <DialogDescription>
+              Search by purchase reference, filter records, and expand purchase rows for products, payments, and returns.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="p-4 overflow-y-auto">
+              <div className="space-y-3">
+                  <div className="grid grid-cols-1 lg:grid-cols-[1fr_220px_220px] gap-2">
+                    <Input value={historyQuery} onChange={(e) => { setHistoryQuery(e.target.value); setHistoryPage(1); }} placeholder="Search purchase ref, product, notes, amount, reference..." />
+                    <Select value={historyDateFilter} onValueChange={(v: any) => { setHistoryDateFilter(v); setHistoryPage(1); }}>
+                      <SelectTrigger><SelectValue placeholder="Date range" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="today">Today</SelectItem>
+                        <SelectItem value="this_week">This Week</SelectItem>
+                        <SelectItem value="this_month">This Month</SelectItem>
+                        <SelectItem value="last_month">Last Month</SelectItem>
+                        <SelectItem value="this_year">This Year</SelectItem>
+                        <SelectItem value="custom">Custom Range</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Select value={historyStatusFilter} onValueChange={(v: any) => { setHistoryStatusFilter(v); setHistoryPage(1); }}>
+                      <SelectTrigger><SelectValue placeholder="Status" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Statuses</SelectItem>
+                        <SelectItem value="Settled">Settled</SelectItem>
+                        <SelectItem value="Pending">Pending</SelectItem>
+                        <SelectItem value="Cancelled">Cancelled</SelectItem>
+                        <SelectItem value="Returned">Returned</SelectItem>
+                      </SelectContent>
+                    </Select>
                   </div>
                   {historyDateFilter === 'custom' && (
                     <div className="grid grid-cols-2 gap-2">
@@ -952,7 +1093,7 @@ export default function Vendors() {
                         <TableHeader className="sticky top-0 bg-card z-10">
                           <TableRow>
                             <TableHead>Date</TableHead>
-                            <TableHead>Invoice #</TableHead>
+                            <TableHead>Purchase Ref</TableHead>
                             <TableHead>Items</TableHead>
                             <TableHead className="text-right">Total</TableHead>
                             <TableHead className="text-right">Paid</TableHead>
@@ -972,14 +1113,20 @@ export default function Vendors() {
                                 setExpandedInvoiceIds((prev) => ({ ...prev, [row.invoiceId]: !prev[row.invoiceId] }));
                               }}>
                                 <TableCell className="text-xs whitespace-nowrap">{new Date(row.date).toLocaleString()}</TableCell>
-                                <TableCell className="font-semibold">{row.invoiceId ? `#${row.invoiceId}` : '-'}</TableCell>
-                                <TableCell className="max-w-[220px] truncate">{row.itemsCount || '-'}</TableCell>
+                                <TableCell>
+                                  <div className="font-semibold whitespace-nowrap">{row.displayRef || '-'}</div>
+                                  <div className="text-[11px] text-muted-foreground">{row.ref && row.ref !== row.displayRef ? row.ref : row.invoiceId ? `ID #${row.invoiceId}` : 'No linked purchase'}</div>
+                                </TableCell>
+                                <TableCell className="max-w-[260px]">
+                                  <div className="truncate">{row.itemsText || row.notes || '-'}</div>
+                                  {row.itemsCount ? <div className="text-[11px] text-muted-foreground">{row.itemsCount} item{row.itemsCount === 1 ? '' : 's'}</div> : null}
+                                </TableCell>
                                 <TableCell className="text-right">{fmtPKR(row.total || 0)}</TableCell>
                                 <TableCell className="text-right text-emerald-700">{fmtPKR(row.paid || 0)}</TableCell>
                                 <TableCell className="text-right text-amber-700">{fmtPKR(row.returned || 0)}</TableCell>
                                 <TableCell className="text-right">{fmtPKR(Math.max(0, row.remaining || 0))}</TableCell>
-                                <TableCell><Badge className={cn('text-[10px] border-none', statusBadgeClass(row.status))}>{row.status}</Badge></TableCell>
-                                <TableCell className="text-xs text-muted-foreground">{row.rowKind.replace('_', ' ')}</TableCell>
+                                <TableCell><Badge variant="outline" className={cn('whitespace-nowrap', statusBadgeClass(row.status))}>{row.status}</Badge></TableCell>
+                                <TableCell><Badge variant="outline" className={cn('whitespace-nowrap', typeBadgeClass(row.rowKind))}>{row.rowKind.replace('_', ' ')}</Badge></TableCell>
                               </TableRow>
                               {row.rowKind === 'PURCHASE' && expandedInvoiceIds[row.invoiceId] && (
                                 <TableRow>
@@ -1005,16 +1152,10 @@ export default function Vendors() {
                       </div>
                     </div>
                   </div>
-                </TabsContent>
-                <TabsContent value="purchases" className="text-xs text-muted-foreground">Use Overview with Type filter set to Purchases for full table and search.</TabsContent>
-                <TabsContent value="payments" className="text-xs text-muted-foreground">Use Overview with Type filter set to Payments or Deleted Payments.</TabsContent>
-                <TabsContent value="returns" className="text-xs text-muted-foreground">Use Overview with Type filter set to Returns.</TabsContent>
-                <TabsContent value="timeline" className="text-xs text-muted-foreground">The existing timeline in details remains available.</TabsContent>
-              </Tabs>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+              </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ─── Purchase Detail Modal ─── */}
       {selectedPurchase && (
@@ -1104,8 +1245,8 @@ export default function Vendors() {
             <CardFooter className="border-t pt-4 flex gap-3">
               <Button variant="outline" className="flex-1" onClick={() => setSelectedPurchase(null)}>Close</Button>
               <Button variant="destructive" className="flex-1 gap-2 bg-amber-600 hover:bg-amber-700" disabled={selectedPurchase.status === 'Cancelled'} onClick={() => {
-                const initialQtys: Record<number, string> = {};
-                purchaseItems.forEach(item => { initialQtys[item.id] = ''; });
+                const initialQtys: Record<string | number, string> = {};
+                purchaseItems.forEach((item, idx) => { initialQtys[item.id || item.product_id || idx] = ''; });
                 setReturnQuantities(initialQtys);
                 setReturnReason('');
                 setReturnModalOpen(true);
@@ -1148,10 +1289,11 @@ export default function Vendors() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {purchaseItems.map((item) => {
+                    {purchaseItems.map((item, idx) => {
                       const availableToReturn = Math.max(0, item.quantity_remaining);
+                      const itemKey = item.id || item.product_id || idx;
                       return (
-                        <TableRow key={item.id}>
+                        <TableRow key={itemKey}>
                           <TableCell className="font-medium">{item.product_name}</TableCell>
                           <TableCell className="text-center">{item.quantity_added}</TableCell>
                           <TableCell className="text-center text-amber-600 font-bold">{item.quantity_returned || 0}</TableCell>
@@ -1165,7 +1307,7 @@ export default function Vendors() {
                                     variant="ghost"
                                     size="sm"
                                     className="h-6 px-1.5 text-[10px] text-primary hover:bg-primary/10"
-                                    onClick={() => setReturnQuantities({ ...returnQuantities, [item.id]: String(availableToReturn) })}
+                                    onClick={() => setReturnQuantities(prev => ({ ...prev, [itemKey]: String(availableToReturn) }))}
                                   >
                                     Max
                                   </Button>
@@ -1174,22 +1316,22 @@ export default function Vendors() {
                                   type="text"
                                   className={cn(
                                     "h-8 w-20 text-right font-bold",
-                                    (parseInt(String(returnQuantities[item.id])) || 0) > availableToReturn ? "border-destructive text-destructive bg-destructive/5" : "border-primary/20",
+                                    (parseInt(String(returnQuantities[itemKey])) || 0) > availableToReturn ? "border-destructive text-destructive bg-destructive/5" : "border-primary/20",
                                     availableToReturn === 0 && "opacity-50 cursor-not-allowed bg-muted"
                                   )}
-                                  value={returnQuantities[item.id] || ''}
+                                  value={returnQuantities[itemKey] || ''}
                                   disabled={availableToReturn <= 0}
                                   onChange={(e) => {
                                     const raw = e.target.value.replace(/[^0-9]/g, '');
-                                    setReturnQuantities({
-                                      ...returnQuantities,
-                                      [item.id]: raw
-                                    });
+                                    setReturnQuantities(prev => ({
+                                      ...prev,
+                                      [itemKey]: raw
+                                    }));
                                   }}
                                   placeholder="0"
                                 />
                               </div>
-                              {(parseInt(String(returnQuantities[item.id])) || 0) > availableToReturn && (
+                              {(parseInt(String(returnQuantities[itemKey])) || 0) > availableToReturn && (
                                 <span className="text-[9px] text-destructive font-bold uppercase animate-pulse">Exceeds Stock</span>
                               )}
                             </div>
@@ -1217,7 +1359,10 @@ export default function Vendors() {
                 <div className="text-left">
                   <p className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Debit Note Value</p>
                   <p className="text-2xl font-black text-amber-600">
-                    {fmtPKR(purchaseItems.reduce((sum, item) => sum + (item.purchase_price * (parseInt(String(returnQuantities[item.id])) || 0)), 0))}
+                    {fmtPKR(purchaseItems.reduce((sum, item, idx) => {
+                      const itemKey = item.id || item.product_id || idx;
+                      return sum + (item.purchase_price * (parseInt(String(returnQuantities[itemKey])) || 0));
+                    }, 0))}
                   </p>
                 </div>
                 <div className="flex gap-3 w-full sm:w-auto">
@@ -1225,7 +1370,10 @@ export default function Vendors() {
                   <Button
                     className="flex-1 sm:flex-none gap-2 bg-amber-600 hover:bg-amber-700 text-white"
                     onClick={handleReturnSubmit}
-                    disabled={isSubmittingReturn || purchaseItems.reduce((sum, item) => sum + (parseInt(String(returnQuantities[item.id])) || 0), 0) === 0}
+                    disabled={isSubmittingReturn || purchaseItems.reduce((sum, item, idx) => {
+                      const itemKey = item.id || item.product_id || idx;
+                      return sum + (parseInt(String(returnQuantities[itemKey])) || 0);
+                    }, 0) === 0}
                   >
                     {isSubmittingReturn ? <RefreshCw className="animate-spin" size={16} /> : <Undo2 size={16} />}
                     Process Return

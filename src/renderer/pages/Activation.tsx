@@ -37,9 +37,9 @@ export default function Activation({ onActivated }: ActivationProps) {
 
     const off = typeof (window.api as any).onToggleLicenseIssuer === 'function'
       ? (window.api as any).onToggleLicenseIssuer(() => {
-          setIssuerOpen((prev) => !prev);
-          setIssuerError(null);
-        })
+        setIssuerOpen((prev) => !prev);
+        setIssuerError(null);
+      })
       : null;
 
     return () => {
@@ -115,14 +115,22 @@ export default function Activation({ onActivated }: ActivationProps) {
         <form onSubmit={handleActivate}>
           <CardContent className="space-y-5 pt-4">
             <div className="space-y-2">
-              <label className="text-sm font-semibold text-slate-200 ml-1">Device Fingerprint</label>
-              <div className="rounded-xl border border-white/15 bg-black/25 p-3">
-                <p className="text-xs text-slate-400 mb-2">Required for issuing your license</p>
-                <p className="font-mono text-[11px] break-all text-slate-100">{fingerprint || 'Loading fingerprint...'}</p>
-                <Button type="button" variant="secondary" className="mt-3 h-9" onClick={handleCopyFingerprint} disabled={!fingerprint}>
-                  <Copy size={14} className="mr-2" />
-                  Copy Fingerprint
-                </Button>
+              <label className="text-sm font-semibold text-slate-200 ml-1 flex items-center gap-2">
+                <ShieldCheck size={14} className="text-primary" />
+                Device Fingerprint
+              </label>
+              <div className="rounded-xl border border-primary/20 bg-gradient-to-br from-primary/5 via-black/30 to-purple-900/20 p-4 backdrop-blur-sm shadow-inner">
+                <p className="text-[10px] text-slate-400 mb-3 uppercase tracking-widest font-bold">Your unique device identifier</p>
+                <div className="bg-black/40 rounded-lg p-3 border border-white/10 shadow-lg">
+                  <p className="font-mono text-[13px] break-all text-slate-50 tracking-wider leading-relaxed select-all">{fingerprint || 'Loading fingerprint...'}</p>
+                </div>
+                <div className="flex items-center justify-between mt-3">
+                  <p className="text-[10px] text-slate-500 italic">Send this to the developer to get your license key</p>
+                  <Button type="button" variant="secondary" className="h-8 px-4 text-xs font-bold gap-1.5 bg-primary/20 hover:bg-primary/30 text-primary border border-primary/30 rounded-lg transition-all active:scale-95" onClick={handleCopyFingerprint} disabled={!fingerprint}>
+                    <Copy size={12} />
+                    Copy
+                  </Button>
+                </div>
               </div>
             </div>
 
@@ -163,9 +171,7 @@ export default function Activation({ onActivated }: ActivationProps) {
                 </>
               )}
             </Button>
-            <p className="text-[10px] text-center text-slate-500 uppercase tracking-widest font-semibold">
-              Press Ctrl+Shift+L for issuer tool
-            </p>
+
           </CardFooter>
         </form>
       </Card>

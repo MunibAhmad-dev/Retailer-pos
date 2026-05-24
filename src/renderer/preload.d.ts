@@ -63,10 +63,13 @@ declare global {
       // Settings
       getSettings: () => Promise<ApiResponse<Settings>>;
       updateSettings: (settings: Partial<Settings>) => Promise<ApiResponse<Settings>>;
+      isSetupComplete: () => Promise<ApiResponse<{ complete: boolean }> & { complete?: boolean }>;
+      getSyncStatus: () => Promise<ApiResponse<{ pending: number; failed: number; cloudConnected: boolean; lastSync: string | null }>>;
+      enqueueSyncItem: (item: { entityType: string; operation: string; payload: any; error?: string }) => Promise<ApiResponse<void>>;
       
       // Sales
       createSale: (saleData: any) => Promise<ApiResponse<{ saleId: number }>>;
-      getSales: () => Promise<ApiResponse<Sale[]>>;
+      getSales: (opts?: { limit?: number; offset?: number; search?: string; startDate?: string; endDate?: string }) => Promise<ApiResponse<Sale[]>>;
       getSaleItems: (saleId: number) => Promise<ApiResponse<any[]>>;
 
       // POS Expansion Features
@@ -90,7 +93,7 @@ declare global {
       getReport: (args: 'today' | 'week' | 'month' | { startDate: string; endDate?: string }) => Promise<ApiResponse<any>>;
 
       // Expenses
-      getExpenses: () => Promise<ApiResponse<any[]>>;
+      getExpenses: (opts?: any) => Promise<ApiResponse<any[]>>;
       addExpense: (data: any) => Promise<ApiResponse<void>>;
       deleteExpense: (id: number) => Promise<ApiResponse<void>>;
       
@@ -99,6 +102,7 @@ declare global {
       
       // Printing
       printInvoice: (htmlContent: string) => Promise<ApiResponse<void>>;
+      saveInvoicePdf: (htmlContent: string) => Promise<ApiResponse<{ path?: string; filePath?: string }>>;
       
       // Assets
       getLogo: () => Promise<ApiResponse<string>>;
@@ -117,3 +121,4 @@ declare global {
 }
 
 export {};
+      getRegisterHistory: (opts?: any) => Promise<ApiResponse<any[]>>;

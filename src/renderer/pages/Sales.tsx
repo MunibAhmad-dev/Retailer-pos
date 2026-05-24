@@ -8,7 +8,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { cn } from '../lib/utils';
+import { cn, formatInvoiceId } from '../lib/utils';
 import { useNotifications } from '../components/NotificationProvider';
 import {
   Select,
@@ -68,6 +68,8 @@ interface ReceiptData {
   settings: Settings;
   date: string;
   customerPhone?: string;
+  amountPaid?: number;
+  balance?: number;
 }
 
 import RegisterManager from '../components/RegisterManager';
@@ -97,12 +99,52 @@ function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
 
   const handleWhatsApp = () => {
     if (!data.customerPhone) return;
-    let msg = `*Receipt #${data.saleId}*\n*${data.settings.store_name}*\n\n`;
+
+    const paidAmt = data.amountPaid ?? data.total;
+    const balance = data.balance ?? 0; // negative = credit owed, positive = change due
+    const storeName = data.settings.store_name || 'Store';
+    const invoiceId = formatInvoiceId(data.saleId, data.date);
+
+    // ── English section ──
+    let msg = `🧾 *Invoice: ${invoiceId}*\n*${storeName}*\n`;
+    msg += `📅 ${data.date}\n`;
+    msg += `───────────────────\n`;
     data.items.forEach(i => {
-      msg += `${i.name} (x${i.quantity}): ${fmtPKR(i.price * i.quantity)}\n`;
+      msg += `▪ ${i.name} x${i.quantity} = ${fmtPKR(i.price * i.quantity)}\n`;
     });
-    if (data.discount > 0) msg += `\nDiscount: -${fmtPKR(data.discount)}`;
-    msg += `\n*Total: ${fmtPKR(data.total)}*`;
+    msg += `───────────────────\n`;
+    if (data.discount > 0) msg += `🏷️ Discount: -${fmtPKR(data.discount)}\n`;
+    msg += `💰 *Total: ${fmtPKR(data.total)}*\n`;
+    msg += `✅ *Paid: ${fmtPKR(paidAmt)}*\n`;
+    if (balance < 0) {
+      msg += `🔴 *Remaining Balance: ${fmtPKR(Math.abs(balance))}*\n`;
+    } else if (balance > 0) {
+      msg += `🟢 *Change Due: ${fmtPKR(balance)}*\n`;
+    } else {
+      msg += `🟢 *Fully Paid*\n`;
+    }
+    msg += `\n`;
+
+    // ── Urdu section ──
+    msg += `━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `🧾 *بل نمبر: ${invoiceId}*\n`;
+    msg += `🏪 *${storeName}*\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━\n`;
+    data.items.forEach(i => {
+      msg += `▪ ${i.name} × ${i.quantity} = ${fmtPKR(i.price * i.quantity)}\n`;
+    });
+    msg += `━━━━━━━━━━━━━━━━━━━\n`;
+    if (data.discount > 0) msg += `🏷️ رعایت: -${fmtPKR(data.discount)}\n`;
+    msg += `💰 *کل رقم: ${fmtPKR(data.total)}*\n`;
+    msg += `✅ *ادا شدہ: ${fmtPKR(paidAmt)}*\n`;
+    if (balance < 0) {
+      msg += `🔴 *باقی رقم (ادھار): ${fmtPKR(Math.abs(balance))}*\n`;
+    } else if (balance > 0) {
+      msg += `🟢 *واپسی: ${fmtPKR(balance)}*\n`;
+    } else {
+      msg += `🟢 *مکمل ادائیگی ہو گئی*\n`;
+    }
+    msg += `\n🙏 شکریہ! آپ کا دوبارہ خیرمقدم ہے۔`;
 
     // Format phone number (remove non-digits, ensure country code)
     let phone = data.customerPhone.replace(/\D/g, '');
@@ -140,7 +182,7 @@ function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
 
             <div className="border-b border-dashed border-border my-3" />
 
-            <p className="text-center text-muted-foreground">Receipt #{String(data.saleId)}</p>
+            <p className="text-center text-muted-foreground font-semibold">Invoice: {formatInvoiceId(data.saleId, data.date)}</p>
             <p className="text-center text-muted-foreground/70 text-[10px]">{data.date}</p>
 
             <div className="border-b border-dashed border-border my-3" />
@@ -174,6 +216,20 @@ function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
               <span>Total</span>
               <span>{fmtPKR(data.total)}</span>
             </div>
+            {data.amountPaid !== undefined && (
+              <div className="flex justify-between text-muted-foreground text-[10px] mt-1">
+                <span>Amount Paid</span>
+                <span>{fmtPKR(data.amountPaid)}</span>
+              </div>
+            )}
+            {data.balance !== undefined && data.balance !== 0 && (
+              <div className="flex justify-between text-muted-foreground text-[10px] mt-0.5">
+                <span>{data.balance > 0 ? 'Remaining Balance (Qaraz)' : 'Change Due'}</span>
+                <span className={data.balance > 0 ? 'text-amber-600 font-semibold' : 'text-green-600 font-semibold'}>
+                  {fmtPKR(Math.abs(data.balance))}
+                </span>
+              </div>
+            )}
             <div className="flex justify-between text-muted-foreground text-[10px] mt-1">
               <span>Payment</span>
               <span className="uppercase">{data.paymentMethod === 'online' ? 'Online Payment' : data.paymentMethod}</span>
@@ -395,7 +451,7 @@ export default function Sales() {
       ${data.settings.store_address ? `<p class="center">${data.settings.store_address}</p>` : ''}
       ${data.settings.store_phone ? `<p class="center">Tel: ${data.settings.store_phone}</p>` : ''}
       <div class="divider"></div>
-      <p class="center" style="font-weight:bold;font-size:12px;">Receipt #${data.saleId}</p>
+      <p class="center" style="font-weight:bold;font-size:12px;">Invoice: ${formatInvoiceId(data.saleId, data.date)}</p>
       <p class="center" style="font-size:10px;margin-top:2px;color:#555;">${data.date}</p>
       <div class="divider"></div>
       ${itemsHtml}
@@ -403,6 +459,8 @@ export default function Sales() {
       <div class="total-row" style="font-weight:normal;font-size:11px"><span>Subtotal</span><span>${fmtPKR(data.subtotal)}</span></div>
       ${Number(data.discount) > 0 ? `<div class="total-row" style="font-weight:normal;font-size:11px;color:red"><span>Discount</span><span>-${fmtPKR(Number(data.discount))}</span></div>` : ''}
       <div class="total-row"><span>Total</span><span>${fmtPKR(data.total)}</span></div>
+      ${data.amountPaid !== undefined ? `<div class="total-row" style="font-weight:normal;font-size:10px;margin-top:1px"><span>Amount Paid</span><span>${fmtPKR(data.amountPaid)}</span></div>` : ''}
+      ${data.balance !== undefined && data.balance !== 0 ? `<div class="total-row" style="font-weight:normal;font-size:10px;margin-top:1px"><span>${data.balance > 0 ? 'Remaining Balance' : 'Change Due'}</span><span>${fmtPKR(Math.abs(data.balance))}</span></div>` : ''}
       <div class="total-row" style="font-weight:normal;font-size:10px;margin-top:2px"><span>Payment</span><span>${data.paymentMethod === 'online' ? 'ONLINE PAYMENT' : data.paymentMethod.toUpperCase()}</span></div>
       
       <div class="divider"></div>
@@ -416,6 +474,18 @@ export default function Sales() {
   const buildFormalInvoiceHtml = (data: ReceiptData) => {
     const fmt = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
     const pkrNum = (n: number) => Math.round(n).toLocaleString('en-PK');
+
+    const paidAmt = data.amountPaid !== undefined ? data.amountPaid : data.total;
+    const balAmt = data.balance !== undefined ? data.balance : 0;
+
+    let balanceRow = '';
+    if (balAmt > 0) {
+      balanceRow = `<tr><td class="label">BALANCE (CREDIT)</td><td class="value">PKR ${pkrNum(balAmt)}</td></tr>`;
+    } else if (balAmt < 0) {
+      balanceRow = `<tr><td class="label">CHANGE DUE</td><td class="value">PKR ${pkrNum(Math.abs(balAmt))}</td></tr>`;
+    } else {
+      balanceRow = `<tr><td class="label">BALANCE</td><td class="value">PKR 0</td></tr>`;
+    }
 
     const rowsHtml = data.items.map((item, idx) => `
       <tr class="item-row">
@@ -448,7 +518,7 @@ export default function Sales() {
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Invoice #${String(data.saleId).padStart(4, '0')}</title>
+<title>Invoice ${formatInvoiceId(data.saleId, data.date)}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
@@ -566,7 +636,7 @@ export default function Sales() {
     </div>
     <div class="invoice-meta">
       <div class="invoice-title">INVOICE</div>
-      <div class="meta-row"><span>No:</span> #${String(data.saleId).padStart(4, '0')}</div>
+      <div class="meta-row"><span>No:</span> ${formatInvoiceId(data.saleId, data.date)}</div>
       <div class="meta-row"><span>Date:</span> ${data.date}</div>
     </div>
   </div>
@@ -600,8 +670,8 @@ export default function Sales() {
         <tr><td class="label">AMOUNT</td><td class="value">PKR ${pkrNum(data.subtotal)}</td></tr>
         <tr class="discount-row"><td class="label">DISCOUNT</td><td class="value">${Number(data.discount) > 0 ? '- PKR ' + pkrNum(Number(data.discount)) : '—'}</td></tr>
         <tr class="grand-row"><td class="label">GRAND TOTAL</td><td class="value">PKR ${pkrNum(data.total)}</td></tr>
-        <tr><td class="label">PAID</td><td class="value">PKR ${pkrNum(data.total)}</td></tr>
-        <tr><td class="label">BALANCE</td><td class="value">PKR 0</td></tr>
+        <tr><td class="label">PAID</td><td class="value">PKR ${pkrNum(paidAmt)}</td></tr>
+        ${balanceRow}
       </table>
     </div>
   </div>
@@ -686,7 +756,16 @@ export default function Sales() {
 
     setIsProcessing(true);
 
-    const amtPaid = amountPaid === "" ? (selectedCustomerId ? 0 : total) : parseFloat(amountPaid);
+    const parsedAmountPaid = Number(amountPaid);
+    const fallbackAmountPaid = selectedCustomerId ? 0 : total;
+    const amtPaid = amountPaid === "" || !Number.isFinite(parsedAmountPaid) ? fallbackAmountPaid : parsedAmountPaid;
+
+    if (amtPaid > total) {
+      addNotification("Invalid Payment", "Amount paid cannot exceed the sale total.", "error");
+      setIsProcessing(false);
+      return;
+    }
+
     let paymentStatus = 'Paid';
     if (!isNaN(amtPaid) && amtPaid < total) {
       paymentStatus = 'Partial';
@@ -716,6 +795,8 @@ export default function Sales() {
       if (result.success) {
         addNotification("Sale Processed", `Transaction completed via ${paymentMethod} payment.`, "success");
         const cust = customers.find(c => c.id === Number(selectedCustomerId));
+        const finalAmtPaid = isNaN(amtPaid) ? (selectedCustomerId ? 0 : total) : amtPaid;
+        const balance = finalAmtPaid - total; // negative = credit owed, positive = change due
         setReceiptData({
           saleId: result.data?.saleId || Date.now(),
           items: [...cart],
@@ -725,7 +806,9 @@ export default function Sales() {
           paymentMethod,
           settings: { ...settings },
           date: new Date().toLocaleString('en-PK', { timeZoneName: 'short' }),
-          customerPhone: cust?.phone
+          customerPhone: cust?.phone,
+          amountPaid: finalAmtPaid,
+          balance,
         });
         loadProducts();
         setDiscountValue('');
@@ -772,6 +855,13 @@ export default function Sales() {
     setReceiptData(null);
     setCart([]);
   };
+
+  const hasAmountPaidValue = amountPaid.trim() !== '';
+  const enteredAmountPaid = hasAmountPaidValue ? Number(amountPaid) : NaN;
+  const normalizedAmountPaid = Number.isFinite(enteredAmountPaid) ? enteredAmountPaid : 0;
+  const effectiveAmountPaid = hasAmountPaidValue ? normalizedAmountPaid : (selectedCustomerId ? 0 : total);
+  const isOverPayment = effectiveAmountPaid > total;
+  const isWalkInPartial = !selectedCustomerId && effectiveAmountPaid < total;
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] animate-in fade-in">
@@ -1301,17 +1391,34 @@ export default function Sales() {
                     type="text"
                     value={amountPaid}
                     onChange={(e) => {
-                      const val = e.target.value.replace(/[^0-9]/g, '');
-                      setAmountPaid(val);
+                      const digitsOnly = e.target.value.replace(/[^0-9]/g, '');
+                      if (!digitsOnly) {
+                        setAmountPaid('');
+                        return;
+                      }
+
+                      const numericValue = Number(digitsOnly);
+                      if (!Number.isFinite(numericValue)) {
+                        setAmountPaid('');
+                        return;
+                      }
+
+                      const clampedValue = Math.min(numericValue, Math.max(0, total));
+                      setAmountPaid(String(clampedValue));
                     }}
                     className="text-lg font-bold bg-background"
                   />
+                  {isOverPayment && (
+                    <p className="text-xs text-destructive font-medium">
+                      Amount paid cannot be greater than total amount.
+                    </p>
+                  )}
                   {selectedCustomerId ? (
                     <p className="text-xs text-muted-foreground">
-                      Remaining balance: {fmtPKR(Math.max(0, total - (parseFloat(amountPaid) || 0)))} will be added to customer's Qaraz (Credit).
+                      Remaining balance: {fmtPKR(Math.max(0, total - effectiveAmountPaid))} will be added to customer's Qaraz (Credit).
                     </p>
                   ) : (
-                    parseFloat(amountPaid) < total && (
+                    isWalkInPartial && (
                       <p className="text-xs text-destructive font-medium">
                         Warning: Walk-in customers cannot have partial payments. Please select a customer to track credit.
                       </p>
@@ -1324,7 +1431,7 @@ export default function Sales() {
               <Button variant="outline" className="w-full" onClick={() => setShowCheckoutModal(false)}>Cancel</Button>
               <Button
                 onClick={processPayment}
-                disabled={isProcessing || (!selectedCustomerId && parseFloat(amountPaid) < total)}
+                disabled={isProcessing || isWalkInPartial || isOverPayment}
                 className="w-full"
               >
                 {isProcessing ? <RefreshCw size={18} className="animate-spin mr-2" /> : <CheckCircle size={18} className="mr-2" />}

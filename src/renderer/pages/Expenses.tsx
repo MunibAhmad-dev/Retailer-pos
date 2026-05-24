@@ -29,13 +29,16 @@ export default function Expenses() {
   const [amount, setAmount] = useState('');
   const [notes, setNotes] = useState('');
   const [currentRegister, setCurrentRegister] = useState<any>(null);
+  const [dateFilter, setDateFilter] = useState<'today' | 'weekly' | 'monthly' | 'custom'>('weekly');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
 
   const { addNotification } = useNotifications();
 
   useEffect(() => {
     load();
     checkRegister();
-  }, []);
+  }, [dateFilter, fromDate, toDate]);
 
   const checkRegister = async () => {
     try {
@@ -51,7 +54,12 @@ export default function Expenses() {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await window.api.getExpenses();
+      const payload = {
+        dateFilter,
+        startDate: fromDate ? `${fromDate} 00:00:00` : undefined,
+        endDate: toDate ? `${toDate} 23:59:59` : undefined
+      };
+      const res = await window.api.getExpenses(payload);
       if (res?.success) setExpenses(res.data);
     } catch {
       addNotification("Error", "Could not load expenses.", "error");
@@ -115,6 +123,29 @@ export default function Expenses() {
         <Button onClick={() => setShowAdd(!showAdd)} className="gap-2 shadow-sm font-semibold">
           <Plus size={16} /> Add Expense
         </Button>
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="flex gap-1 rounded-lg bg-muted p-1 w-fit">
+          {(['today', 'weekly', 'monthly', 'custom'] as const).map((f) => (
+            <Button
+              key={f}
+              type="button"
+              variant={dateFilter === f ? 'default' : 'ghost'}
+              size="sm"
+              className="h-8"
+              onClick={() => setDateFilter(f)}
+            >
+              {f === 'today' ? 'Today' : f === 'weekly' ? 'Weekly' : f === 'monthly' ? 'Monthly' : 'Custom'}
+            </Button>
+          ))}
+        </div>
+        {dateFilter === 'custom' && (
+          <>
+            <Input type="date" className="h-10 sm:w-44" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+            <Input type="date" className="h-10 sm:w-44" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+          </>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

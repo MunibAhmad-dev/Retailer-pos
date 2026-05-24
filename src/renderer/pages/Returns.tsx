@@ -7,7 +7,7 @@ import { Badge } from '../components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { useNotifications } from '../components/NotificationProvider';
-import { cn } from '../lib/utils';
+import { cn, formatInvoiceId } from '../lib/utils';
 import { useLocation } from 'react-router-dom';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../components/ui/dialog';
 import { Label } from '../components/ui/label';
@@ -28,6 +28,9 @@ export default function Returns() {
   const [loadingMoreSales, setLoadingMoreSales] = useState(false);
   const [loadingMorePurchases, setLoadingMorePurchases] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [dateFilter, setDateFilter] = useState<'today' | 'weekly' | 'monthly' | 'custom'>('weekly');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
 
   const [salesOffset, setSalesOffset] = useState(0);
   const [purchaseOffset, setPurchaseOffset] = useState(0);
@@ -60,7 +63,7 @@ export default function Returns() {
     return () => {
       isMountedRef.current = false;
     };
-  }, [location.search]);
+  }, [location.search, dateFilter, fromDate, toDate]);
 
   const handleInitiateReturn = async (saleId: number) => {
     setLoading(true);
@@ -143,8 +146,20 @@ export default function Returns() {
       const pOff = fresh ? 0 : purchaseOffset;
 
       const [salesRes, purchaseRes] = await Promise.all([
-        window.api.getSaleReturns({ limit: PAGE_SIZE, offset: sOff }),
-        window.api.getPurchaseReturns({ limit: PAGE_SIZE, offset: pOff })
+        window.api.getSaleReturns({
+          limit: PAGE_SIZE,
+          offset: sOff,
+          dateFilter,
+          startDate: fromDate ? `${fromDate} 00:00:00` : undefined,
+          endDate: toDate ? `${toDate} 23:59:59` : undefined
+        }),
+        window.api.getPurchaseReturns({
+          limit: PAGE_SIZE,
+          offset: pOff,
+          dateFilter,
+          startDate: fromDate ? `${fromDate} 00:00:00` : undefined,
+          endDate: toDate ? `${toDate} 23:59:59` : undefined
+        })
       ]);
 
       if (salesRes.success) {
@@ -172,7 +187,13 @@ export default function Returns() {
   const loadMoreSales = async () => {
     setLoadingMoreSales(true);
     try {
-      const res = await window.api.getSaleReturns({ limit: PAGE_SIZE, offset: salesOffset });
+      const res = await window.api.getSaleReturns({
+        limit: PAGE_SIZE,
+        offset: salesOffset,
+        dateFilter,
+        startDate: fromDate ? `${fromDate} 00:00:00` : undefined,
+        endDate: toDate ? `${toDate} 23:59:59` : undefined
+      });
       if (res.success) {
         setSaleReturns(prev => [...prev, ...res.data]);
         setSalesTotal(res.total);
@@ -186,7 +207,13 @@ export default function Returns() {
   const loadMorePurchases = async () => {
     setLoadingMorePurchases(true);
     try {
-      const res = await window.api.getPurchaseReturns({ limit: PAGE_SIZE, offset: purchaseOffset });
+      const res = await window.api.getPurchaseReturns({
+        limit: PAGE_SIZE,
+        offset: purchaseOffset,
+        dateFilter,
+        startDate: fromDate ? `${fromDate} 00:00:00` : undefined,
+        endDate: toDate ? `${toDate} 23:59:59` : undefined
+      });
       if (res.success) {
         setPurchaseReturns(prev => [...prev, ...res.data]);
         setPurchaseTotal(res.total);
@@ -202,8 +229,9 @@ export default function Returns() {
     const partyLabel = isSale ? 'Customer' : 'Vendor';
     const partyName = isSale ? ret.customer_name : ret.vendor_name;
     const amount = isSale ? ret.total_refunded : ret.total_returned;
-    const refLabel = isSale ? 'Sale ID' : 'Purchase ID';
+    const refLabel = isSale ? 'Invoice No' : 'Purchase ID';
     const refId = isSale ? ret.sale_id : ret.purchase_id;
+    const formattedRef = isSale ? formatInvoiceId(ret.sale_id, ret.sale_date || ret.date_created) : `#${ret.purchase_id}`;
 
     // Fetch items for this return
     const itemsRes = isSale
@@ -221,7 +249,7 @@ export default function Returns() {
         
         <div style="margin-bottom: 20px;">
           <p style="margin: 5px 0;"><strong>Return ID:</strong> #${ret.id}</p>
-          <p style="margin: 5px 0;"><strong>${refLabel}:</strong> #${refId}</p>
+          <p style="margin: 5px 0;"><strong>${refLabel}:</strong> ${formattedRef}</p>
           <p style="margin: 5px 0;"><strong>${partyLabel}:</strong> ${partyName || 'N/A'}</p>
           <p style="margin: 5px 0; font-size: 11px; color: #666;"><strong>Orig. Purchase Total:</strong> PKR ${Math.round(ret.original_total).toLocaleString()}</p>
         </div>
@@ -285,7 +313,7 @@ export default function Returns() {
 
     const message = `*Return Receipt*\n\n` +
       `*Return ID:* #${ret.id}\n` +
-      `*${isSale ? 'Sale' : 'Purchase'} Ref:* #${refId}\n` +
+      `*${isSale ? 'Invoice No' : 'Purchase Ref'}:* ${formattedRef}\n` +
       `*Party:* ${partyName || 'N/A'}\n` +
       `*Date:* ${formatReturnDate(ret)}\n\n` +
       `*Items Returned:*\n${itemsList}\n` +
@@ -316,10 +344,32 @@ export default function Returns() {
           <h1 className="text-3xl font-bold tracking-tight">Returns Management</h1>
           <p className="text-muted-foreground mt-1 text-sm">Track and manage customer refunds and vendor returns</p>
         </div>
-        <Button onClick={() => loadReturns(true)} variant="outline" className="gap-2 h-10 shadow-sm border-primary/20 hover:bg-primary/5">
-          <RefreshCcw size={16} className={loading ? "animate-spin" : ""} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex gap-1 rounded-lg bg-muted p-1">
+            {(['today', 'weekly', 'monthly', 'custom'] as const).map((f) => (
+              <Button
+                key={f}
+                type="button"
+                variant={dateFilter === f ? 'default' : 'ghost'}
+                size="sm"
+                className="h-8"
+                onClick={() => setDateFilter(f)}
+              >
+                {f === 'today' ? 'Today' : f === 'weekly' ? 'Weekly' : f === 'monthly' ? 'Monthly' : 'Custom'}
+              </Button>
+            ))}
+          </div>
+          {dateFilter === 'custom' && (
+            <>
+              <Input type="date" className="h-10 w-40" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+              <Input type="date" className="h-10 w-40" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            </>
+          )}
+          <Button onClick={() => loadReturns(true)} variant="outline" className="gap-2 h-10 shadow-sm border-primary/20 hover:bg-primary/5">
+            <RefreshCcw size={16} className={loading ? "animate-spin" : ""} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <Card className="border-none shadow-xl bg-card/60 backdrop-blur-md overflow-hidden">
@@ -371,7 +421,7 @@ export default function Returns() {
                     ) : filteredSales.map((ret) => (
                       <TableRow key={ret.id} className="group hover:bg-primary/5 transition-colors cursor-default">
                         <TableCell className="pl-6 font-mono font-bold text-primary">#{ret.id}</TableCell>
-                        <TableCell className="font-medium">Sale #{ret.sale_id}</TableCell>
+                        <TableCell className="font-mono text-xs font-bold text-foreground/80">{formatInvoiceId(ret.sale_id, ret.sale_date || ret.date_created)}</TableCell>
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">

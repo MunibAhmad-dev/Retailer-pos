@@ -13,6 +13,18 @@ export interface Settings {
   store_logo: string;
   receipt_footer: string;
   pos_password?: string;
+  owner_full_name?: string;
+  owner_mobile?: string;
+  owner_email?: string;
+  cloud_backend_url?: string;
+  cloud_backend_token?: string;
+  cloud_connected?: boolean | number;
+  cloud_last_sync?: string | null;
+  license_mode?: string;
+  approval_status?: string;
+  activation_key?: string;
+  business_name?: string;
+  setup_completed?: boolean | number;
   updated_at: string;
 }
 
@@ -51,10 +63,13 @@ export interface POSApi {
   // Settings
   getSettings: () => Promise<ApiResponse<Settings>>;
   updateSettings: (settings: Partial<Settings>) => Promise<ApiResponse<Settings>>;
+  isSetupComplete: () => Promise<ApiResponse<{ complete: boolean }> & { complete?: boolean }>;
+  getSyncStatus: () => Promise<ApiResponse<{ pending: number; failed: number; cloudConnected: boolean; lastSync: string | null }>>;
+  enqueueSyncItem: (item: { entityType: string; operation: string; payload: any; error?: string }) => Promise<ApiResponse<void>>;
 
   // Sales
   createSale: (saleData: SaleData) => Promise<ApiResponse<{ saleId: number }>>;
-  getSales: () => Promise<ApiResponse<any[]>>;
+  getSales: (opts?: { limit?: number; offset?: number; search?: string; startDate?: string; endDate?: string }) => Promise<ApiResponse<any[]>>;
   getSaleItems: (saleId: number) => Promise<ApiResponse<any[]>>;
   updateSaleStatus: (saleId: number, status: string) => Promise<ApiResponse<void>>;
 
@@ -95,7 +110,7 @@ export interface POSApi {
 
   // Printing
   printInvoice: (htmlContent: string) => Promise<ApiResponse<void>>;
-  saveInvoicePdf: (htmlContent: string) => Promise<ApiResponse<{ success: boolean; filePath?: string }>>;
+  saveInvoicePdf: (htmlContent: string) => Promise<ApiResponse<{ path?: string; filePath?: string }>>;
   
   // Assets
   getLogo: () => Promise<ApiResponse<string>>;

@@ -165,13 +165,14 @@ class SubscriptionService {
   ): SubscriptionState {
     const online = typeof navigator !== 'undefined' ? navigator.onLine : true;
     const lastTs = lastOnlineCheck ? new Date(lastOnlineCheck).getTime() : 0;
+    const offlineMode = licenseMode === 'offline';
     const internetReminder = licenseMode === 'online' && !online && !!lastTs && (Date.now() - lastTs > 10 * 24 * 60 * 60 * 1000);
     this.state = {
-      isActive: false,
+      isActive: offlineMode,
       isGracePeriod: false,
-      isExpired: true,
-      daysRemaining: 0,
-      plan: 'none',
+      isExpired: !offlineMode,
+      daysRemaining: offlineMode ? 9999 : 0,
+      plan: offlineMode ? 'lifetime' : 'none',
       expiryDate: null,
       lastSync: null,
       cloudConnected,

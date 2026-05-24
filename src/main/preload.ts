@@ -11,10 +11,13 @@ const api = {
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   updateSettings: (settings: any) => ipcRenderer.invoke('update-settings', settings),
+  isSetupComplete: () => ipcRenderer.invoke('is-setup-complete'),
+  getSyncStatus: () => ipcRenderer.invoke('get-sync-status'),
+  enqueueSyncItem: (item: any) => ipcRenderer.invoke('enqueue-sync-item', item),
 
   // Sales
   createSale: (saleData: any) => ipcRenderer.invoke('create-sale', saleData),
-  getSales: (opts?: { limit?: number; offset?: number; search?: string }) => ipcRenderer.invoke('get-sales', opts ?? {}),
+  getSales: (opts?: { limit?: number; offset?: number; search?: string; startDate?: string; endDate?: string }) => ipcRenderer.invoke('get-sales', opts ?? {}),
   getSaleItems: (saleId: number) => ipcRenderer.invoke('get-sale-items', saleId),
   updateSaleStatus: (saleId: number, status: string) => ipcRenderer.invoke('update-sale-status', saleId, status),
 
@@ -59,7 +62,7 @@ const api = {
   getReport: (args: any) => ipcRenderer.invoke('get-report', args),
 
   // Expenses
-  getExpenses: () => ipcRenderer.invoke('get-expenses'),
+  getExpenses: (opts?: any) => ipcRenderer.invoke('get-expenses', opts),
   addExpense: (data: any) => ipcRenderer.invoke('add-expense', data),
   deleteExpense: (id: number) => ipcRenderer.invoke('delete-expense', id),
 
@@ -92,7 +95,7 @@ const api = {
   openRegister: (data: { openingBalance: number; openedBy?: string }) => ipcRenderer.invoke('open-register', data),
   getRegisterSummary: (registerId: number) => ipcRenderer.invoke('get-register-summary', registerId),
   closeRegister: (data: { registerId: number; actualCash: number; closedBy?: string; notes?: string }) => ipcRenderer.invoke('close-register', data),
-  getRegisterHistory: () => ipcRenderer.invoke('get-register-history'),
+  getRegisterHistory: (opts?: any) => ipcRenderer.invoke('get-register-history', opts),
 
   // Financials
   getFinancialTransactions: () => ipcRenderer.invoke('get-financial-transactions'),
@@ -115,6 +118,7 @@ const api = {
   triggerGoogleDriveBackup: () => ipcRenderer.invoke('trigger-google-drive-backup'),
   getAvailableBackups: () => ipcRenderer.invoke('get-available-backups'),
   restoreCloudBackup: (fileId: string) => ipcRenderer.invoke('restore-cloud-backup', fileId),
+  disconnectGoogleDrive: () => ipcRenderer.invoke('disconnect-google-drive'),
   onRestoreProgress: (callback: (data: { status: string, progress: number }) => void) => {
     const subscription = (_event: any, data: any) => callback(data);
     ipcRenderer.on('restore-progress', subscription);

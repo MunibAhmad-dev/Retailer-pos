@@ -65,6 +65,19 @@ export class GoogleAuthService {
     return !!(creds && (creds.access_token || creds.refresh_token));
   }
 
+  /** Clears stored tokens — must call connect() again after this */
+  public disconnect(): void {
+    try {
+      this.oauth2Client.setCredentials({});
+      if (fs.existsSync(TOKEN_PATH)) {
+        fs.unlinkSync(TOKEN_PATH);
+        log('Tokens deleted from disk (disconnect)');
+      }
+    } catch (e) {
+      log('Error during disconnect', e);
+    }
+  }
+
   /**
    * Starts a local server to listen for the OAuth2 callback
    */

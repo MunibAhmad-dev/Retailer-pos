@@ -3,6 +3,8 @@ import { DollarSign, Search, UserCheck, Activity, ArrowRight, Wallet, History, A
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { Badge } from '../components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { useNotifications } from '../components/NotificationProvider';
 import { useNavigate } from 'react-router-dom';
 import { usePagination } from '../hooks/usePagination';
@@ -14,6 +16,7 @@ interface AccountEntity {
   name: string;
   phone?: string;
   balance: number;
+  last_activity?: string;
 }
 
 export default function Loans() {
@@ -28,6 +31,9 @@ export default function Loans() {
   const [previewStatus, setPreviewStatus] = useState<'all' | 'settled' | 'pending' | 'partial' | 'cancelled' | 'returned'>('all');
   const [previewTab, setPreviewTab] = useState<'all' | 'receivables' | 'payables'>('all');
   const [previewPage, setPreviewPage] = useState(1);
+  const [dateFilter, setDateFilter] = useState<'today' | 'weekly' | 'monthly' | 'custom'>('weekly');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const { addNotification } = useNotifications();
   const navigate = useNavigate();
   const PREVIEW_PAGE_SIZE = 20;
@@ -66,10 +72,39 @@ export default function Loans() {
 
   const currentData = activeTab === 'receivables' ? customers : vendors;
 
+  const inSelectedRange = (rawDate?: string) => {
+    if (!rawDate) return false;
+    const d = new Date(rawDate);
+    if (Number.isNaN(d.getTime())) return false;
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (dateFilter === 'today') return d >= startOfDay;
+    if (dateFilter === 'weekly') {
+      const start = new Date(startOfDay);
+      start.setDate(start.getDate() - 6);
+      return d >= start;
+    }
+    if (dateFilter === 'monthly') {
+      const start = new Date(startOfDay);
+      start.setDate(start.getDate() - 29);
+      return d >= start;
+    }
+    if (dateFilter === 'custom') {
+      const from = fromDate ? new Date(`${fromDate}T00:00:00`) : null;
+      const to = toDate ? new Date(`${toDate}T23:59:59`) : null;
+      if (from && d < from) return false;
+      if (to && d > to) return false;
+      return true;
+    }
+    return true;
+  };
+
   const filteredData = useMemo(() => currentData.filter(item =>
-    item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (item.phone && item.phone.includes(searchTerm))
-  ), [currentData, searchTerm]);
+    inSelectedRange(item.last_activity) && (
+      item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (item.phone && item.phone.includes(searchTerm))
+    )
+  ), [currentData, searchTerm, dateFilter, fromDate, toDate]);
 
   const { visible: visibleItems, hasMore, loadMore, total: pTotal, showing } = usePagination(filteredData, 10, 1);
 
@@ -143,7 +178,7 @@ export default function Loans() {
         };
       });
 
-    let rows = [...mapRows(customers, 'receivables'), ...mapRows(vendors, 'payables')];
+    let rows = [...mapRows(customers, 'receivables'), ...mapRows(vendors, 'payables')].filter(r => inSelectedRange(r.last_activity));
     if (previewTab !== 'all') rows = rows.filter(r => r.kind === previewTab);
     if (previewStatus !== 'all') rows = rows.filter(r => r.status === previewStatus);
     if (q) {
@@ -154,7 +189,7 @@ export default function Loans() {
       );
     }
     return rows.sort((a, b) => b.remaining - a.remaining);
-  }, [customers, vendors, previewSearch, previewStatus, previewTab]);
+  }, [customers, vendors, previewSearch, previewStatus, previewTab, dateFilter, fromDate, toDate]);
 
   const previewTotalPages = Math.max(1, Math.ceil(previewRows.length / PREVIEW_PAGE_SIZE));
   const previewVisibleRows = useMemo(() => {
@@ -373,8 +408,31 @@ export default function Loans() {
 
         <Button onClick={() => { setPreviewPage(1); setShowPdfPreviewModal(true); }} variant="outline" className="gap-2 shadow-sm border-primary/20 hover:bg-primary/5">
           <FileText size={16} className="text-primary" />
-          Save as PDF
+          View All Invoices
         </Button>
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex gap-1 rounded-lg bg-muted p-1">
+          {(['today', 'weekly', 'monthly', 'custom'] as const).map((f) => (
+            <Button
+              key={f}
+              type="button"
+              variant={dateFilter === f ? 'default' : 'ghost'}
+              size="sm"
+              className="h-8"
+              onClick={() => setDateFilter(f)}
+            >
+              {f === 'today' ? 'Today' : f === 'weekly' ? 'Weekly' : f === 'monthly' ? 'Monthly' : 'Custom'}
+            </Button>
+          ))}
+        </div>
+        {dateFilter === 'custom' && (
+          <>
+            <Input type="date" className="h-10 w-40" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+            <Input type="date" className="h-10 w-40" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+          </>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -516,39 +574,33 @@ export default function Loans() {
         </CardContent>
       </Card>
 
-      {showPdfPreviewModal && (
-        <div className="fixed inset-0 z-50 grid place-items-center p-2 sm:p-3 bg-background/80 backdrop-blur-sm animate-in fade-in" onClick={() => setShowPdfPreviewModal(false)}>
-          <Card className="w-[92vw] xl:w-[1020px] h-[72vh] shadow-2xl border-border/50 animate-in zoom-in-95 duration-200 flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <CardHeader className="border-b bg-muted/20 pb-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <CardTitle className="text-xl font-bold">Accounts PDF Preview</CardTitle>
-                  <CardDescription>Professional AR/AP preview before export</CardDescription>
-                </div>
-                <Button variant="ghost" size="icon" onClick={() => setShowPdfPreviewModal(false)}><X size={16} /></Button>
-              </div>
-            </CardHeader>
-            <CardContent className="p-5 space-y-4 overflow-y-auto flex-1">
+      <Dialog open={showPdfPreviewModal} onOpenChange={setShowPdfPreviewModal}>
+        <DialogContent className="w-[98vw] max-w-[1240px] h-[90vh] p-0 overflow-hidden flex flex-col">
+          <DialogHeader className="border-b bg-muted/20 px-6 py-4 text-left">
+            <DialogTitle className="text-xl font-bold">Accounts PDF Preview</DialogTitle>
+            <DialogDescription>Professional AR/AP preview before export</DialogDescription>
+          </DialogHeader>
+          <div className="p-5 space-y-4 overflow-y-auto flex-1 min-h-0">
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-                <div className="rounded-xl border bg-rose-50/50 dark:bg-rose-950/20 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-rose-200/50 dark:border-rose-900/50">
+                <div className="rounded-xl border bg-rose-100 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-rose-300 dark:bg-rose-950/20 dark:border-rose-900/50">
                   <p className="text-[10px] uppercase text-muted-foreground font-black tracking-widest mb-1">Receivables</p>
-                  <p className="text-xl font-black text-rose-600 dark:text-rose-400">{fmt(previewSummary.arPending)}</p>
+                  <p className="text-xl font-black text-rose-800 dark:text-rose-400">{fmt(previewSummary.arPending)}</p>
                 </div>
-                <div className="rounded-xl border bg-amber-50/50 dark:bg-amber-950/20 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-amber-200/50 dark:border-amber-900/50">
+                <div className="rounded-xl border bg-amber-100 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-amber-300 dark:bg-amber-950/20 dark:border-amber-900/50">
                   <p className="text-[10px] uppercase text-muted-foreground font-black tracking-widest mb-1">Payables</p>
-                  <p className="text-xl font-black text-amber-600 dark:text-amber-400">{fmt(previewSummary.apPending)}</p>
+                  <p className="text-xl font-black text-amber-800 dark:text-amber-400">{fmt(previewSummary.apPending)}</p>
                 </div>
-                <div className="rounded-xl border bg-blue-50/50 dark:bg-blue-950/20 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-blue-200/50 dark:border-blue-900/50">
+                <div className="rounded-xl border bg-blue-100 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-blue-300 dark:bg-blue-950/20 dark:border-blue-900/50">
                   <p className="text-[10px] uppercase text-muted-foreground font-black tracking-widest mb-1">Net Balance</p>
-                  <p className="text-xl font-black text-blue-600 dark:text-blue-400">{fmt(previewSummary.netOutstanding)}</p>
+                  <p className="text-xl font-black text-blue-800 dark:text-blue-400">{fmt(previewSummary.netOutstanding)}</p>
                 </div>
-                <div className="rounded-xl border bg-emerald-50/50 dark:bg-emerald-950/20 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-emerald-200/50 dark:border-emerald-900/50">
+                <div className="rounded-xl border bg-emerald-100 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-emerald-300 dark:bg-emerald-950/20 dark:border-emerald-900/50">
                   <p className="text-[10px] uppercase text-muted-foreground font-black tracking-widest mb-1">Settled</p>
-                  <p className="text-xl font-black text-emerald-600 dark:text-emerald-400">{previewSummary.settledCount}</p>
+                  <p className="text-xl font-black text-emerald-800 dark:text-emerald-400">{previewSummary.settledCount}</p>
                 </div>
-                <div className="rounded-xl border bg-orange-50/50 dark:bg-orange-950/20 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-orange-200/50 dark:border-orange-900/50">
+                <div className="rounded-xl border bg-orange-100 p-4 transition-all hover:-translate-y-0.5 hover:shadow-sm border-orange-300 dark:bg-orange-950/20 dark:border-orange-900/50">
                   <p className="text-[10px] uppercase text-muted-foreground font-black tracking-widest mb-1">Pending</p>
-                  <p className="text-xl font-black text-orange-600 dark:text-orange-400">{previewSummary.pendingCount}</p>
+                  <p className="text-xl font-black text-orange-800 dark:text-orange-400">{previewSummary.pendingCount}</p>
                 </div>
               </div>
 
@@ -593,7 +645,7 @@ export default function Loans() {
                           <td className="py-4 px-4">
                             <Badge variant="outline" className={cn(
                               "text-[9px] font-black uppercase px-2 py-0.5",
-                              r.kind === 'receivables' ? "text-rose-600 border-rose-200 bg-rose-50/50 dark:text-rose-400 dark:border-rose-900/50 dark:bg-rose-950/50" : "text-amber-600 border-amber-200 bg-amber-50/50 dark:text-amber-400 dark:border-amber-900/50 dark:bg-amber-950/50"
+                              r.kind === 'receivables' ? "text-rose-800 border-rose-300 bg-rose-100 dark:text-rose-300 dark:border-rose-900/50 dark:bg-rose-950/50" : "text-amber-800 border-amber-300 bg-amber-100 dark:text-amber-300 dark:border-amber-900/50 dark:bg-amber-950/50"
                             )}>
                               {r.kind === 'receivables' ? 'Receivable' : 'Payable'}
                             </Badge>
@@ -603,11 +655,11 @@ export default function Loans() {
                           <td className="py-4 px-4 text-center">
                             <span className={cn(
                               "inline-flex items-center rounded-lg px-2.5 py-1 text-[10px] font-black uppercase tracking-tighter shadow-sm",
-                              r.status === 'settled' ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400" :
-                              r.status === 'pending' ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" :
-                              r.status === 'partial' ? "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400" :
-                              r.status === 'cancelled' ? "bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-400" :
-                              "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-400"
+                              r.status === 'settled' ? "bg-emerald-100 text-black dark:bg-emerald-900/40 dark:text-emerald-300" :
+                              r.status === 'pending' ? "bg-amber-100 text-black dark:bg-amber-900/40 dark:text-amber-300" :
+                              r.status === 'partial' ? "bg-orange-100 text-black dark:bg-orange-900/40 dark:text-orange-300" :
+                              r.status === 'cancelled' ? "bg-rose-100 text-black dark:bg-rose-900/40 dark:text-rose-300" :
+                              "bg-violet-100 text-black dark:bg-violet-900/40 dark:text-violet-300"
                             )}>
                               {r.status}
                             </span>
@@ -627,14 +679,24 @@ export default function Loans() {
               </div>
 
               <div className="sticky bottom-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/70 border-t -mx-5 px-5 py-3 flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setPreviewPage(1)} className="hover:scale-[1.01] transition-transform">Preview</Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setPreviewSearch('');
+                    setPreviewStatus('all');
+                    setPreviewTab('all');
+                    setPreviewPage(1);
+                  }}
+                  className="hover:scale-[1.01] transition-transform"
+                >
+                  Preview
+                </Button>
                 <Button variant="outline" className="gap-2" onClick={printPreview}><Printer size={14} /> Print</Button>
                 <Button className="gap-2" onClick={exportFromPreview}><Download size={14} /> Generate PDF</Button>
               </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

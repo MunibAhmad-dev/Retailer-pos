@@ -1,6 +1,6 @@
 {
   "name": "retail-pos",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Professional Retail Point of Sale System with Inventory and Financial Reporting",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -107,6 +107,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "axios": "^1.13.5",
     "autoprefixer": "^10.4.27",
     "concurrently": "^9.2.1",
     "electron": "^41.0.2",

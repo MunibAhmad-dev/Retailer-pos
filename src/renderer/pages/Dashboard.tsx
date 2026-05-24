@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Button } from '../components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Badge } from '../components/ui/badge';
-import { cn } from '../lib/utils';
+import { cn, formatInvoiceId } from '../lib/utils';
 import { useNotifications } from '../components/NotificationProvider';
 import { subService } from '../services/subscription';
 import {
@@ -37,6 +37,7 @@ export default function Dashboard({ onLock }: DashboardProps) {
   const [customEnd, setCustomEnd] = useState<string>('');
   const [itemQuery, setItemQuery] = useState('');
   const [itemWindow, setItemWindow] = useState<'week' | 'month'>('month');
+  const [itemLimit, setItemLimit] = useState(10);
 
   const loadStats = async (isManualRefresh = false, overrides?: { s?: string; e?: string; p?: string }) => {
     setLoading(true);
@@ -48,7 +49,8 @@ export default function Dashboard({ onLock }: DashboardProps) {
       if (activePeriod !== 'custom') {
         const now = new Date();
         eDate = new Date().toISOString();
-        if (activePeriod === 'week') sDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).toISOString();
+        if (activePeriod === 'today') sDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+        else if (activePeriod === 'week') sDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).toISOString();
         else if (activePeriod === 'month') sDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
         else if (activePeriod === 'year') sDate = new Date(now.getFullYear(), 0, 1).toISOString();
       }
@@ -124,12 +126,12 @@ export default function Dashboard({ onLock }: DashboardProps) {
       .filter((r: any) => r.revenue > 0);
   }, [stats?.paymentStats]);
 
-  const itemRows = useMemo(() => {
+  const allItemRows = useMemo(() => {
     const rows = Array.isArray(stats?.productSalesWindows) ? stats.productSalesWindows : [];
     const q = itemQuery.trim().toLowerCase();
-    const filtered = q ? rows.filter((r: any) => String(r.name || '').toLowerCase().includes(q)) : rows;
-    return filtered.slice(0, 100);
+    return q ? rows.filter((r: any) => String(r.name || '').toLowerCase().includes(q)) : rows;
   }, [stats?.productSalesWindows, itemQuery]);
+  const itemRows = allItemRows.slice(0, itemLimit);
 
   const deadRows = useMemo(() => {
     const rows = Array.isArray(stats?.deadProducts) ? stats.deadProducts : [];
@@ -221,6 +223,7 @@ export default function Dashboard({ onLock }: DashboardProps) {
         </div>
         <div className="flex flex-col sm:flex-row items-center gap-1 bg-muted/50 p-1 rounded-xl border border-border/40">
           {[
+            { id: 'today', label: 'Today' },
             { id: 'week', label: 'Weekly' },
             { id: 'month', label: 'Monthly' },
             { id: 'year', label: 'Yearly' },
@@ -412,7 +415,7 @@ export default function Dashboard({ onLock }: DashboardProps) {
                   <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
                   <input
                     value={itemQuery}
-                    onChange={(e) => setItemQuery(e.target.value)}
+                    onChange={(e) => { setItemQuery(e.target.value); setItemLimit(10); }}
                     placeholder="Search item name..."
                     className="h-9 w-full rounded-md border border-input bg-background pl-8 pr-3 text-sm"
                   />
@@ -452,6 +455,13 @@ export default function Dashboard({ onLock }: DashboardProps) {
                   </TableBody>
                 </Table>
               </div>
+              {itemLimit < allItemRows.length && (
+                <div className="flex justify-center pt-1">
+                  <Button size="sm" variant="outline" onClick={() => setItemLimit(l => l + 10)} className="text-xs gap-1">
+                    Load More ({allItemRows.length - itemLimit} remaining)
+                  </Button>
+                </div>
+              )}
 
               <div>
                 <h4 className="text-sm font-bold mb-2">Dead Items (No sales in current month)</h4>
@@ -768,25 +778,25 @@ export default function Dashboard({ onLock }: DashboardProps) {
                 </div>
                 <Card className="w-full lg:max-w-md shadow-xl border-amber-500/30 dark:border-amber-500/20 bg-amber-50/80 dark:bg-amber-950/20 backdrop-blur-md">
                   <CardHeader className="pb-3 border-b border-amber-500/20 bg-amber-500/10">
-                    <CardTitle className="text-xs font-black text-amber-900 dark:text-amber-200 flex items-center gap-2 uppercase tracking-widest">
-                      <Info size={14} className="text-amber-600" /> Financial Insights
+                    <CardTitle className="text-xs font-black !text-black dark:!text-amber-200 flex items-center gap-2 uppercase tracking-widest">
+                      <Info size={14} className="!text-black dark:!text-amber-400" /> Financial Insights
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="p-5 space-y-5">
                     <div className="flex gap-4 items-start">
                       <div className="w-9 h-9 rounded-2xl bg-amber-500/20 dark:bg-amber-500/30 flex items-center justify-center shrink-0 border border-amber-500/30 shadow-sm">
-                        <HandCoins size={18} className="text-amber-800 dark:text-amber-400" />
+                        <HandCoins size={18} className="!text-black dark:!text-amber-400" />
                       </div>
-                      <p className="text-[12px] leading-snug text-amber-950 dark:text-amber-100 font-bold">
-                        Your <strong className="text-amber-600 dark:text-amber-400 uppercase tracking-tighter">receivables</strong> are payments owed to you. Monitor these closely to maintain healthy cash flow.
+                      <p className="text-[12px] leading-snug !text-black dark:!text-amber-100 font-bold">
+                        Your <strong className="!text-black dark:!text-amber-400 uppercase tracking-tighter">receivables</strong> are payments owed to you. Monitor these closely to maintain healthy cash flow.
                       </p>
                     </div>
                     <div className="flex gap-4 items-start">
                       <div className="w-9 h-9 rounded-2xl bg-blue-500/20 dark:bg-blue-500/30 flex items-center justify-center shrink-0 border border-blue-500/30 shadow-sm">
-                        <TrendingUp size={18} className="text-blue-800 dark:text-blue-400" />
+                        <TrendingUp size={18} className="!text-black dark:!text-blue-400" />
                       </div>
-                      <p className="text-[12px] leading-snug text-blue-950 dark:text-blue-100 font-bold">
-                        <strong className="text-blue-600 dark:text-blue-400 uppercase tracking-tighter">Net Profit</strong> represents your earnings after all costs. A margin of 15-20% is considered healthy.
+                      <p className="text-[12px] leading-snug !text-black dark:!text-blue-100 font-bold">
+                        <strong className="!text-black dark:!text-blue-400 uppercase tracking-tighter">Net Profit</strong> represents your earnings after all costs. A margin of 15-20% is considered healthy.
                       </p>
                     </div>
                   </CardContent>
@@ -822,14 +832,16 @@ export default function Dashboard({ onLock }: DashboardProps) {
                   <TableBody>
                     {stats.recentSales.map((s: any) => (
                       <TableRow key={s.id} className="hover:bg-muted/50">
-                        <TableCell className="font-mono text-xs text-muted-foreground">#{String(s.id).padStart(5, '0')}</TableCell>
+                        <TableCell className="font-mono text-xs text-foreground">{formatInvoiceId(s.id, s.date_created)}</TableCell>
                         <TableCell className="text-sm">{new Date(s.date_created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className={cn(
-                            "capitalize font-bold text-[10px] px-2 py-0.5",
-                            s.payment_method === 'cash' 
-                              ? "text-emerald-700 border-emerald-200 bg-emerald-50 dark:text-emerald-400 dark:border-emerald-900/50 dark:bg-emerald-950/50" 
-                              : "text-blue-700 border-blue-200 bg-blue-50 dark:text-blue-400 dark:border-blue-900/50 dark:bg-blue-950/50"
+                            "capitalize font-bold text-[10px] px-2 py-0.5 text-black dark:text-white border-black/20",
+                            s.payment_method === 'cash'
+                              ? "bg-emerald-100 dark:border-emerald-900/50 dark:bg-emerald-950/50"
+                              : s.payment_method === 'online'
+                                ? "bg-blue-100 dark:border-blue-900/50 dark:bg-blue-950/50"
+                                : "bg-slate-100 dark:border-slate-800 dark:bg-slate-900"
                           )}>
                             {s.payment_method}
                           </Badge>

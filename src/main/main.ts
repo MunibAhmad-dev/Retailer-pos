@@ -143,8 +143,10 @@ function checkDatabaseSchema(database: Database.Database) {
       ["settings", "cloud_backend_url", "TEXT DEFAULT ''"],
       ["settings", "cloud_backend_token", "TEXT DEFAULT ''"],
       ["settings", "cloud_last_sync", "DATETIME"],
-      ["settings", "cloud_connected", "INTEGER DEFAULT 0"]
-    ];
+      ["settings", "cloud_connected", "INTEGER DEFAULT 0"],
+      ["settings", "setup_completed", "INTEGER DEFAULT 0"],
+      ["settings", "invoice_style", "TEXT DEFAULT 'thermal'"],
+      ["settings", "invoice_notes", "TEXT DEFAULT ''"]];
     for (const [table, col, def] of repairs) {
       try {
         const tableInfo = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND LOWER(name)=LOWER(?)").get(table) as any;
@@ -646,6 +648,14 @@ function migrate(database: Database.Database) {
       }
     }
 
+    // Migration 26: Add invoice_style and invoice_notes to settings
+    if (ver < 26) {
+      logger.info('Running migration 26 - Adding invoice_style and invoice_notes to settings...');
+      try { database.exec(`ALTER TABLE settings ADD COLUMN invoice_style TEXT DEFAULT 'thermal'`); } catch (e) { /* Already exists */ }
+      try { database.exec(`ALTER TABLE settings ADD COLUMN invoice_notes TEXT DEFAULT ''`); } catch (e) { /* Already exists */ }
+      database.exec('PRAGMA user_version = 26');
+    }
+
     logger.info(`Database migration completed. Current version: ${database.pragma('user_version', { simple: true })}`);
   } catch (error) {
     logger.error('Migration system failed:', error);
@@ -731,7 +741,7 @@ function repairGhostForeignKeys(database: Database.Database) {
       logger.info(`Rebuilt ${t.name} successfully to remove ghost FK refs.`);
     } catch (err) {
       logger.error(`Failed FK ghost repair for table ${t.name}:`, err);
-      try { database.exec('PRAGMA foreign_keys = ON'); } catch {}
+      try { database.exec('PRAGMA foreign_keys = ON'); } catch { }
     }
   }
 }
@@ -842,6 +852,7 @@ function initializeDatabase() {
         cloud_backend_token TEXT DEFAULT '',
         cloud_last_sync DATETIME,
         cloud_connected INTEGER DEFAULT 0,
+        setup_completed INTEGER DEFAULT 0,
         receipt_footer TEXT DEFAULT 'Thank you for visiting!',
         pos_password TEXT DEFAULT '1234',
         activation_key TEXT DEFAULT '',
@@ -852,6 +863,18 @@ function initializeDatabase() {
         updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
       );
       INSERT OR IGNORE INTO settings (id) VALUES (1);
+
+      CREATE TABLE IF NOT EXISTS cloud_sync_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT DEFAULT '',
+        created_at DATETIME DEFAULT (datetime('now', 'localtime')),
+        updated_at DATETIME DEFAULT (datetime('now', 'localtime'))
+      );
 
       CREATE TABLE IF NOT EXISTS products (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1275,7 +1298,7 @@ ipcMain.handle('is-activated', async () => {
       logger.error('is-activated: Systems not initialized');
       throw new Error('Systems not initialized');
     }
-    
+
     // Check V2 system first
     const v2Result = await licenseManager.validateLocalLicense();
     if (v2Result.valid) {
@@ -1294,7 +1317,7 @@ ipcMain.handle('is-activated', async () => {
     }
 
     const { valid, license } = verifyActivationKey(settings.business_name, settings.activation_key);
-    
+
     if (valid && license && !license.isLegacy) {
       if (settings.expiry_date) {
         license.expiry = settings.expiry_date;
@@ -1555,9 +1578,12 @@ ipcMain.handle('get-settings', async () => {
           cloud_backend_url = COALESCE(cloud_backend_url, ''),
           cloud_backend_token = COALESCE(cloud_backend_token, ''),
           cloud_connected = COALESCE(cloud_connected, 0),
+          setup_completed = COALESCE(setup_completed, 0),
           store_name = COALESCE(NULLIF(store_name, ''), 'Retailer Shop'),
           store_phone = COALESCE(store_phone, ''),
-          store_address = COALESCE(store_address, '')
+          store_address = COALESCE(store_address, ''),
+          invoice_style = COALESCE(NULLIF(invoice_style, ''), 'thermal'),
+          invoice_notes = COALESCE(invoice_notes, '')
       WHERE id = 1
     `).run();
     const settings = db.prepare('SELECT * FROM settings WHERE id = 1').get();
@@ -1594,7 +1620,12 @@ ipcMain.handle('update-settings', async (_, settings: any) => {
           cloud_backend_url = ?,
           cloud_backend_token = ?,
           cloud_last_sync = ?,
-          cloud_connected = ?
+          cloud_connected = ?,
+          setup_completed = ?,
+          business_name = ?,
+          activation_key = ?,
+          invoice_style = ?,
+          invoice_notes = ?
       WHERE id = 1
     `);
 
@@ -1621,7 +1652,12 @@ ipcMain.handle('update-settings', async (_, settings: any) => {
       settings.cloud_backend_url ?? existing?.cloud_backend_url ?? '',
       settings.cloud_backend_token ?? existing?.cloud_backend_token ?? '',
       settings.cloud_last_sync ?? existing?.cloud_last_sync ?? null,
-      settings.cloud_connected !== undefined ? (settings.cloud_connected ? 1 : 0) : (existing?.cloud_connected ? 1 : 0)
+      settings.cloud_connected !== undefined ? (settings.cloud_connected ? 1 : 0) : (existing?.cloud_connected ? 1 : 0),
+      settings.setup_completed !== undefined ? (settings.setup_completed ? 1 : 0) : (existing?.setup_completed ? 1 : 0),
+      settings.business_name ?? settings.store_name ?? existing?.business_name ?? existing?.store_name ?? 'Retailer Shop',
+      settings.activation_key ?? existing?.activation_key ?? '',
+      settings.invoice_style ?? existing?.invoice_style ?? 'thermal',
+      settings.invoice_notes ?? existing?.invoice_notes ?? ''
     );
 
     // Username is intentionally immutable from settings screen.
@@ -1639,6 +1675,52 @@ ipcMain.handle('update-settings', async (_, settings: any) => {
     return { success: true, data: updatedSettings };
   } catch (error: any) {
     logger.error('Failed to update settings:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('is-setup-complete', async () => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const row = db.prepare('SELECT setup_completed FROM settings WHERE id = 1').get() as any;
+    return { success: true, complete: !!row?.setup_completed };
+  } catch (error: any) {
+    logger.error('Failed to check setup state:', error);
+    return { success: false, complete: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-sync-status', async () => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const pending = db.prepare("SELECT COUNT(*) as count FROM cloud_sync_queue WHERE status = 'pending'").get() as any;
+    const failed = db.prepare("SELECT COUNT(*) as count FROM cloud_sync_queue WHERE status = 'failed'").get() as any;
+    const settings = db.prepare('SELECT cloud_connected, cloud_last_sync FROM settings WHERE id = 1').get() as any;
+    return {
+      success: true,
+      data: {
+        pending: Number(pending?.count || 0),
+        failed: Number(failed?.count || 0),
+        cloudConnected: !!settings?.cloud_connected,
+        lastSync: settings?.cloud_last_sync || null
+      }
+    };
+  } catch (error: any) {
+    logger.error('Failed to read sync status:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('enqueue-sync-item', async (_, item: { entityType: string; operation: string; payload: any; error?: string }) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    db.prepare(`
+      INSERT INTO cloud_sync_queue (entity_type, operation, payload, status, last_error)
+      VALUES (?, ?, ?, 'pending', ?)
+    `).run(item.entityType, item.operation, JSON.stringify(item.payload ?? {}), item.error || '');
+    return { success: true };
+  } catch (error: any) {
+    logger.error('Failed to enqueue sync item:', error);
     return { success: false, error: error.message };
   }
 });
@@ -1679,6 +1761,7 @@ ipcMain.handle('create-sale', async (_, data: {
     if (data.subtotal !== undefined && (typeof data.subtotal !== 'number' || isNaN(data.subtotal) || data.subtotal < 0)) throw new Error('Invalid subtotal');
     if (data.discount !== undefined && (typeof data.discount !== 'number' || isNaN(data.discount) || data.discount < 0)) throw new Error('Invalid discount');
     if (data.amount_paid !== undefined && (typeof data.amount_paid !== 'number' || isNaN(data.amount_paid) || data.amount_paid < 0)) throw new Error('Invalid amount paid');
+    if (data.amount_paid !== undefined && data.amount_paid > data.total) throw new Error('Amount paid cannot exceed sale total');
 
     for (const item of data.items) {
       if (typeof item.quantity !== 'number' || isNaN(item.quantity) || item.quantity <= 0) throw new Error(`Invalid quantity for product: ${item.product_name}`);
@@ -1807,7 +1890,7 @@ ipcMain.handle('create-sale', async (_, data: {
   }
 });
 
-ipcMain.handle('get-sales', async (_, opts: { limit?: number; offset?: number; search?: string } = {}) => {
+ipcMain.handle('get-sales', async (_, opts: { limit?: number; offset?: number; search?: string; startDate?: string; endDate?: string } = {}) => {
   try {
     if (!db) throw new Error('Database not initialized');
 
@@ -1816,57 +1899,77 @@ ipcMain.handle('get-sales', async (_, opts: { limit?: number; offset?: number; s
     const search = opts.search?.trim() ?? '';
 
     let whereClause = '';
-    const params: any[] = [];
+    const dateParams: any[] = [];
+
+    if (opts.startDate && opts.endDate) {
+      whereClause = ' WHERE s.date_created >= ? AND s.date_created <= ? ';
+      dateParams.push(getLocalSqliteDate(opts.startDate), getLocalSqliteDate(opts.endDate));
+    }
 
     if (search) {
-      whereClause = `WHERE (CAST(s.id AS TEXT) LIKE ? OR s.payment_method LIKE ? OR GROUP_CONCAT(DISTINCT si.product_name) LIKE ?)`;
-      // Use a subquery approach â€” simpler and avoids HAVING
       const searchPattern = `%${search}%`;
+      const queryParams = [...dateParams, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, limit, offset];
+      const countParams = [...dateParams, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern];
 
       const sales = db.prepare(`
         SELECT s.*,
                c.name as customer_name,
                COUNT(si.id) as item_count,
+               COALESCE((SELECT SUM(amount) FROM customer_payments WHERE sale_id = s.id), 0) as amount_paid,
                COALESCE((SELECT SUM(total_returned) FROM sale_returns WHERE sale_id = s.id), 0) as total_returned,
+               CASE WHEN s.status = 'Cancelled' THEN 0 ELSE (s.total - COALESCE((SELECT SUM(amount) FROM customer_payments WHERE sale_id = s.id), 0) - COALESCE((SELECT SUM(total_returned) FROM sale_returns WHERE sale_id = s.id), 0)) END as remaining,
                GROUP_CONCAT(DISTINCT si.product_name || ' (x' || si.quantity || ')') as items_summary
         FROM sales s
         LEFT JOIN customers c ON s.customer_id = c.id
         LEFT JOIN sale_items si ON s.id = si.sale_id
+        ${whereClause}
         GROUP BY s.id
-        HAVING CAST(s.id AS TEXT) LIKE ? OR s.payment_method LIKE ? OR items_summary LIKE ?
+        HAVING CAST(s.id AS TEXT) LIKE ? OR s.payment_method LIKE ? OR items_summary LIKE ? OR replace(substr(s.date_created, 1, 10), '-', '') LIKE ? OR ('INV-' || replace(substr(s.date_created, 1, 10), '-', '') || '-' || printf('%05d', s.id)) LIKE ?
         ORDER BY s.date_created DESC
         LIMIT ? OFFSET ?
-      `).all(searchPattern, searchPattern, searchPattern, limit, offset);
+      `).all(...queryParams);
 
       const countRow = db.prepare(`
         SELECT COUNT(*) as total FROM (
-          SELECT s.id
+          SELECT s.id, GROUP_CONCAT(DISTINCT si.product_name) as items_summary
           FROM sales s
           LEFT JOIN sale_items si ON s.id = si.sale_id
+          ${whereClause}
           GROUP BY s.id
           HAVING CAST(s.id AS TEXT) LIKE ? OR s.payment_method LIKE ? 
-              OR GROUP_CONCAT(DISTINCT si.product_name) LIKE ?
+              OR items_summary LIKE ?
+              OR replace(substr(s.date_created, 1, 10), '-', '') LIKE ?
+              OR ('INV-' || replace(substr(s.date_created, 1, 10), '-', '') || '-' || printf('%05d', s.id)) LIKE ?
         )
-      `).get(searchPattern, searchPattern, searchPattern) as any;
+      `).get(...countParams) as any;
 
       return { success: true, data: sales, total: countRow?.total ?? 0 };
     }
+
+    const queryParams = [...dateParams, limit, offset];
 
     const sales = db.prepare(`
       SELECT s.*,
              c.name as customer_name,
              COUNT(si.id) as item_count,
+             COALESCE((SELECT SUM(amount) FROM customer_payments WHERE sale_id = s.id), 0) as amount_paid,
              COALESCE((SELECT SUM(total_returned) FROM sale_returns WHERE sale_id = s.id), 0) as total_returned,
+             CASE WHEN s.status = 'Cancelled' THEN 0 ELSE (s.total - COALESCE((SELECT SUM(amount) FROM customer_payments WHERE sale_id = s.id), 0) - COALESCE((SELECT SUM(total_returned) FROM sale_returns WHERE sale_id = s.id), 0)) END as remaining,
              GROUP_CONCAT(DISTINCT si.product_name || ' (x' || si.quantity || ')') as items_summary
       FROM sales s
       LEFT JOIN customers c ON s.customer_id = c.id
       LEFT JOIN sale_items si ON s.id = si.sale_id
+      ${whereClause}
       GROUP BY s.id
       ORDER BY s.date_created DESC
       LIMIT ? OFFSET ?
-    `).all(limit, offset);
+    `).all(...queryParams);
 
-    const countRow = db.prepare('SELECT COUNT(*) as total FROM sales').get() as any;
+    const countRow = db.prepare(`
+      SELECT COUNT(*) as total 
+      FROM sales s
+      ${whereClause}
+    `).get(...dateParams) as any;
 
     return { success: true, data: sales, total: countRow?.total ?? 0 };
   } catch (error: any) {
@@ -2222,7 +2325,6 @@ ipcMain.handle('get-report', async (_, args: any) => {
         WHERE s.date_created >= ? AND s.date_created <= ?
         GROUP BY si.product_name
         ORDER BY qty_sold DESC
-        LIMIT 10
       `).all(sqlStart, sqlEnd),
       salesByHour: db.prepare(`
         SELECT 
@@ -2233,7 +2335,7 @@ ipcMain.handle('get-report', async (_, args: any) => {
         WHERE date_created >= ? AND date_created <= ?
         GROUP BY hour
         ORDER BY hour
-      `).all(startDate, endDate),
+      `).all(sqlStart, sqlEnd),
       paymentMethods: db.prepare(`
         SELECT 
           payment_method,
@@ -2242,7 +2344,7 @@ ipcMain.handle('get-report', async (_, args: any) => {
         FROM sales
         WHERE date_created >= ? AND date_created <= ?
         GROUP BY payment_method
-      `).all(startDate, endDate),
+      `).all(sqlStart, sqlEnd),
     };
 
     logger.info(`Report generated for period: ${period}`);
@@ -2262,6 +2364,18 @@ ipcMain.handle('get-customers', async () => {
       SELECT c.*, 
              COUNT(s.id) as total_sales, 
              COALESCE(SUM(CASE WHEN (s.status IS NULL OR LOWER(s.status) != 'cancelled') THEN CAST(s.total AS REAL) ELSE 0 END), 0) as total_spent,
+             (
+               SELECT MAX(dt) FROM (
+                 SELECT s2.date_created as dt FROM sales s2 WHERE s2.customer_id = c.id
+                 UNION ALL
+                 SELECT cp.date_added as dt FROM customer_payments cp WHERE cp.customer_id = c.id
+                 UNION ALL
+                 SELECT sr.date_created as dt
+                 FROM sale_returns sr
+                 JOIN sales s3 ON sr.sale_id = s3.id
+                 WHERE s3.customer_id = c.id
+               )
+             ) as last_activity,
              COALESCE((
                SELECT SUM(rem) FROM (
                  SELECT CAST(s.total AS REAL) - 
@@ -2339,6 +2453,9 @@ ipcMain.handle('verify-password', async (_, password: string) => {
 });
 // ============= PRINTING HELPERS =============
 function buildReceiptHtml(content: string): string {
+  if (content.trim().toLowerCase().startsWith('<!doctype html')) {
+    return content;
+  }
   return `<!DOCTYPE html>
 <html>
   <head>
@@ -2441,6 +2558,9 @@ async function loadHtmlWindow(html: string, width: number): Promise<BrowserWindo
 
 /** A4-friendly receipt template for PDF saving (renders nicely in any PDF viewer). */
 function buildReceiptPdfHtml(content: string): string {
+  if (content.trim().toLowerCase().startsWith('<!doctype html')) {
+    return content;
+  }
   return `<!DOCTYPE html>
 <html>
   <head>
@@ -2518,22 +2638,68 @@ ipcMain.handle('print-invoice', async (_, htmlContent: string) => {
       throw new Error('Print payload too large');
     }
 
-    const printWindow = await loadHtmlWindow(buildReceiptHtml(htmlContent), 272);
+    let receiptSize = 'thermal';
+    let invoiceStyle = 'thermal';
+    if (db) {
+      try {
+        const settingsRow = db.prepare('SELECT receipt_size, invoice_style FROM settings LIMIT 1').get() as any;
+        if (settingsRow) {
+          receiptSize = settingsRow.receipt_size || 'thermal';
+          invoiceStyle = settingsRow.invoice_style || 'thermal';
+        }
+      } catch (e) {
+        logger.warn('Failed to read print settings:', e);
+      }
+    }
 
-    const contentHeightPx: number = await printWindow.webContents.executeJavaScript(
-      'document.body.offsetHeight'
-    );
-    const heightMicrons = Math.ceil(contentHeightPx * PX_TO_MICRONS) + 2000;
+    const isFullHtml = htmlContent.trim().toLowerCase().startsWith('<!doctype html');
+    let targetSize = receiptSize;
+    if (isFullHtml) {
+      if (htmlContent.includes('width: 210mm') || htmlContent.includes('210mm')) {
+        targetSize = 'a4';
+      } else if (htmlContent.includes('width: 148mm') || htmlContent.includes('148mm')) {
+        targetSize = 'a5';
+      } else if (invoiceStyle === 'formal') {
+        targetSize = 'a4';
+      }
+    } else {
+      if (invoiceStyle === 'formal' || receiptSize === 'a4') {
+        targetSize = 'a4';
+      } else if (receiptSize === 'a5') {
+        targetSize = 'a5';
+      }
+    }
+
+    let winWidth = 272; // default thermal
+    if (targetSize === 'a4') winWidth = 794;
+    else if (targetSize === 'a5') winWidth = 561;
+
+    const printWindow = await loadHtmlWindow(buildReceiptHtml(htmlContent), winWidth);
+
+    let printOptions: any = {
+      silent: false,
+      printBackground: true,
+    };
+
+    if (targetSize === 'thermal') {
+      const contentHeightPx: number = await printWindow.webContents.executeJavaScript(
+        'document.body.offsetHeight'
+      );
+      const heightMicrons = Math.ceil(contentHeightPx * PX_TO_MICRONS) + 2000;
+      printOptions.pageSize = { width: RECEIPT_WIDTH_MICRONS, height: heightMicrons };
+      printOptions.margins = { marginType: 'custom', top: 0, bottom: 0, left: 0, right: 0 };
+      printOptions.scaleFactor = 100;
+    } else if (targetSize === 'a5') {
+      printOptions.pageSize = 'A5';
+      printOptions.margins = { marginType: 'default' };
+    } else {
+      printOptions.pageSize = 'A4';
+      printOptions.margins = { marginType: 'default' };
+    }
 
     return new Promise((resolve) => {
       printWindow.webContents.print(
-        {
-          silent: false,
-          printBackground: true,
-          pageSize: { width: RECEIPT_WIDTH_MICRONS, height: heightMicrons },
-          margins: { marginType: 'custom', top: 0, bottom: 0, left: 0, right: 0 },
-          scaleFactor: 100,
-        },
+        printOptions,
         (success, reason) => {
           printWindow.close();
           if (success) {
@@ -2561,20 +2727,55 @@ ipcMain.handle('save-invoice-pdf', async (_, htmlContent: string) => {
     if (htmlContent.length > 500_000) {
       throw new Error('PDF payload too large');
     }
+    const isStatement = htmlContent.includes('ACCOUNT STATEMENT');
     const { filePath, canceled } = await dialog.showSaveDialog({
-      title: 'Save Receipt as PDF',
-      defaultPath: `receipt-${Date.now()}.pdf`,
+      title: isStatement ? 'Save Statement as PDF' : 'Save Receipt as PDF',
+      defaultPath: `${isStatement ? 'statement' : 'receipt'}-${Date.now()}.pdf`,
       filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
     });
 
     if (canceled || !filePath) return { success: false, error: 'Cancelled' };
 
-    const printWindow = await loadHtmlWindow(buildReceiptPdfHtml(htmlContent), 595);
+    let receiptSize = 'thermal';
+    let invoiceStyle = 'thermal';
+    if (db) {
+      try {
+        const settingsRow = db.prepare('SELECT receipt_size, invoice_style FROM settings LIMIT 1').get() as any;
+        if (settingsRow) {
+          receiptSize = settingsRow.receipt_size || 'thermal';
+          invoiceStyle = settingsRow.invoice_style || 'thermal';
+        }
+      } catch (e) {
+        logger.warn('Failed to read print settings for PDF:', e);
+      }
+    }
+
+    const isFullHtml = htmlContent.trim().toLowerCase().startsWith('<!doctype html');
+    let targetSize = receiptSize;
+    if (isFullHtml) {
+      if (htmlContent.includes('210mm')) targetSize = 'a4';
+      else if (htmlContent.includes('148mm')) targetSize = 'a5';
+      else if (invoiceStyle === 'formal') targetSize = 'a4';
+    } else {
+      if (invoiceStyle === 'formal' || receiptSize === 'a4') targetSize = 'a4';
+      else if (receiptSize === 'a5') targetSize = 'a5';
+    }
+
+    let winWidth = 595;
+    if (targetSize === 'thermal') winWidth = 340;
+    else if (targetSize === 'a5') winWidth = 420;
+
+    const printWindow = await loadHtmlWindow(buildReceiptPdfHtml(htmlContent), winWidth);
+
+    let pdfPageSize: any = 'A4';
+    let pdfMargins: any = { marginType: 'none' };
+    if (targetSize === 'thermal') { pdfPageSize = { width: 80000, height: 220000 }; }
+    else if (targetSize === 'a5') { pdfPageSize = 'A5'; pdfMargins = { marginType: 'default' }; }
 
     const pdfBuffer = await printWindow.webContents.printToPDF({
       printBackground: true,
-      pageSize: 'A4',
-      margins: { marginType: 'none' },
+      pageSize: pdfPageSize,
+      margins: pdfMargins,
     });
 
     printWindow.close();
@@ -2910,6 +3111,18 @@ ipcMain.handle('get-vendors', async () => {
 
     const vendors = db.prepare(`
       SELECT v.*,
+             (
+               SELECT MAX(dt) FROM (
+                 SELECT p2.date_created as dt FROM purchases p2 WHERE p2.vendor_id = v.id
+                 UNION ALL
+                 SELECT vp.date_created as dt FROM vendor_payments vp WHERE vp.vendor_id = v.id
+                 UNION ALL
+                 SELECT pr.date_created as dt
+                 FROM purchase_returns pr
+                 JOIN purchases p3 ON pr.purchase_id = p3.id
+                 WHERE p3.vendor_id = v.id
+               )
+             ) as last_activity,
              COALESCE((
                SELECT SUM(rem) FROM (
                  SELECT CAST(p.total AS REAL) - 
@@ -3438,6 +3651,22 @@ ipcMain.handle('get-customer-details', async (_, customerId: number) => {
 ipcMain.handle('add-customer-payment', async (_, data: { customer_id: number; amount: number; notes?: string; sale_id?: number }) => {
   try {
     if (!db) throw new Error('Database not initialized');
+    if (typeof data.amount !== 'number' || isNaN(data.amount) || data.amount <= 0) {
+      throw new Error('Payment amount must be a valid positive number');
+    }
+    if (data.sale_id) {
+      const sale = db.prepare("SELECT id, total, status FROM sales WHERE id = ?").get(data.sale_id) as any;
+      if (!sale) throw new Error('Sale not found');
+      if (sale.status === 'Cancelled') throw new Error('Cannot add payment to a cancelled sale');
+
+      const alreadyPaid = Number((db.prepare("SELECT COALESCE(SUM(amount), 0) AS paid FROM customer_payments WHERE sale_id = ?").get(data.sale_id) as any)?.paid) || 0;
+      const totalReturned = Number((db.prepare("SELECT COALESCE(SUM(total_returned), 0) AS returned FROM sale_returns WHERE sale_id = ?").get(data.sale_id) as any)?.returned) || 0;
+      const remaining = Math.max(0, (Number(sale.total) || 0) - alreadyPaid - totalReturned);
+
+      if (data.amount > remaining) {
+        throw new Error(`Payment exceeds remaining balance. Remaining: ${remaining}`);
+      }
+    }
     const stmt = db.prepare('INSERT INTO customer_payments (customer_id, amount, notes, sale_id, date_added) VALUES (?, ?, ?, ?, datetime(\'now\', \'localtime\'))');
     const info = stmt.run(data.customer_id, data.amount, data.notes || '', data.sale_id || null);
     logEntityHistory(db, {
@@ -3546,10 +3775,34 @@ ipcMain.handle('get-profit-loss-report', async (_, data: { startDate?: string; e
 });
 
 // ============= EXPENSES HANDLERS =============
-ipcMain.handle('get-expenses', async () => {
+ipcMain.handle('get-expenses', async (_, opts: any = {}) => {
   try {
     if (!db) throw new Error('Database not initialized');
-    const expenses = db.prepare('SELECT * FROM expenses ORDER BY date_added DESC').all();
+    const dateFilter = String(opts.dateFilter || 'weekly');
+    const startDate = opts.startDate ? getLocalSqliteDate(opts.startDate) : null;
+    const endDate = opts.endDate ? getLocalSqliteDate(opts.endDate) : null;
+    const whereParts: string[] = [];
+    const params: any[] = [];
+
+    if (dateFilter === 'today') {
+      whereParts.push(`date(date_added) = date('now', 'localtime')`);
+    } else if (dateFilter === 'weekly') {
+      whereParts.push(`date(date_added) >= date('now', 'localtime', '-6 days')`);
+    } else if (dateFilter === 'monthly') {
+      whereParts.push(`date(date_added) >= date('now', 'localtime', '-29 days')`);
+    } else if (dateFilter === 'custom') {
+      if (startDate) {
+        whereParts.push(`date_added >= ?`);
+        params.push(startDate);
+      }
+      if (endDate) {
+        whereParts.push(`date_added <= ?`);
+        params.push(endDate);
+      }
+    }
+
+    const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+    const expenses = db.prepare(`SELECT * FROM expenses ${whereSql} ORDER BY date_added DESC`).all(...params);
     return { success: true, data: expenses };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3677,10 +3930,72 @@ ipcMain.handle('close-register', async (_, data: { registerId: number; actualCas
   }
 });
 
-ipcMain.handle('get-register-history', async () => {
+ipcMain.handle('get-register-history', async (_, opts: any = {}) => {
   try {
     if (!db) throw new Error('Database not initialized');
-    const history = db.prepare("SELECT * FROM registers ORDER BY opened_at DESC LIMIT 50").all();
+    const dateFilter = String(opts.dateFilter || 'weekly');
+    const startDate = opts.startDate ? getLocalSqliteDate(opts.startDate) : null;
+    const endDate = opts.endDate ? getLocalSqliteDate(opts.endDate) : null;
+    const whereParts: string[] = [];
+    const whereParams: any[] = [];
+    if (dateFilter === 'today') {
+      whereParts.push(`date(r.opened_at) = date('now', 'localtime')`);
+    } else if (dateFilter === 'weekly') {
+      whereParts.push(`date(r.opened_at) >= date('now', 'localtime', '-6 days')`);
+    } else if (dateFilter === 'monthly') {
+      whereParts.push(`date(r.opened_at) >= date('now', 'localtime', '-29 days')`);
+    } else if (dateFilter === 'custom') {
+      if (startDate) {
+        whereParts.push(`r.opened_at >= ?`);
+        whereParams.push(startDate);
+      }
+      if (endDate) {
+        whereParts.push(`r.opened_at <= ?`);
+        whereParams.push(endDate);
+      }
+    }
+    const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+    const history = db.prepare(`
+      SELECT
+        r.*,
+        COALESCE(s.cash_sales, 0) as cash_sales,
+        COALESCE(s.other_sales, 0) as other_sales,
+        COALESCE(rt.total_returns, 0) as total_returns,
+        COALESCE(e.total_expenses, 0) as total_expenses,
+        (COALESCE(r.opening_balance, 0) + COALESCE(s.cash_sales, 0) - COALESCE(rt.total_returns, 0) - COALESCE(e.total_expenses, 0)) as closing_balance_expected,
+        COALESCE(r.actual_cash, 0) as closing_balance_actual,
+        CASE WHEN LOWER(COALESCE(r.status, 'open')) = 'open' THEN 'Open' ELSE 'Closed' END as status
+        FROM registers r
+      LEFT JOIN (
+        SELECT
+          rg.id as register_id,
+          COALESCE(SUM(CASE WHEN LOWER(COALESCE(s.payment_method, 'cash')) = 'cash' THEN COALESCE(s.total, 0) ELSE 0 END), 0) as cash_sales,
+          COALESCE(SUM(CASE WHEN LOWER(COALESCE(s.payment_method, 'cash')) <> 'cash' THEN COALESCE(s.total, 0) ELSE 0 END), 0) as other_sales
+        FROM registers rg
+        LEFT JOIN sales s ON s.date_created >= rg.opened_at AND s.date_created <= COALESCE(rg.closed_at, datetime('now', 'localtime'))
+        GROUP BY rg.id
+      ) s ON s.register_id = r.id
+      LEFT JOIN (
+        SELECT
+          rg.id as register_id,
+          COALESCE(SUM(COALESCE(sr.total_returned, 0)), 0) as total_returns
+        FROM registers rg
+        LEFT JOIN sale_returns sr ON sr.date_created >= rg.opened_at AND sr.date_created <= COALESCE(rg.closed_at, datetime('now', 'localtime'))
+        GROUP BY rg.id
+      ) rt ON rt.register_id = r.id
+      LEFT JOIN (
+        SELECT
+          rg.id as register_id,
+          COALESCE(SUM(COALESCE(e.amount, 0)), 0) as total_expenses
+        FROM registers rg
+        LEFT JOIN expenses e ON e.date_added >= rg.opened_at AND e.date_added <= COALESCE(rg.closed_at, datetime('now', 'localtime'))
+        GROUP BY rg.id
+      ) e ON e.register_id = r.id
+        ${whereSql}
+        ORDER BY r.opened_at DESC
+        LIMIT 50
+      `).all(...whereParams);
     return { success: true, data: history };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3819,17 +4134,41 @@ ipcMain.handle('get-sale-returns', async (_, opts: any = {}) => {
     if (!db) throw new Error('Database not initialized');
     const limit = opts.limit || 50;
     const offset = opts.offset || 0;
+    const dateFilter = String(opts.dateFilter || 'weekly');
+    const startDate = opts.startDate ? getLocalSqliteDate(opts.startDate) : null;
+    const endDate = opts.endDate ? getLocalSqliteDate(opts.endDate) : null;
+    const whereParts: string[] = [];
+    const params: any[] = [];
+
+    if (dateFilter === 'today') {
+      whereParts.push(`date(sr.date_created) = date('now', 'localtime')`);
+    } else if (dateFilter === 'weekly') {
+      whereParts.push(`date(sr.date_created) >= date('now', 'localtime', '-6 days')`);
+    } else if (dateFilter === 'monthly') {
+      whereParts.push(`date(sr.date_created) >= date('now', 'localtime', '-29 days')`);
+    } else if (dateFilter === 'custom') {
+      if (startDate) {
+        whereParts.push(`sr.date_created >= ?`);
+        params.push(startDate);
+      }
+      if (endDate) {
+        whereParts.push(`sr.date_created <= ?`);
+        params.push(endDate);
+      }
+    }
+    const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
     const data = db.prepare(`
       SELECT sr.*, s.total as original_total, c.name as customer_name
       FROM sale_returns sr
       JOIN sales s ON sr.sale_id = s.id
       LEFT JOIN customers c ON s.customer_id = c.id
+      ${whereSql}
       ORDER BY sr.date_created DESC
       LIMIT ? OFFSET ?
-    `).all(limit, offset);
+    `).all(...params, limit, offset);
 
-    const total = (db.prepare("SELECT COUNT(*) as count FROM sale_returns").get() as any).count;
+    const total = (db.prepare(`SELECT COUNT(*) as count FROM sale_returns sr ${whereSql}`).get(...params) as any).count;
 
     return { success: true, data, total };
   } catch (error: any) {
@@ -3919,17 +4258,41 @@ ipcMain.handle('get-purchase-returns', async (_, opts: any = {}) => {
     if (!db) throw new Error('Database not initialized');
     const limit = opts.limit || 50;
     const offset = opts.offset || 0;
+    const dateFilter = String(opts.dateFilter || 'weekly');
+    const startDate = opts.startDate ? getLocalSqliteDate(opts.startDate) : null;
+    const endDate = opts.endDate ? getLocalSqliteDate(opts.endDate) : null;
+    const whereParts: string[] = [];
+    const params: any[] = [];
+
+    if (dateFilter === 'today') {
+      whereParts.push(`date(pr.date_created) = date('now', 'localtime')`);
+    } else if (dateFilter === 'weekly') {
+      whereParts.push(`date(pr.date_created) >= date('now', 'localtime', '-6 days')`);
+    } else if (dateFilter === 'monthly') {
+      whereParts.push(`date(pr.date_created) >= date('now', 'localtime', '-29 days')`);
+    } else if (dateFilter === 'custom') {
+      if (startDate) {
+        whereParts.push(`pr.date_created >= ?`);
+        params.push(startDate);
+      }
+      if (endDate) {
+        whereParts.push(`pr.date_created <= ?`);
+        params.push(endDate);
+      }
+    }
+    const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
     const data = db.prepare(`
       SELECT pr.*, p.total as original_total, v.name as vendor_name
       FROM purchase_returns pr
       JOIN purchases p ON pr.purchase_id = p.id
       LEFT JOIN vendors v ON p.vendor_id = v.id
+      ${whereSql}
       ORDER BY pr.date_created DESC
       LIMIT ? OFFSET ?
-    `).all(limit, offset);
+    `).all(...params, limit, offset);
 
-    const total = (db.prepare("SELECT COUNT(*) as count FROM purchase_returns").get() as any).count;
+    const total = (db.prepare(`SELECT COUNT(*) as count FROM purchase_returns pr ${whereSql}`).get(...params) as any).count;
 
     return { success: true, data, total };
   } catch (error: any) {
@@ -4092,7 +4455,7 @@ ipcMain.handle('get-all-payments', async (_, opts: any = {}) => {
     const limit = opts.limit || 50;
     const offset = opts.offset || 0;
     const search = String(opts.search || '').trim().toLowerCase();
-    const dateFilter = String(opts.dateFilter || 'all');
+    const dateFilter = String(opts.dateFilter || 'weekly');
     const startDate = opts.startDate ? getLocalSqliteDate(opts.startDate) : null;
     const endDate = opts.endDate ? getLocalSqliteDate(opts.endDate) : null;
 
@@ -4113,6 +4476,10 @@ ipcMain.handle('get-all-payments', async (_, opts: any = {}) => {
 
     if (dateFilter === 'today') {
       whereParts.push(`date(date_added) = date('now', 'localtime')`);
+    } else if (dateFilter === 'weekly') {
+      whereParts.push(`date(date_added) >= date('now', 'localtime', '-6 days')`);
+    } else if (dateFilter === 'monthly') {
+      whereParts.push(`date(date_added) >= date('now', 'localtime', '-29 days')`);
     } else if (dateFilter === 'custom') {
       if (startDate) {
         whereParts.push(`date_added >= ?`);
@@ -4221,6 +4588,10 @@ ipcMain.handle('trigger-google-drive-backup', async () => {
       }
     }
   } catch (error: any) {
+    if (error?.message?.includes('invalid_grant') || error?.cause?.message?.includes('invalid_grant')) {
+      googleAuthService.disconnect();
+      return { success: false, message: 'Google session expired. Please reconnect.', auth_expired: true };
+    }
     return { success: false, message: error.message };
   }
 });
@@ -4231,6 +4602,20 @@ ipcMain.handle('get-available-backups', async () => {
     return { success: true, backups };
   } catch (error: any) {
     logger.error('Failed to get available backups:', error);
+    // Detect expired / revoked refresh token
+    if (error?.message?.includes('invalid_grant') || error?.cause?.message?.includes('invalid_grant')) {
+      googleAuthService.disconnect();
+      return { success: false, message: 'Google session expired. Please reconnect your Google Drive account.', auth_expired: true };
+    }
+    return { success: false, message: error.message };
+  }
+});
+
+ipcMain.handle('disconnect-google-drive', async () => {
+  try {
+    googleAuthService.disconnect();
+    return { success: true };
+  } catch (error: any) {
     return { success: false, message: error.message };
   }
 });
@@ -4302,12 +4687,12 @@ ipcMain.handle('get-logo', async () => {
 app.whenReady().then(async () => {
   try {
     await initializeDatabase();
-    
+
     await createWindow();
 
     const menuBuilder = new MenuBuilder(mainWindow!);
     menuBuilder.buildMenu();
-    
+
     // Hidden shortcut for License Issuer: Ctrl+Shift+L
     mainWindow?.webContents.on('before-input-event', (event, input) => {
       if (input.control && input.shift && input.key.toLowerCase() === 'l') {

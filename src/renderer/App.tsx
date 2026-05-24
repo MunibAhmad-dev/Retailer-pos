@@ -26,6 +26,7 @@ import Subscription from './pages/Subscription';
 import RegisterHistory from './pages/RegisterHistory';
 import RegisterStatus from './pages/RegisterStatus';
 import Activation from './pages/Activation';
+import Setup from './pages/Setup';
 import Returns from './pages/Returns';
 import Payments from './pages/Payments';
 import { LanguageProvider } from './components/LanguageProvider';
@@ -37,6 +38,7 @@ export default function App() {
   );
 
   const [isActivated, setIsActivated] = useState<boolean | null>(null);
+  const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
   const [isSubscriptionActive, setIsSubscriptionActive] = useState<boolean>(true);
 
   React.useEffect(() => {
@@ -45,13 +47,16 @@ export default function App() {
 
   const checkActivation = async () => {
     try {
+      const setupRes = await (window as any).api.isSetupComplete?.();
+      setSetupComplete(!!setupRes?.complete || !!setupRes?.data?.complete);
       const state = await subService.initialize();
-      // isActivated means it has a valid license key (even if expired)
+      // License activation is optional; offline setup still allows local POS use.
       const res = await (window as any).api.isActivated();
       setIsActivated(res.success && res.activated);
       setIsSubscriptionActive(state.isActive || state.isGracePeriod || state.plan === 'lifetime');
     } catch {
       setIsActivated(false);
+      setSetupComplete(false);
       setIsSubscriptionActive(false);
     }
   };
@@ -66,7 +71,7 @@ export default function App() {
     setIsUnlocked(false);
   };
 
-  if (isActivated === null) {
+  if (setupComplete === null || isActivated === null) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-slate-900">
         <Loader2 className="h-10 w-10 animate-spin text-primary" />
@@ -74,13 +79,19 @@ export default function App() {
     );
   }
 
-  if (!isActivated) {
+  if (!setupComplete) {
     return (
       <ErrorBoundary>
         <ThemeProvider defaultTheme="system" storageKey="pos-ui-theme">
           <LanguageProvider>
             <NotificationProvider>
-              <Activation onActivated={() => setIsActivated(true)} />
+              <Setup onComplete={() => {
+                setSetupComplete(true);
+                setIsActivated(false);
+                subService.initialize().then((state) => {
+                  setIsSubscriptionActive(state.isActive || state.isGracePeriod || state.plan === 'lifetime');
+                });
+              }} />
               <Toaster position="top-right" richColors closeButton />
             </NotificationProvider>
           </LanguageProvider>

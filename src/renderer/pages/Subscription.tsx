@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Save, Upload, Store, Phone, MapPin, FileText, Lock, Mail, Image as ImageIcon, Database, Download, Trash2, ShieldCheck, Eye, EyeOff, Zap, Key, ShieldAlert, Clock, Calendar, Wallet } from 'lucide-react';
+import { Save, Upload, Store, Phone, MapPin, FileText, Lock, Mail, Image as ImageIcon, Database, Download, Trash2, ShieldCheck, Eye, EyeOff, Zap, Key, ShieldAlert, Clock, Calendar, Wallet, Copy, Fingerprint } from 'lucide-react';
 import { useNotifications } from '../components/NotificationProvider';
 import { subService, SubscriptionState } from '../services/subscription';
 import { Badge } from '../components/ui/badge';
@@ -13,11 +13,18 @@ export default function Subscription() {
   const [businessName, setBusinessName] = useState('');
   const [activationKey, setActivationKey] = useState('');
   const [isActivating, setIsActivating] = useState(false);
+  const [fingerprint, setFingerprint] = useState('');
+  const [fpCopied, setFpCopied] = useState(false);
   const { addNotification } = useNotifications();
 
   const [timeLeft, setTimeLeft] = useState<string>('');
   useEffect(() => {
     loadSubscription();
+
+    // Load device fingerprint
+    window.api.getFingerprint().then((res) => {
+      if (res.success && res.data) setFingerprint(res.data);
+    });
 
     const timer = setInterval(() => {
       const state = subService.getState();
@@ -51,6 +58,14 @@ export default function Subscription() {
     } catch (e) {
       console.error("Failed to load business name for subscription view");
     }
+  };
+
+  const handleCopyFingerprint = async () => {
+    if (!fingerprint) return;
+    await navigator.clipboard.writeText(fingerprint);
+    setFpCopied(true);
+    addNotification('Copied', 'Device fingerprint copied to clipboard', 'success');
+    setTimeout(() => setFpCopied(false), 2000);
   };
 
   const handleActivate = async (e: React.FormEvent) => {
@@ -126,6 +141,40 @@ export default function Subscription() {
           </Badge>
         )}
       </div>
+
+      {/* Device Fingerprint Card */}
+      <Card className="border-border shadow-sm bg-gradient-to-r from-primary/5 via-background to-purple-500/5 border-primary/15">
+        <CardContent className="p-5">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <div className="bg-primary/10 p-2.5 rounded-xl border border-primary/20 flex-shrink-0">
+                <Fingerprint size={20} className="text-primary" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold mb-1">Device Fingerprint</p>
+                <p className="font-mono text-xs break-all text-foreground/90 leading-relaxed select-all">{fingerprint || 'Loading...'}</p>
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className={cn(
+                "flex-shrink-0 h-9 px-4 text-xs font-bold gap-1.5 rounded-lg transition-all active:scale-95",
+                fpCopied ? "bg-green-500/10 border-green-500/30 text-green-600" : "hover:bg-primary/10 hover:border-primary/30 hover:text-primary"
+              )}
+              onClick={handleCopyFingerprint}
+              disabled={!fingerprint}
+            >
+              {fpCopied ? (
+                <><ShieldCheck size={14} /> Copied!</>
+              ) : (
+                <><Copy size={14} /> Copy</>
+              )}
+            </Button>
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-3 ml-[52px] italic">Share this fingerprint with the developer when requesting a license key</p>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 md:grid-cols-2">
         {/* Status Card */}

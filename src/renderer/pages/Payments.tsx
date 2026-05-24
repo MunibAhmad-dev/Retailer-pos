@@ -16,10 +16,10 @@ export default function Payments() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchInput, setSearchInput] = useState('');
-  const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'custom'>('all');
+  const [dateFilter, setDateFilter] = useState<'today' | 'weekly' | 'monthly' | 'custom'>('weekly');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
-  const [appliedDateFilter, setAppliedDateFilter] = useState<'all' | 'today' | 'custom'>('all');
+  const [appliedDateFilter, setAppliedDateFilter] = useState<'today' | 'weekly' | 'monthly' | 'custom'>('weekly');
   const [appliedFromDate, setAppliedFromDate] = useState('');
   const [appliedToDate, setAppliedToDate] = useState('');
   const [offset, setOffset] = useState(0);
@@ -300,11 +300,20 @@ export default function Payments() {
                 onChange={(e) => setSearchInput(e.target.value)}
               />
             </div>
-            <select className="h-10 rounded-md border bg-background px-2 text-sm" value={dateFilter} onChange={(e) => setDateFilter(e.target.value as any)}>
-              <option value="all">All Dates</option>
-              <option value="today">Today</option>
-              <option value="custom">Custom</option>
-            </select>
+            <div className="flex gap-1 rounded-lg bg-muted p-1">
+              {(['today', 'weekly', 'monthly', 'custom'] as const).map((f) => (
+                <Button
+                  key={f}
+                  type="button"
+                  variant={dateFilter === f ? 'default' : 'ghost'}
+                  size="sm"
+                  className="h-8"
+                  onClick={() => setDateFilter(f)}
+                >
+                  {f === 'today' ? 'Today' : f === 'weekly' ? 'Weekly' : f === 'monthly' ? 'Monthly' : 'Custom'}
+                </Button>
+              ))}
+            </div>
             {dateFilter === 'custom' && (
               <>
                 <Input type="date" className="h-10 md:w-44" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />

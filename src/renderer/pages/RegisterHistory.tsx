@@ -14,16 +14,23 @@ export default function RegisterHistory() {
   const [history, setHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [dateFilter, setDateFilter] = useState<'today' | 'weekly' | 'monthly' | 'custom'>('weekly');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
   const { addNotification } = useNotifications();
 
   useEffect(() => {
     loadHistory();
-  }, []);
+  }, [dateFilter, fromDate, toDate]);
 
   const loadHistory = async () => {
     setLoading(true);
     try {
-      const res = await window.api.getRegisterHistory();
+      const res = await window.api.getRegisterHistory({
+        dateFilter,
+        startDate: fromDate ? `${fromDate} 00:00:00` : undefined,
+        endDate: toDate ? `${toDate} 23:59:59` : undefined
+      });
       if (res.success) {
         setHistory(res.data);
       } else {
@@ -49,6 +56,25 @@ export default function RegisterHistory() {
           <p className="text-muted-foreground text-sm mt-1">Review past cash register sessions and shift summaries</p>
         </div>
         <div className="flex items-center gap-3">
+          <div className="flex gap-1 rounded-lg bg-muted p-1">
+            {(['today', 'weekly', 'monthly', 'custom'] as const).map((f) => (
+              <Button
+                key={f}
+                variant={dateFilter === f ? 'default' : 'ghost'}
+                size="sm"
+                className="h-8"
+                onClick={() => setDateFilter(f)}
+              >
+                {f === 'today' ? 'Today' : f === 'weekly' ? 'Weekly' : f === 'monthly' ? 'Monthly' : 'Custom'}
+              </Button>
+            ))}
+          </div>
+          {dateFilter === 'custom' && (
+            <>
+              <Input type="date" className="h-10 w-40" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+              <Input type="date" className="h-10 w-40" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+            </>
+          )}
           <div className="relative w-64">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
             <Input 

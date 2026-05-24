@@ -177,6 +177,14 @@ export default function Inventory() {
   const { visible: visibleBatches, hasMore: hasMoreBatches, loadMore: loadMoreBatches, total: batchesTotal, showing: batchesShowing } = usePagination(batches, 10, 1);
 
   const lowStockItems = sortedProducts.filter(p => (p.stock || 0) < threshold);
+  const damagedCount = useMemo(
+    () => adjustments.filter((a) => Number(a.quantity) < 0).length,
+    [adjustments]
+  );
+  const damagedUnits = useMemo(
+    () => adjustments.reduce((sum, a) => sum + (Number(a.quantity) < 0 ? Math.abs(Number(a.quantity) || 0) : 0), 0),
+    [adjustments]
+  );
 
   return (
     <div className="flex gap-6 animate-in fade-in max-w-[1600px] h-full relative">
@@ -345,6 +353,13 @@ export default function Inventory() {
                   <span className="text-xs font-semibold text-muted-foreground uppercase">Selling Price</span>
                   <span className="text-2xl font-bold text-primary">{fmtPKR(selectedProduct.price)}</span>
                 </div>
+                <div className="col-span-2 flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50/60 px-3 py-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-rose-700">Returned / Damaged</span>
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-rose-100 text-rose-700 border-none">{damagedCount} entries</Badge>
+                    <Badge className="bg-rose-600 text-white border-none">-{damagedUnits} units</Badge>
+                  </div>
+                </div>
                 <div className="col-span-2 pt-4 border-t">
                   <Button
                     className="w-full gap-2 bg-amber-600 hover:bg-amber-700 text-white"
@@ -372,7 +387,7 @@ export default function Inventory() {
                   onClick={() => setActiveTab('history')}
                   className={cn("flex-1 py-3 text-xs font-bold uppercase tracking-wider transition-all border-b-2", activeTab === 'history' ? "border-primary text-primary bg-background" : "border-transparent text-muted-foreground hover:text-foreground")}
                 >
-                  Audit History ({adjustments.length})
+                  Audit History ({adjustments.length}) | Returned {damagedCount}
                 </button>
               </div>
 
@@ -433,6 +448,9 @@ export default function Inventory() {
                               <span className={cn("text-sm font-black", adj.quantity < 0 ? "text-red-600" : "text-blue-600")}>
                                 {adj.quantity > 0 ? '+' : ''}{adj.quantity} units
                               </span>
+                              {adj.quantity < 0 && (
+                                <Badge className="bg-rose-100 text-rose-700 border-none text-[10px] h-5">Returned / Damaged</Badge>
+                              )}
                             </div>
                             {adj.reason && (
                               <div className="bg-muted/30 rounded-md p-2 text-xs italic text-muted-foreground">
@@ -489,14 +507,18 @@ export default function Inventory() {
                 <div className="space-y-2">
                   <label className="text-sm font-semibold">Quantity</label>
                   <div className="relative">
-                    <Input
+                  <Input
                       type="text"
                       placeholder="0"
                       className="pl-10 h-12 text-lg font-bold border-amber-200"
                       value={adjustmentQty}
                       onChange={(e) => {
-                        const raw = e.target.value.replace(/[^0-9]/g, '');
-                        setAdjustmentQty(raw);
+                        const raw = e.target.value;
+                        if (adjustmentType === 'Correction') {
+                          if (/^-?\d*$/.test(raw)) setAdjustmentQty(raw);
+                        } else {
+                          setAdjustmentQty(raw.replace(/[^0-9]/g, ''));
+                        }
                       }}
                     />
                     <div className="absolute left-3 top-1/2 -translate-y-1/2 text-amber-600">
@@ -507,7 +529,7 @@ export default function Inventory() {
                     <Info size={10} />
                     {adjustmentType === 'Wastage' || adjustmentType === 'Theft'
                       ? "This quantity will be subtracted from total stock."
-                      : "Positive for addition, negative for subtraction."}
+                      : "Use +number to add stock or -number to reduce stock."}
                   </p>
                 </div>
 
@@ -540,5 +562,3 @@ export default function Inventory() {
     </div>
   );
 }
-
-

@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { BarChart3, DollarSign, ShoppingBag, TrendingUp, RefreshCw, Award, Calendar, ChevronRight, Activity, Percent } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { BarChart3, DollarSign, ShoppingBag, TrendingUp, RefreshCw, Award, Calendar, ChevronRight, Activity, Percent, Search } from 'lucide-react';
 import dayjs from 'dayjs';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
-import { cn } from '../lib/utils';
+import { cn, formatInvoiceId } from '../lib/utils';
 import { useNotifications } from '../components/NotificationProvider';
 import { usePagination } from '../hooks/usePagination';
 import { LoadMoreButton } from '../components/Pagination';
@@ -91,10 +91,17 @@ export default function Reports() {
     ? ((profitData.profit / profitData.revenue) * 100).toFixed(1)
     : '0';
 
-  // Paginated slices (reset when report reloads)
-  const topProds = report.topProducts;
+  // Real-time product search state and filtration
+  const [productSearch, setProductSearch] = useState('');
+
+  const filteredProducts = useMemo(() => {
+    return report.topProducts.filter((p) =>
+      p.name.toLowerCase().includes(productSearch.toLowerCase())
+    );
+  }, [report.topProducts, productSearch]);
+
   const recentSales = report.sales;
-  const { visible: visibleProds, hasMore: hasMoreProds, loadMore: loadMoreProds, total: prodsTotal, showing: prodsShowing } = usePagination(topProds, 10, 1);
+  const { visible: visibleProds, hasMore: hasMoreProds, loadMore: loadMoreProds, total: prodsTotal, showing: prodsShowing } = usePagination(filteredProducts, 10, 1);
   const { visible: visibleSales, hasMore: hasMoreSales, loadMore: loadMoreSales, total: salesTotal, showing: salesShowing } = usePagination(recentSales, 10, 1);
 
   return (
@@ -220,43 +227,59 @@ export default function Reports() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Top Products Table */}
         <Card className="shadow-md flex flex-col min-h-[400px]">
-          <CardHeader className="border-b bg-muted/20 py-4 flex flex-row items-center justify-between space-y-0">
+          <CardHeader className="border-b bg-muted/20 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 space-y-0">
             <div className="flex items-center gap-2">
               <Award size={18} className="text-amber-500" />
               <CardTitle className="text-lg">Top Performers</CardTitle>
             </div>
-            <Badge variant="outline" className="bg-background shadow-xs font-normal">Ranked by revenue</Badge>
+            <div className="relative w-full sm:w-48">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={13} />
+              <Input
+                type="text"
+                placeholder="Search products..."
+                value={productSearch}
+                onChange={(e) => setProductSearch(e.target.value)}
+                className="pl-8 h-8 text-xs bg-background"
+              />
+            </div>
           </CardHeader>
-          <CardContent className="flex-1 p-0 overflow-hidden">
+          <CardContent className="flex-1 p-0 overflow-hidden flex flex-col">
             {loading ? (
               <div className="h-full flex flex-col items-center justify-center min-h-[300px] text-muted-foreground animate-pulse">
                 <RefreshCw size={24} className="animate-spin mb-3 text-primary" /> Loading metrics...
               </div>
             ) : report.topProducts.length > 0 ? (
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/10 hover:bg-muted/10">
-                    <TableHead className="w-16 text-center">Rank</TableHead>
-                    <TableHead>Product</TableHead>
-                    <TableHead className="text-right">Volume</TableHead>
-                    <TableHead className="text-right pr-6">Revenue</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {visibleProds.map((p, i) => (
-                    <TableRow key={i} className="hover:bg-muted/30">
-                      <TableCell className="text-center">
-                        <Badge variant={i === 0 ? "default" : i === 1 ? "secondary" : "outline"} className={cn("px-2 py-0 h-5 tabular-nums text-[10px]", i === 0 && "bg-amber-500 text-amber-50 border-transparent", i === 1 && "bg-slate-300 text-slate-800", i === 2 && "border-amber-500/50 text-amber-700")}>
-                          #{i + 1}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="font-semibold">{p.name}</TableCell>
-                      <TableCell className="text-right font-mono text-xs">{p.qty_sold}</TableCell>
-                      <TableCell className="text-right pr-6 font-bold text-primary">{fmtPKR(p.revenue)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <>
+                <div className="flex-1 overflow-auto max-h-[460px]">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/10 hover:bg-muted/10">
+                        <TableHead className="w-16 text-center">Rank</TableHead>
+                        <TableHead>Product</TableHead>
+                        <TableHead className="text-right">Volume</TableHead>
+                        <TableHead className="text-right pr-6">Revenue</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {visibleProds.map((p, i) => (
+                        <TableRow key={i} className="hover:bg-muted/30">
+                          <TableCell className="text-center">
+                            <Badge variant={i === 0 ? "default" : i === 1 ? "secondary" : "outline"} className={cn("px-2 py-0 h-5 tabular-nums text-[10px]", i === 0 && "bg-amber-500 text-amber-50 border-transparent", i === 1 && "bg-slate-300 text-slate-800", i === 2 && "border-amber-500/50 text-amber-700")}>
+                              #{i + 1}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="font-semibold">{p.name}</TableCell>
+                          <TableCell className="text-right font-mono text-xs">{p.qty_sold}</TableCell>
+                          <TableCell className="text-right pr-6 font-bold text-primary">{fmtPKR(p.revenue)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <div className="px-4 py-2 border-t bg-muted/10">
+                  <LoadMoreButton hasMore={hasMoreProds} onLoadMore={loadMoreProds} showing={prodsShowing} total={prodsTotal} />
+                </div>
+              </>
             ) : (
               <div className="py-24 flex flex-col items-center text-center text-muted-foreground">
                 <ShoppingBag size={48} className="opacity-10 mb-4 text-foreground" />
@@ -297,7 +320,7 @@ export default function Reports() {
                       <TableRow key={s.id} className="cursor-default hover:bg-muted/50">
                         <TableCell className="pl-6">
                           <div className="flex flex-col">
-                            <span className="font-bold text-sm leading-tight text-foreground/80">#{s.id}</span>
+                            <span className="font-mono text-xs font-bold leading-tight text-foreground/80">{formatInvoiceId(s.id, s.date_created)}</span>
                             <span className="text-[10px] text-muted-foreground mt-0.5">{dayjs(s.date_created).format('DD MMM, hh:mm A')}</span>
                           </div>
                         </TableCell>
