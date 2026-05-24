@@ -36,6 +36,7 @@ export default function App() {
   const [isUnlocked, setIsUnlocked] = useState<boolean>(
     () => sessionStorage.getItem('pos_unlocked') === 'true'
   );
+  const [isSystemLocked, setIsSystemLocked] = useState(false);
 
   const [isActivated, setIsActivated] = useState<boolean | null>(null);
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
@@ -70,6 +71,9 @@ export default function App() {
     sessionStorage.removeItem('pos_unlocked');
     setIsUnlocked(false);
   };
+
+  const handleLockSystem = () => setIsSystemLocked(true);
+  const handleSystemUnlock = () => setIsSystemLocked(false);
 
   if (setupComplete === null || isActivated === null) {
     return (
@@ -106,9 +110,17 @@ export default function App() {
         <LanguageProvider>
           <NotificationProvider>
             <Router>
+              {/* System lock — portals to document.body, covers everything */}
+              {isSystemLocked && (
+                <Login mode="system" onAuthenticated={handleSystemUnlock} />
+              )}
               <Layout>
                 <Routes>
-                  <Route path="/" element={!isUnlocked ? <Login onAuthenticated={handleAuthenticated} /> : <ProtectedRoute routeName="dashboard"><Dashboard onLock={handleLock} /></ProtectedRoute>} />
+                  <Route path="/" element={
+                    !isUnlocked
+                      ? <Login mode="dashboard" onAuthenticated={handleAuthenticated} />
+                      : <ProtectedRoute routeName="dashboard"><Dashboard onLock={handleLock} onLockSystem={handleLockSystem} /></ProtectedRoute>
+                  } />
                   <Route path="/sales" element={<ProtectedRoute routeName="sales"><Sales /></ProtectedRoute>} />
                   <Route path="/products" element={<ProtectedRoute routeName="products"><Products /></ProtectedRoute>} />
                   <Route path="/inventory" element={<ProtectedRoute routeName="inventory"><Inventory /></ProtectedRoute>} />

@@ -10,7 +10,9 @@
     "dist": "npm run build && electron-builder",
     "postinstall": "electron-builder install-app-deps",
     "electron:build": "npm run dist",
-    "build:mac": "npm run build && electron-builder --mac"
+    "build:mac": "npm run build && electron-builder --mac",
+    "seed:dashboard": "node seed-dashboard-data.js",
+    "seed:alt": "node seed-alt.js"
   },
   "build": {
     "appId": "com.retailpos.app",
@@ -81,7 +83,7 @@
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-tooltip": "^1.2.8",
-    "better-sqlite3": "^12.8.0",
+    "better-sqlite3": "^12.10.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "crypto": "^1.0.1",
@@ -107,8 +109,8 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
-    "axios": "^1.13.5",
     "autoprefixer": "^10.4.27",
+    "axios": "^1.13.5",
     "concurrently": "^9.2.1",
     "electron": "^41.0.2",
     "electron-builder": "^26.8.1",

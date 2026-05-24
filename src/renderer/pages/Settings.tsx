@@ -4,9 +4,9 @@ import {
   Database, Download, Eye, EyeOff, FileText, Globe, Image as ImageIcon,
   KeyRound, Loader2, Lock, Mail, MapPin, Phone, Printer,
   RefreshCw, Save, ShieldCheck, Store, Trash2, Upload, User,
-  Zap, Upload as UploadIcon
+  Zap, Upload as UploadIcon, Languages, HardDrive, Settings2
 } from 'lucide-react';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -18,40 +18,19 @@ import { cn } from '../lib/utils';
 import * as XLSX from 'xlsx';
 import { subService } from '../services/subscription';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 interface SettingsData {
-  // Business info
-  store_name: string;
-  store_phone: string;
-  store_address: string;
-  store_logo: string;
-  owner_full_name: string;
-  owner_mobile: string;
-  owner_email: string;
-  owner_username: string;
-  owner_password: string;
-  // Receipt / print
-  receipt_footer: string;
-  receipt_size: string;
-  invoice_style: string;
-  invoice_notes: string;
-  // Security
-  pos_password: string;
-  low_stock_threshold: number;
-  // Auto-export
-  auto_export_path: string;
-  auto_export_enabled: boolean;
-  // Cloud / API
-  cloud_backend_url: string;
-  cloud_backend_token: string;
-  cloud_connected: boolean;
-  cloud_last_sync: string | null;
-  // License
-  license_mode: 'offline' | 'online';
-  approval_status: 'approved' | 'pending' | 'blocked';
-  activation_key: string;
-  setup_completed: boolean;
+  store_name: string; store_phone: string; store_address: string; store_logo: string;
+  owner_full_name: string; owner_mobile: string; owner_email: string;
+  owner_username: string; owner_password: string;
+  receipt_footer: string; receipt_size: string; invoice_style: string; invoice_notes: string;
+  pos_password: string; low_stock_threshold: number;
+  auto_export_path: string; auto_export_enabled: boolean;
+  cloud_backend_url: string; cloud_backend_token: string;
+  cloud_connected: boolean; cloud_last_sync: string | null;
+  license_mode: 'offline' | 'online'; approval_status: 'approved' | 'pending' | 'blocked';
+  activation_key: string; setup_completed: boolean;
 }
 
 const defaultSettings: SettingsData = {
@@ -75,8 +54,7 @@ const BACKUPS_PAGE_SIZE = 15;
 function formatLastBackup(dateStr: string | null) {
   if (!dateStr) return 'Never';
   const date = new Date(dateStr);
-  const now = new Date();
-  const isToday = date.toDateString() === now.toDateString();
+  const isToday = date.toDateString() === new Date().toDateString();
   return (isToday ? 'Today, ' : '') + date.toLocaleString('en-PK', {
     day: '2-digit', month: 'short', year: 'numeric',
     hour: '2-digit', minute: '2-digit', hour12: true,
@@ -85,36 +63,67 @@ function formatLastBackup(dateStr: string | null) {
 
 function formatSize(bytes: number) {
   if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const k = 1024, sizes = ['B','KB','MB','GB'], i = Math.floor(Math.log(bytes)/Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
+// ─── Tabs config ──────────────────────────────────────────────────────────────
+
+type Tab = 'general' | 'receipt' | 'security' | 'backup' | 'license';
+
+const TABS: { id: Tab; label: string; icon: React.ElementType; desc: string }[] = [
+  { id: 'general',  label: 'General',       icon: Building2,   desc: 'Business & branding'  },
+  { id: 'receipt',  label: 'Print & Receipt',icon: Printer,     desc: 'Paper & invoice style'},
+  { id: 'security', label: 'Security',       icon: ShieldCheck, desc: 'PIN & thresholds'     },
+  { id: 'backup',   label: 'Backup & Data',  icon: Database,    desc: 'Cloud & exports'      },
+  { id: 'license',  label: 'License',        icon: KeyRound,    desc: 'Activation & API'     },
+];
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function Field({ icon, label, value, onChange, placeholder, type = 'text' }: {
-  icon: React.ReactNode; label: string; value: string;
-  onChange: (v: string) => void; placeholder?: string; type?: string;
+function SectionCard({ title, desc, icon: Icon, children, accent }: {
+  title: string; desc?: string; icon: React.ElementType; children: React.ReactNode; accent?: string;
 }) {
   return (
-    <div className="space-y-2">
-      <Label>{label}</Label>
+    <div className="rounded-xl border border-border/60 bg-card overflow-hidden">
+      {accent && <div className="h-0.5 w-full" style={{ background: accent }} />}
+      <div className="px-5 pt-5 pb-4 border-b border-border/50">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/15 flex items-center justify-center shrink-0">
+            <Icon size={16} className="text-primary" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold leading-none">{title}</h3>
+            {desc && <p className="text-[11px] text-muted-foreground mt-0.5">{desc}</p>}
+          </div>
+        </div>
+      </div>
+      <div className="p-5">{children}</div>
+    </div>
+  );
+}
+
+function Field({ icon, label, value, onChange, placeholder, type = 'text', required }: {
+  icon: React.ReactNode; label: string; value: string;
+  onChange: (v: string) => void; placeholder?: string; type?: string; required?: boolean;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label}{required && <span className="text-destructive ml-0.5">*</span>}</Label>
       <div className="relative">
-        <div className="absolute left-3 top-3 h-4 w-4 text-muted-foreground [&>svg]:h-4 [&>svg]:w-4">{icon}</div>
-        <Input className="pl-9" type={type} value={value || ''} placeholder={placeholder}
-          onChange={(e) => onChange(e.target.value)} />
+        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 [&>svg]:h-3.5 [&>svg]:w-3.5">{icon}</div>
+        <Input className="pl-8 h-9 text-sm" type={type} value={value || ''} placeholder={placeholder} onChange={e => onChange(e.target.value)} />
       </div>
     </div>
   );
 }
 
-function StatusTile({ label, value, tone }: { label: string; value: string; tone: 'success' | 'warning' | 'danger' | 'neutral' }) {
-  const colors = { success: 'bg-emerald-600 text-white', warning: 'bg-amber-500 text-white', danger: 'bg-rose-600 text-white', neutral: 'bg-slate-600 text-white' };
+function StatusPill({ label, value, tone }: { label: string; value: string; tone: 'success'|'warning'|'danger'|'neutral' }) {
+  const color = { success:'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20', warning:'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20', danger:'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20', neutral:'bg-muted/50 text-muted-foreground border-border/60' }[tone];
   return (
     <div className="rounded-lg border bg-card p-3">
-      <div className="text-xs font-semibold text-muted-foreground uppercase">{label}</div>
-      <Badge className={`mt-2 ${colors[tone]}`}>{value}</Badge>
+      <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/60 mb-1.5">{label}</p>
+      <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full border', color)}>{value}</span>
     </div>
   );
 }
@@ -127,8 +136,8 @@ export default function Settings() {
   const [isSaving, setIsSaving] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>('general');
 
-  // Google Drive state
   const [driveStatus, setDriveStatus] = useState<{ connected: boolean; lastBackup: string | null }>({ connected: false, lastBackup: null });
   const [subscriptionInfo, setSubscriptionInfo] = useState<any>(null);
   const [isBackingUp, setIsBackingUp] = useState(false);
@@ -137,8 +146,6 @@ export default function Settings() {
   const [backupPage, setBackupPage] = useState(1);
   const [isFetchingBackups, setIsFetchingBackups] = useState(false);
   const [restoreProgress, setRestoreProgress] = useState<{ status: string; progress: number } | null>(null);
-
-  // Sync status (for cloud/API section)
   const [syncStatus, setSyncStatus] = useState({ pending: 0, failed: 0, cloudConnected: false, lastSync: null as string | null });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -150,7 +157,6 @@ export default function Settings() {
   useEffect(() => {
     loadSettings();
     loadSyncStatus();
-
     const cleanup = window.api.onAutoExportComplete?.((data: any) => {
       if (data.success) addNotification('Auto-Saved', `Database backed up to ${data.path}`, 'success');
     });
@@ -163,9 +169,8 @@ export default function Settings() {
       setDriveStatus(status);
     };
     fetchDriveStatus();
-    subService.initialize().then((s) => setSubscriptionInfo(s)).catch(() => setSubscriptionInfo(subService.getState()));
+    subService.initialize().then(s => setSubscriptionInfo(s)).catch(() => setSubscriptionInfo(subService.getState()));
     const interval = setInterval(fetchDriveStatus, 10000);
-
     const unsubscribe = window.api.onRestoreProgress?.((data: any) => setRestoreProgress(data));
     return () => { clearInterval(interval); unsubscribe?.(); };
   }, []);
@@ -176,27 +181,26 @@ export default function Settings() {
     try {
       const res = await window.api.getSettings();
       if (res?.success && res.data) {
-        const data = res.data as any;
+        const d = res.data as any;
         setSettings({
-          ...defaultSettings,
-          ...data,
-          pos_password: data.pos_password || '1234',
-          low_stock_threshold: data.low_stock_threshold ?? 10,
-          receipt_size: data.receipt_size || 'thermal',
-          invoice_style: data.invoice_style || 'thermal',
-          invoice_notes: data.invoice_notes || '',
-          auto_export_path: data.auto_export_path || '',
-          auto_export_enabled: !!data.auto_export_enabled,
-          owner_mobile: data.owner_mobile || data.store_phone || '',
-          cloud_connected: !!data.cloud_connected,
-          license_mode: data.license_mode === 'online' ? 'online' : 'offline',
-          approval_status: data.approval_status === 'blocked' ? 'blocked' : data.approval_status === 'pending' ? 'pending' : 'approved',
-          setup_completed: !!data.setup_completed,
+          ...defaultSettings, ...d,
+          pos_password: d.pos_password || '1234',
+          low_stock_threshold: d.low_stock_threshold ?? 10,
+          receipt_size: d.receipt_size || 'thermal',
+          invoice_style: d.invoice_style || 'thermal',
+          invoice_notes: d.invoice_notes || '',
+          auto_export_path: d.auto_export_path || '',
+          auto_export_enabled: !!d.auto_export_enabled,
+          owner_mobile: d.owner_mobile || d.store_phone || '',
+          cloud_connected: !!d.cloud_connected,
+          license_mode: d.license_mode === 'online' ? 'online' : 'offline',
+          approval_status: d.approval_status === 'blocked' ? 'blocked' : d.approval_status === 'pending' ? 'pending' : 'approved',
+          setup_completed: !!d.setup_completed,
         });
-        if (data.store_logo) setPreviewLogo(data.store_logo);
+        if (d.store_logo) setPreviewLogo(d.store_logo);
       }
     } catch {
-      addNotification('Error', 'Could not load settings from database.', 'error');
+      addNotification('Error', 'Could not load settings.', 'error');
     }
   };
 
@@ -205,15 +209,13 @@ export default function Settings() {
     if (res?.success && res.data) setSyncStatus(res.data);
   };
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
-
   const update = <K extends keyof SettingsData>(key: K, value: SettingsData[K]) =>
-    setSettings((prev) => ({ ...prev, [key]: value }));
+    setSettings(prev => ({ ...prev, [key]: value }));
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSave = async (e?: React.FormEvent) => {
+    e?.preventDefault();
     setIsSaving(true);
     try {
       const payload = {
@@ -253,23 +255,16 @@ export default function Settings() {
   const handleSelectDirectory = async () => {
     try {
       const path = await window.api.selectDirectory();
-      if (path) {
-        update('auto_export_path', path);
-        addNotification('Backup Path Set', 'Please save settings to apply.', 'info');
-      }
-    } catch {
-      addNotification('Error', 'Could not open folder picker.', 'error');
-    }
+      if (path) { update('auto_export_path', path); addNotification('Path Set', 'Save settings to apply.', 'info'); }
+    } catch { addNotification('Error', 'Could not open folder picker.', 'error'); }
   };
 
   const handleManualExport = async () => {
-    if (!settings.auto_export_path) { addNotification('Missing Path', 'Please set a backup folder first.', 'warning'); return; }
+    if (!settings.auto_export_path) { addNotification('Missing Path', 'Set a backup folder first.', 'warning'); return; }
     try {
       await window.api.performAutoExport();
-      addNotification('Export Success', 'Manual backup performed successfully.', 'success');
-    } catch {
-      addNotification('Export Failed', 'Could not perform manual export.', 'error');
-    }
+      addNotification('Export Success', 'Manual backup performed.', 'success');
+    } catch { addNotification('Export Failed', 'Could not perform export.', 'error'); }
   };
 
   const handleConnectDrive = async () => {
@@ -277,7 +272,7 @@ export default function Settings() {
     try {
       const res = await window.api.connectGoogleDrive();
       if (res.success) {
-        addNotification('Google Drive Connected', 'Your account has been linked successfully.', 'success');
+        addNotification('Google Drive Connected', 'Account linked successfully.', 'success');
         setDriveStatus(await window.api.getGoogleDriveStatus());
       } else {
         addNotification('Connection Failed', res.message || 'Failed to link Google Drive.', 'error');
@@ -303,27 +298,22 @@ export default function Settings() {
     try {
       const res = await window.api.getAvailableBackups();
       const isArray = Array.isArray(res);
-      const success = isArray ? true : !!res?.success;
       const backups = isArray ? res : (res?.backups || []);
-      if (success) {
-        setAvailableBackups(backups);
-        setBackupPage(1);
-        if (backups.length === 0) addNotification('No Backups Found', 'No POS backups were found in your Google Drive.', 'info');
-      } else {
-        addNotification('Fetch Failed', res?.message || 'Could not list backups.', 'error');
-      }
+      setAvailableBackups(backups);
+      setBackupPage(1);
+      if (backups.length === 0) addNotification('No Backups', 'No POS backups found in Google Drive.', 'info');
     } catch (err: any) {
       addNotification('Fetch Failed', err?.message || 'Could not list backups.', 'error');
     } finally { setIsFetchingBackups(false); }
   };
 
   const handleRestoreCloudBackup = async (fileId: string) => {
-    if (!window.confirm('CRITICAL WARNING:\n\nThis will completely replace your current local data with the selected cloud backup. Continue?')) return;
+    if (!window.confirm('CRITICAL WARNING:\n\nThis will replace your current local data with the cloud backup. Continue?')) return;
     try {
       setRestoreProgress({ status: 'starting', progress: 0 });
       const res = await window.api.restoreCloudBackup(fileId);
       if (res.success) {
-        addNotification('Restore Successful', 'Your data has been restored. Reloading...', 'success');
+        addNotification('Restore Successful', 'Data restored. Reloading...', 'success');
         setTimeout(() => window.location.reload(), 2000);
       } else {
         addNotification('Restore Failed', res.message || 'Failed to restore.', 'error');
@@ -337,25 +327,21 @@ export default function Settings() {
 
   const handleExportData = async () => {
     try {
-      addNotification('Exporting Data', 'Compiling system records...', 'info');
+      addNotification('Exporting', 'Compiling records...', 'info');
       const res = await window.api.exportData();
       if (res.success) {
-        const dataStr = JSON.stringify(res.data, null, 2);
-        const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
         const a = document.createElement('a');
-        a.setAttribute('href', dataUri);
+        a.setAttribute('href', 'data:application/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(res.data, null, 2)));
         a.setAttribute('download', `pos_backup_${new Date().toISOString().split('T')[0]}.json`);
         a.click();
-        addNotification('Export Complete', 'Data backup downloaded.', 'success');
-      } else {
-        addNotification('Export Failed', res.error || 'Export blocked.', 'error');
-      }
+        addNotification('Export Complete', 'JSON backup downloaded.', 'success');
+      } else { addNotification('Export Failed', res.error || 'Export blocked.', 'error'); }
     } catch { addNotification('Error', 'Failed exporting JSON.', 'error'); }
   };
 
   const handleExportExcel = async () => {
     try {
-      addNotification('Exporting Data', 'Compiling to Excel...', 'info');
+      addNotification('Exporting', 'Compiling to Excel...', 'info');
       const res = await window.api.exportData();
       if (res.success) {
         const { products, customers, sales, sale_items, vendors, purchases, inventory_batches, customer_payments } = res.data;
@@ -370,9 +356,7 @@ export default function Settings() {
         if (customer_payments) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(customer_payments), 'Payments');
         XLSX.writeFile(wb, `pos_backup_${new Date().toISOString().split('T')[0]}.xlsx`);
         addNotification('Export Complete', 'Excel backup downloaded.', 'success');
-      } else {
-        addNotification('Export Failed', res.error || 'Export blocked.', 'error');
-      }
+      } else { addNotification('Export Failed', res.error || 'Export blocked.', 'error'); }
     } catch { addNotification('Error', 'Failed exporting Excel.', 'error'); }
   };
 
@@ -381,770 +365,634 @@ export default function Settings() {
     if (!file) return;
     if (!window.confirm('Warning: Importing will OVERWRITE your current database. Continue?')) { e.target.value = ''; return; }
     try {
-      addNotification('Importing Data', 'Restoring system records...', 'info');
+      addNotification('Importing', 'Restoring records...', 'info');
       const reader = new FileReader();
-      reader.onload = async (event) => {
+      reader.onload = async (ev) => {
         try {
-          const data = JSON.parse(event.target?.result as string);
+          const data = JSON.parse(ev.target?.result as string);
           const res = await window.api.importData(data);
           if (res.success) window.location.reload();
           else addNotification('Import Failed', res.error || 'Validation failed.', 'error');
-        } catch { addNotification('Import Error', 'Invalid JSON file structure.', 'error'); }
+        } catch { addNotification('Import Error', 'Invalid JSON structure.', 'error'); }
       };
       reader.readAsText(file);
     } catch { addNotification('Error', 'Failed to read file.', 'error'); }
   };
 
   const handleImportDb = async () => {
-    if (!window.confirm('CRITICAL WARNING:\n\nRestoring a .db file will completely replace your current database. Continue?')) return;
+    if (!window.confirm('CRITICAL WARNING:\n\nRestoring a .db file will replace your current database. Continue?')) return;
     try {
       const filePath = await window.api.selectDbFile();
       if (!filePath) return;
-      addNotification('Importing Database', 'Replacing system database...', 'info');
+      addNotification('Importing DB', 'Replacing database...', 'info');
       const res = await window.api.importDb(filePath);
       if (res.success) {
         addNotification('Import Successful', 'Database restored. Reloading...', 'success');
         setTimeout(() => window.location.reload(), 1500);
-      } else {
-        addNotification('Import Failed', res.error || 'Could not replace database.', 'error');
-      }
-    } catch (err: any) {
-      addNotification('Error', 'Critical error during DB import: ' + err.message, 'error');
-    }
-  };
-
-  const handleDeleteAllData = async () => {
-    if (!window.confirm('CRITICAL WARNING:\n\nThis will permanently delete ALL data. This CANNOT be undone. Are you absolutely sure?')) return;
-    if (!window.confirm('FINAL CONFIRMATION:\n\nType OK to confirm the complete wipe.')) return;
-    try {
-      addNotification('Wiping Data', 'Clearing all records...', 'warning');
-      const res = await window.api.deleteAllData();
-      if (res.success) window.location.reload();
-      else addNotification('Wipe Failed', 'Error deleting data: ' + res.error, 'error');
-    } catch { addNotification('Error', 'Critical execution error.', 'error'); }
-  };
-
-  const handleSeedDatabase = async () => {
-    if (!window.confirm('Seed the database with 1,000+ records (100 customers, 200 products, 500 sales)?')) return;
-    setIsSaving(true);
-    try {
-      addNotification('Seeding Started', 'Populating database with demo data...', 'info');
-      const res = await window.api.seedDatabase();
-      if (res.success) {
-        addNotification('Seeding Complete', 'Database populated with demo data.', 'success');
-        window.location.reload();
-      } else {
-        addNotification('Seeding Failed', res.error || 'Unknown error.', 'error');
-      }
-    } catch (err: any) {
-      addNotification('Seeding Error', err.message, 'error');
-    } finally { setIsSaving(false); }
-  };
-
-  const handleStressTest = async () => {
-    if (!window.confirm('Simulate 1,000 rapid checkouts for performance benchmarking?')) return;
-    setIsSaving(true);
-    addNotification('Benchmarking', 'Commencing 1,000 extreme rapid checkouts...', 'info');
-    try {
-      const start = performance.now();
-      const stressItems = [{ product_name: 'Engine Benchmark Test', quantity: Math.floor(Math.random() * 5) + 1, price: 100, is_custom: true }];
-      const promises = Array.from({ length: 1000 }, (_, i) =>
-        window.api.createSale({
-          total: 100 * stressItems[0].quantity, subtotal: 100 * stressItems[0].quantity,
-          discount: 0, tax: 0, payment_method: i % 2 === 0 ? 'online' : 'cash', items: stressItems,
-        })
-      );
-      const results = await Promise.all(promises);
-      const failed = results.filter((r) => !r.success);
-      const end = performance.now();
-      if (failed.length > 0) {
-        addNotification('Stress Test Yield', `${failed.length} failures out of 1000.`, 'error');
-      } else {
-        addNotification('Benchmark Passed ✅', `1,000 checkouts in ${((end - start) / 1000).toFixed(2)}s. Zero UI blocks.`, 'success');
-      }
-    } catch { addNotification('Error', 'Stress test interrupted.', 'error'); }
-    finally { setIsSaving(false); }
+      } else { addNotification('Import Failed', res.error || 'Could not replace database.', 'error'); }
+    } catch (err: any) { addNotification('Error', 'Critical DB import error: ' + err.message, 'error'); }
   };
 
   const handleValidateLicense = async () => {
-    if (!settings.activation_key.trim()) { addNotification('No License Key', 'Enter a license key first, or keep offline mode.', 'info'); return; }
+    if (!settings.activation_key.trim()) { addNotification('No Key', 'Enter a license key first.', 'info'); return; }
     setValidating(true);
     try {
       const res = await window.api.activateAppV2(settings.activation_key.trim());
       if (res.success) {
-        addNotification('License Validated', 'License key saved and activated.', 'success');
+        addNotification('License Validated', 'License key activated.', 'success');
         update('license_mode', 'online');
-      } else {
-        addNotification('Validation Failed', res.error || 'Could not validate.', 'error');
-      }
+      } else { addNotification('Validation Failed', res.error || 'Could not validate.', 'error'); }
     } finally { setValidating(false); }
   };
 
   // ── Pagination ─────────────────────────────────────────────────────────────
+
   const totalBackupPages = Math.max(1, Math.ceil(availableBackups.length / BACKUPS_PAGE_SIZE));
   const currentBackupPage = Math.min(backupPage, totalBackupPages);
   const pagedBackups = availableBackups.slice((currentBackupPage - 1) * BACKUPS_PAGE_SIZE, currentBackupPage * BACKUPS_PAGE_SIZE);
   const cloudReady = !!settings.cloud_backend_url && !!settings.cloud_backend_token;
 
   // ── Render ─────────────────────────────────────────────────────────────────
+
   return (
-    <div className="flex flex-col gap-6 animate-in fade-in max-w-4xl pb-10">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-6 animate-in fade-in max-w-5xl pb-10">
+
+      {/* Page header */}
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">System Settings</h1>
-          <p className="text-muted-foreground text-sm mt-1">Configure your store, cloud, and operational parameters</p>
+          <h1 className="text-2xl font-bold tracking-tight">System Settings</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Configure your store, receipts, and data preferences</p>
         </div>
-        <Button type="button" onClick={handleSave} disabled={isSaving} className="gap-2 self-start">
-          {isSaving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
-          {isSaving ? 'Saving...' : 'Save Settings'}
+        <Button onClick={() => handleSave()} disabled={isSaving} className="gap-2 shrink-0 shadow-md shadow-primary/15">
+          {isSaving ? <><RefreshCw size={15} className="animate-spin" />Saving...</> : <><Save size={15} />Save Settings</>}
         </Button>
       </div>
 
-      <form onSubmit={handleSave} className="space-y-6">
+      <div className="flex flex-col lg:flex-row gap-5">
 
-        {/* ── Language ──────────────────────────────────────────────────────── */}
-        <Card className="shadow-sm border-primary/20 bg-primary/5">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-primary">
-              <Zap size={20} /> {t('language')}
-            </CardTitle>
-            <CardDescription>Select your preferred interface language / اپنی پسندیدہ زبان منتخب کریں۔</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-4">
-              <Button type="button" variant={language === 'en' ? 'default' : 'outline'} className="flex-1 gap-2 h-14 text-lg" onClick={() => setLanguage('en')}>
-                🇺🇸 {t('english')}
-              </Button>
-              <Button type="button" variant={language === 'ur' ? 'default' : 'outline'} className="flex-1 gap-2 h-14 text-lg font-urdu" onClick={() => setLanguage('ur')}>
-                🇵🇰 {t('urdu')}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* ── Branding / Logo ───────────────────────────────────────────────── */}
-        <Card className="shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ImageIcon size={18} className="text-primary" /> Company Branding
-            </CardTitle>
-            <CardDescription>Logo used on UI and printed receipts</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex items-start sm:items-center gap-6">
-              <div
-                onClick={() => fileInputRef.current?.click()}
+        {/* ── Sidebar tabs ─────────────────────────────────────────────────── */}
+        <nav className="lg:w-[196px] shrink-0 flex flex-row lg:flex-col gap-1 overflow-x-auto lg:overflow-x-visible pb-1 lg:pb-0 lg:sticky lg:top-4 lg:self-start">
+          {TABS.map(tab => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
                 className={cn(
-                  'w-24 h-24 rounded-xl border-2 border-dashed flex flex-col items-center justify-center overflow-hidden cursor-pointer transition-colors bg-muted/20 shrink-0 group relative',
-                  previewLogo ? 'border-transparent' : 'border-border hover:border-primary hover:bg-muted/50',
+                  'flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-left transition-all duration-150 whitespace-nowrap lg:whitespace-normal group',
+                  isActive
+                    ? 'bg-primary/10 text-primary border border-primary/20 shadow-sm'
+                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground border border-transparent'
                 )}
               >
-                {previewLogo ? (
-                  <>
-                    <img src={previewLogo} alt="Logo" className="w-full h-full object-contain p-2 group-hover:opacity-30 transition-opacity" />
-                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                      <UploadIcon size={20} className="text-foreground" />
-                    </div>
-                  </>
-                ) : (
-                  <Store size={32} className="text-muted-foreground opacity-30 group-hover:opacity-100 group-hover:text-primary transition-all" />
-                )}
-              </div>
-              <div className="flex flex-col space-y-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="w-fit">
-                  <Upload size={14} className="mr-2" /> Upload Image
-                </Button>
-                <p className="text-xs text-muted-foreground">Recommended: Square PNG or JPG, max 1MB.</p>
-                {previewLogo && (
-                  <Button type="button" variant="link" size="sm" onClick={() => { setPreviewLogo(''); update('store_logo', ''); }} className="h-auto p-0 text-destructive justify-start w-fit">
-                    Remove current logo
-                  </Button>
-                )}
-              </div>
-              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* ── Business Information ──────────────────────────────────────────── */}
-        <Card className="shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Building2 size={18} className="text-primary" /> Business Information
-            </CardTitle>
-            <CardDescription>Used on receipts, statements, and cloud registration</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field icon={<User />} label="Full Name" value={settings.owner_full_name} onChange={(v) => update('owner_full_name', v)} placeholder="e.g. Munib Ahmad" />
-              <div className="space-y-2">
-                <Label>Username (Locked)</Label>
-                <div className="relative">
-                  <div className="absolute left-3 top-3 h-4 w-4 text-muted-foreground"><User size={16} /></div>
-                  <Input className="pl-9" value={settings.owner_username} disabled placeholder="admin" />
+                <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors', isActive ? 'bg-primary/15' : 'bg-muted/60 group-hover:bg-accent')}>
+                  <Icon size={14} />
                 </div>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Retailer Shop Name <span className="text-destructive">*</span></Label>
-              <div className="relative">
-                <Store className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground opacity-50" size={16} />
-                <Input required value={settings.store_name} onChange={(e) => update('store_name', e.target.value)} placeholder="e.g. OsaTech Retail Shop" className="pl-9" />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field icon={<Phone />} label="Contact Phone" value={settings.store_phone} onChange={(v) => update('store_phone', v)} placeholder="+92 300 1234567" />
-              <Field icon={<Phone />} label="Mobile Number" value={settings.owner_mobile} onChange={(v) => { update('owner_mobile', v); update('store_phone', v); }} placeholder="+92 300 1234567" />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field icon={<Mail />} label="Email (Optional)" value={settings.owner_email} onChange={(v) => update('owner_email', v)} placeholder="owner@example.com" type="email" />
-              {/* Receipt header mini-preview */}
-              <div className="space-y-2 border border-dashed rounded-lg p-3 bg-muted/10 relative overflow-hidden">
-                <p className="text-[10px] font-semibold text-muted-foreground uppercase absolute top-2 left-3">Receipt Preview Header</p>
-                <div className="mt-4 text-center">
-                  <p className="font-bold text-sm text-foreground">{settings.store_name || 'Retailer Shop Name'}</p>
-                  <p className="text-[10px] text-muted-foreground mt-0.5">{settings.store_phone || 'Phone Number'}</p>
+                <div className="min-w-0 hidden lg:block">
+                  <p className={cn('text-xs font-semibold leading-none', isActive && 'font-bold')}>{tab.label}</p>
+                  <p className="text-[10px] text-muted-foreground/70 mt-0.5 leading-none">{tab.desc}</p>
                 </div>
-              </div>
-            </div>
+                <span className="lg:hidden text-xs font-semibold">{tab.label}</span>
+              </button>
+            );
+          })}
+        </nav>
 
-            <div className="space-y-2">
-              <Label>Street Address</Label>
-              <div className="relative">
-                <MapPin className="absolute left-3 top-3 text-muted-foreground opacity-50" size={16} />
-                <textarea
-                  value={settings.store_address} rows={2}
-                  onChange={(e) => update('store_address', e.target.value)}
-                  placeholder="123 Main Street, Karachi"
-                  className="w-full flex rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pl-9 resize-none"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        {/* ── Tab content ──────────────────────────────────────────────────── */}
+        <div className="flex-1 min-w-0">
+          <form onSubmit={handleSave} className="space-y-5">
 
-        {/* ── Receipt Footer ────────────────────────────────────────────────── */}
-        <Card className="shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText size={18} className="text-primary" /> Receipt Footer
-            </CardTitle>
-            <CardDescription>Custom message shown at the end of each print</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="relative">
-              <FileText className="absolute left-3 top-3 text-muted-foreground opacity-50" size={16} />
-              <textarea
-                value={settings.receipt_footer} rows={2}
-                onChange={(e) => update('receipt_footer', e.target.value)}
-                placeholder="Thank you for visiting!"
-                className="w-full flex rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 pl-9 resize-none"
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* ── Security & Access ─────────────────────────────────────────────── */}
-        <Card className="shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ShieldCheck size={18} className="text-primary" /> Security & Access
-            </CardTitle>
-            <CardDescription>Protect application launch with a secure PIN</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2 max-w-sm">
-              <Label>Terminal Login Password</Label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground opacity-50" size={16} />
-                <Input
-                  type={showPassword ? 'text' : 'password'}
-                  value={settings.pos_password}
-                  onChange={(e) => update('pos_password', e.target.value)}
-                  placeholder="Enter numeric PIN"
-                  className="pl-9 pr-10 font-mono"
-                />
-                <button type="button" onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </div>
-            <div className="space-y-2 max-w-sm">
-              <Label>Low Stock Alert Threshold</Label>
-              <Input
-                type="number" min="0"
-                value={settings.low_stock_threshold}
-                onChange={(e) => update('low_stock_threshold', parseInt(e.target.value) || 0)}
-                placeholder="e.g. 10"
-              />
-              <p className="text-[10px] text-muted-foreground">Items below this quantity will trigger a warning in Inventory.</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* ── Print & Receipt Settings ──────────────────────────────────────── */}
-        <Card className="shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Printer size={18} className="text-primary" /> Print & Receipt Settings
-            </CardTitle>
-            <CardDescription>Choose default paper size and invoice style. Live preview shown below.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            {/* Paper size */}
-            <div className="space-y-3">
-              <Label>Default Receipt / Invoice Size</Label>
-              <div className="grid grid-cols-3 gap-3">
-                {[
-                  { value: 'thermal', label: 'Thermal (80mm)', desc: 'Standard receipt roll' },
-                  { value: 'a5', label: 'A5 Paper', desc: '148 × 210 mm' },
-                  { value: 'a4', label: 'A4 Paper', desc: '210 × 297 mm' },
-                ].map((opt) => (
-                  <button key={opt.value} type="button"
-                    onClick={() => update('receipt_size', opt.value)}
-                    className={`flex flex-col items-center p-4 rounded-xl border-2 transition-all text-left cursor-pointer ${settings.receipt_size === opt.value ? 'border-primary bg-primary/5 shadow-md' : 'border-border/50 hover:border-primary/40 hover:bg-muted/30'}`}>
-                    <div className={`mb-2 rounded border-2 flex items-center justify-center text-xs font-bold ${settings.receipt_size === opt.value ? 'border-primary text-primary' : 'border-muted-foreground/30 text-muted-foreground'} ${opt.value === 'thermal' ? 'w-6 h-12' : opt.value === 'a5' ? 'w-8 h-11' : 'w-8 h-12'}`}>
-                      {opt.value === 'thermal' ? '80' : opt.value === 'a5' ? 'A5' : 'A4'}
-                    </div>
-                    <span className="text-sm font-semibold">{opt.label}</span>
-                    <span className="text-xs text-muted-foreground mt-0.5">{opt.desc}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Invoice style */}
-            <div className="space-y-3 border-t pt-5">
-              <div>
-                <Label>Invoice Style / Layout</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">Compact thermal receipt or a structured formal A4 invoice.</p>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {[
-                  { value: 'thermal', label: '🧾 Thermal Receipt', desc: 'Compact scrollable receipt — great for cash registers & quick sales' },
-                  { value: 'formal', label: '📄 Formal Invoice', desc: 'Structured A4 table invoice with S.No, Qty, Unit Price, Amount & balance rows' },
-                ].map((opt) => (
-                  <button key={opt.value} type="button"
-                    onClick={() => update('invoice_style', opt.value)}
-                    className={`flex flex-col p-4 rounded-xl border-2 text-left transition-all cursor-pointer ${settings.invoice_style === opt.value ? 'border-primary bg-primary/5 shadow-md' : 'border-border/50 hover:border-primary/40 hover:bg-muted/30'}`}>
-                    <span className="text-sm font-bold">{opt.label}</span>
-                    <span className="text-xs text-muted-foreground mt-1 leading-relaxed">{opt.desc}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Invoice notes */}
-            <div className="space-y-2 border-t pt-5">
-              <Label>Invoice Notes / Terms (printed on every invoice)</Label>
-              <p className="text-xs text-muted-foreground">e.g. return policy, warranty, contact info.</p>
-              <textarea
-                value={settings.invoice_notes || ''} rows={3}
-                onChange={(e) => update('invoice_notes', e.target.value)}
-                placeholder={'• Warranty is 3 days only\n• No returns on software\n• Goods once sold cannot be returned'}
-                className="w-full flex rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
-              />
-            </div>
-
-            {/* Live preview */}
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label>Live Print Preview</Label>
-                <Button type="button" variant="outline" size="sm" className="gap-2"
-                  onClick={() => {
-                    const previewEl = document.getElementById('receipt-preview');
-                    if (!previewEl) return;
-                    const win = window.open('', '_blank', 'width=900,height=700');
-                    if (!win) return;
-                    win.document.write(`<!DOCTYPE html><html><head><title>Print Preview</title>
-                      <style>@media print{body{margin:0;}}body{font-family:monospace;background:#f5f5f5;display:flex;justify-content:center;padding:20px;}
-                      .page{background:white;padding:24px;${settings.receipt_size === 'thermal' ? 'width:302px;' : settings.receipt_size === 'a5' ? 'width:559px;' : 'width:794px;'}box-shadow:0 2px 8px rgba(0,0,0,0.15);}
-                      </style></head><body><div class="page">${previewEl.innerHTML}</div></body>
-                      <script>window.onload=function(){window.print();}<\/script></html>`);
-                    win.document.close();
-                  }}>
-                  <Printer size={14} /> Print Preview
-                </Button>
-              </div>
-              <div className="border-2 border-dashed rounded-xl overflow-hidden bg-white dark:bg-neutral-900 flex justify-center p-4">
-                <div id="receipt-preview" className={`font-mono text-[11px] leading-relaxed bg-white text-black transition-all ${settings.receipt_size === 'thermal' ? 'w-[280px]' : settings.receipt_size === 'a5' ? 'w-[480px]' : 'w-[680px]'}`}>
-                  <div className="text-center border-b pb-2 mb-2">
-                    {previewLogo && <img src={previewLogo} alt="logo" className="h-12 mx-auto mb-1 object-contain" />}
-                    <div className="font-bold text-base">{settings.store_name || 'Store Name'}</div>
-                    {settings.store_phone && <div>{settings.store_phone}</div>}
-                    {settings.store_address && <div className="text-[10px]">{settings.store_address}</div>}
-                  </div>
-                  <div className="flex justify-between border-b pb-1 mb-1"><span>Date:</span><span>{new Date().toLocaleDateString('en-PK')}</span></div>
-                  <div className="flex justify-between border-b pb-1 mb-1"><span>Invoice #:</span><span>#0001-SAMPLE</span></div>
-                  <div className="border-b pb-2 mb-2">
-                    <div className="flex justify-between font-bold">
-                      <span className="flex-1">Item</span><span className="w-10 text-right">Qty</span>
-                      <span className="w-20 text-right">Price</span><span className="w-20 text-right">Total</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="flex-1">Sample Product</span><span className="w-10 text-right">2</span>
-                      <span className="w-20 text-right">PKR 500</span><span className="w-20 text-right">PKR 1,000</span>
-                    </div>
-                  </div>
-                  <div className="flex justify-between font-bold text-sm border-t pt-1"><span>TOTAL</span><span>PKR 1,000</span></div>
-                  <div className="text-center mt-3 pt-2 border-t text-[10px] text-gray-500">{settings.receipt_footer || 'Thank you for your purchase!'}</div>
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">Preview updates live. Click "Print Preview" to open a printable window.</p>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* ── Cloud / API Configuration ─────────────────────────────────────── */}
-        <Card className="shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              {cloudReady ? <Cloud size={18} className="text-emerald-600" /> : <CloudOff size={18} className="text-muted-foreground" />}
-              Cloud / API Configuration
-            </CardTitle>
-            <CardDescription>SQLite remains primary. Cloud APIs sync only when internet and credentials are available.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Field icon={<Cloud />} label="API Base URL" value={settings.cloud_backend_url} onChange={(v) => update('cloud_backend_url', v)} placeholder="https://api.example.com" />
-              <Field icon={<ShieldCheck />} label="Auth Token" value={settings.cloud_backend_token} onChange={(v) => update('cloud_backend_token', v)} placeholder="Bearer token" />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-              <StatusTile label="Cloud" value={cloudReady ? 'Configured' : 'Offline'} tone={cloudReady ? 'success' : 'neutral'} />
-              <StatusTile label="Queue" value={`${syncStatus.pending} pending`} tone={syncStatus.pending > 0 ? 'warning' : 'success'} />
-              <StatusTile label="Failed" value={`${syncStatus.failed} failed`} tone={syncStatus.failed > 0 ? 'danger' : 'success'} />
-              <StatusTile label="Last Sync" value={syncStatus.lastSync ? new Date(syncStatus.lastSync).toLocaleString() : 'Never'} tone="neutral" />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* ── Google Drive Backup ───────────────────────────────────────────── */}
-        <Card className="shadow-lg border-blue-500/20 bg-blue-500/5 overflow-hidden">
-          <div className="h-1.5 w-full bg-blue-500" />
-          <CardHeader className="pb-4">
-            <div className="flex items-center justify-between">
-              <div className="space-y-1">
-                <CardTitle className="flex items-center gap-2 text-blue-700">
-                  <Cloud size={20} className="text-blue-500" /> Google Drive Backup
-                </CardTitle>
-                <CardDescription>Secure your data in the cloud automatically</CardDescription>
-              </div>
-              <Badge variant={driveStatus.connected ? 'default' : 'outline'} className={cn('px-3 py-1 text-xs font-bold gap-1.5', driveStatus.connected ? 'bg-emerald-500 hover:bg-emerald-600 border-none' : 'text-muted-foreground border-border')}>
-                {driveStatus.connected ? <><CheckCircle2 size={12} /> Connected</> : <><CloudOff size={12} /> Not Linked</>}
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {[
-                { icon: <Globe size={20} />, bg: 'bg-blue-100 text-blue-600', label: 'Network Mode', value: 'Cloud Sync Enabled' },
-                { icon: <ShieldCheck size={20} />, bg: 'bg-emerald-100 text-emerald-600', label: 'Security', value: 'AES-256 Local Encryption' },
-                { icon: <Activity size={20} />, bg: 'bg-amber-100 text-amber-600', label: 'Last Backup', value: formatLastBackup(driveStatus.lastBackup) },
-              ].map((item) => (
-                <div key={item.label} className="p-4 rounded-xl bg-card/70 border border-border shadow-sm flex items-center gap-4">
-                  <div className={`h-10 w-10 rounded-full flex items-center justify-center ${item.bg}`}>{item.icon}</div>
-                  <div>
-                    <p className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">{item.label}</p>
-                    <p className="text-sm font-bold text-foreground">{item.value}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              {[
-                { label: 'Cloud Connected', value: driveStatus.connected ? 'Yes' : 'No (Offline/Not Linked)', tone: driveStatus.connected ? 'text-emerald-600' : 'text-amber-600' },
-                { label: 'Last Sync', value: subscriptionInfo?.lastSync ? new Date(subscriptionInfo.lastSync).toLocaleString() : 'Not synced yet', tone: 'text-foreground' },
-                { label: 'Subscription Plan', value: subscriptionInfo?.plan || 'none', tone: 'text-foreground capitalize' },
-                { label: 'Expiry Remaining', value: subscriptionInfo?.plan === 'lifetime' ? 'Unlimited' : `${Math.max(0, subscriptionInfo?.daysRemaining || 0)} day(s)`, tone: 'text-foreground' },
-              ].map((item) => (
-                <div key={item.label} className="rounded-lg border border-border bg-card/70 p-3">
-                  <p className="text-muted-foreground uppercase tracking-widest font-black text-[10px] mb-1">{item.label}</p>
-                  <p className={`font-bold ${item.tone}`}>{item.value}</p>
-                </div>
-              ))}
-              <div className="rounded-lg border border-border bg-card/70 p-3 sm:col-span-2">
-                <p className="text-muted-foreground uppercase tracking-widest font-black text-[10px] mb-1">Backup Status</p>
-                <p className="font-bold text-foreground">{driveStatus.lastBackup ? `Last backup: ${formatLastBackup(driveStatus.lastBackup)}` : 'No backup recorded yet'}</p>
-              </div>
-            </div>
-
-            <div className="flex flex-col sm:flex-row items-center gap-4 pt-2">
-              {!driveStatus.connected ? (
-                <Button type="button" onClick={handleConnectDrive} disabled={isConnecting} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200 gap-2 h-11 px-8 font-bold">
-                  {isConnecting ? <Loader2 size={18} className="animate-spin" /> : <Globe size={18} />}
-                  {isConnecting ? 'Linking Account...' : 'Link Google Drive'}
-                </Button>
-              ) : (
-                <>
-                  <Button type="button" onClick={handleDriveBackup} disabled={isBackingUp} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-200 gap-2 h-11 px-8 font-bold">
-                    {isBackingUp ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-                    {isBackingUp ? 'Syncing...' : 'Backup Now'}
-                  </Button>
-                  <p className="text-xs text-blue-600/70 font-semibold flex items-center gap-1.5 bg-blue-100/50 px-4 py-2.5 rounded-lg border border-blue-200">
-                    <CheckCircle2 size={14} /> Automatic weekly backups are enabled.
-                  </p>
-                </>
-              )}
-            </div>
-
-            {!driveStatus.connected && (
-              <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800">
-                <AlertCircle size={20} className="shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-xs font-black uppercase tracking-wider mb-1">Backup Recommendation</p>
-                  <p className="text-xs font-medium leading-relaxed">Your business data is currently stored only on this computer. Link Google Drive to protect against hardware failure, fire, or theft.</p>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* ── Cloud Backup List ─────────────────────────────────────────────── */}
-        {driveStatus.connected && (
-          <Card className="shadow-sm border-blue-200">
-            <CardHeader className="pb-3 bg-blue-50/50">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-sm font-bold flex items-center gap-2">
-                    <Download size={16} className="text-blue-600" /> Available Cloud Backups
-                  </CardTitle>
-                  <CardDescription className="text-[10px]">Recent snapshots found on your Google Drive</CardDescription>
-                </div>
-                <Button type="button" variant="outline" size="sm" onClick={handleFetchBackups} disabled={isFetchingBackups} className="h-8 text-xs gap-1.5">
-                  {isFetchingBackups ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                  Refresh List
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              {availableBackups.length > 0 ? (
-                <div className="divide-y divide-border">
-                  {pagedBackups.map((b) => (
-                    <div key={b.id} className="flex items-center justify-between p-4 hover:bg-muted/30 transition-colors">
-                      <div className="space-y-1">
-                        <p className="text-xs font-bold text-slate-700">{b.name}</p>
-                        <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-                          <span className="flex items-center gap-1"><Database size={10} /> {formatSize(b.size)}</span>
-                          <span className="flex items-center gap-1"><Zap size={10} /> {new Date(b.date).toLocaleString()}</span>
-                        </div>
-                      </div>
-                      <Button type="button" size="sm" variant="secondary" className="h-8 text-xs px-4" onClick={() => handleRestoreCloudBackup(b.id)}>
-                        Restore
-                      </Button>
-                    </div>
-                  ))}
-                  {availableBackups.length > BACKUPS_PAGE_SIZE && (
-                    <div className="p-4 flex flex-col sm:flex-row items-center justify-between gap-3 bg-muted/10">
-                      <p className="text-xs text-muted-foreground">
-                        Showing {Math.min((currentBackupPage - 1) * BACKUPS_PAGE_SIZE + 1, availableBackups.length)}–{Math.min(currentBackupPage * BACKUPS_PAGE_SIZE, availableBackups.length)} of {availableBackups.length}
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <Button type="button" variant="outline" size="sm" className="h-8 text-xs" disabled={currentBackupPage <= 1} onClick={() => setBackupPage((p) => Math.max(1, p - 1))}>Prev</Button>
-                        <span className="text-xs font-medium text-muted-foreground px-2">Page {currentBackupPage} / {totalBackupPages}</span>
-                        <Button type="button" variant="outline" size="sm" className="h-8 text-xs" disabled={currentBackupPage >= totalBackupPages} onClick={() => setBackupPage((p) => Math.min(totalBackupPages, p + 1))}>Next</Button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="p-8 text-center space-y-2">
-                  <Cloud size={24} className="mx-auto text-muted-foreground opacity-20" />
-                  <p className="text-xs text-muted-foreground font-medium">No backups listed. Click Refresh to scan Drive.</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
-
-        {/* ── License ───────────────────────────────────────────────────────── */}
-        <Card className="shadow-sm">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <KeyRound size={18} className="text-primary" /> License Information
-            </CardTitle>
-            <CardDescription>License is optional for offline POS use and can be validated later.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-[220px_1fr_auto] gap-4">
-              <div className="space-y-2">
-                <Label>Mode</Label>
-                <Select value={settings.license_mode} onValueChange={(v: 'offline' | 'online') => update('license_mode', v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="offline">Offline</SelectItem>
-                    <SelectItem value="online">Online License</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <Field icon={<KeyRound />} label="License Key" value={settings.activation_key} onChange={(v) => update('activation_key', v)} placeholder="Optional" />
-              <div className="flex items-end">
-                <Button type="button" variant="outline" onClick={handleValidateLicense} disabled={validating} className="w-full">
-                  {validating ? 'Checking...' : 'Validate'}
-                </Button>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge className={settings.license_mode === 'offline' ? 'bg-slate-600 text-white' : 'bg-blue-600 text-white'}>
-                {settings.license_mode === 'offline' ? 'Offline-first' : 'Online license'}
-              </Badge>
-              <Badge className={settings.approval_status === 'blocked' ? 'bg-rose-600 text-white' : settings.approval_status === 'pending' ? 'bg-amber-500 text-white' : 'bg-emerald-600 text-white'}>
-                {settings.approval_status}
-              </Badge>
-              <Badge className="bg-emerald-600 text-white">
-                <CheckCircle2 size={12} className="mr-1" /> Local SQLite active
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* ── Data Management ───────────────────────────────────────────────── */}
-        <Card className="shadow-sm border-destructive/30 overflow-hidden">
-          <div className="h-1 w-full bg-destructive" />
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-destructive">
-              <Database size={18} /> Data Management
-            </CardTitle>
-            <CardDescription>Backup, restore, or manage your system database</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Export */}
-            <div className="flex flex-col sm:flex-row items-center justify-between p-4 bg-muted/30 border rounded-xl gap-4">
-              <div className="flex-1">
-                <h4 className="font-semibold text-sm flex items-center gap-2"><Download size={16} className="text-primary" /> Export Data</h4>
-                <p className="text-xs text-muted-foreground mt-1">Export your complete database to JSON or Excel format.</p>
-              </div>
-              <div className="flex gap-2 w-full sm:w-auto shrink-0">
-                <Button type="button" variant="outline" onClick={handleExportData} className="w-full sm:w-auto shadow-sm">JSON</Button>
-                <Button type="button" variant="outline" onClick={handleExportExcel} className="w-full sm:w-auto shadow-sm">Excel</Button>
-              </div>
-            </div>
-
-            {/* Auto JSON Backup */}
-            <div className="flex flex-col sm:flex-row items-start justify-between p-4 bg-primary/5 border border-primary/20 rounded-xl gap-4">
-              <div className="flex-1">
-                <h4 className="font-semibold text-sm flex items-center gap-2 text-primary"><ShieldCheck size={16} /> Automated JSON Backup</h4>
-                <p className="text-xs text-muted-foreground mt-1 mb-3">Auto-save to a folder every 5 hours and after settings changes.</p>
-                <div className="space-y-3">
-                  <div className="flex flex-col gap-2">
-                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Backup Location</span>
-                    <div className="flex gap-2">
-                      <Input value={settings.auto_export_path} readOnly placeholder="No folder selected..." className="h-9 bg-background/50 text-xs font-mono" />
-                      <Button type="button" size="sm" variant="outline" onClick={handleSelectDirectory}>Browse</Button>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                      <input type="checkbox" checked={settings.auto_export_enabled} onChange={(e) => update('auto_export_enabled', e.target.checked)} className="w-4 h-4 accent-primary" />
-                      <span className="text-xs font-medium">Enable Auto-Backup</span>
-                    </label>
-                    <Button type="button" variant="ghost" size="sm" className="text-[10px] h-7 text-primary hover:bg-primary/10" onClick={handleManualExport} disabled={!settings.auto_export_path}>
-                      Save & Export Now
+            {/* ══ GENERAL ════════════════════════════════════════════════════ */}
+            {activeTab === 'general' && (
+              <>
+                {/* Language */}
+                <SectionCard title={t('language')} desc="Select interface language / اپنی پسندیدہ زبان منتخب کریں" icon={Languages}>
+                  <div className="flex gap-3">
+                    <Button type="button" variant={language === 'en' ? 'default' : 'outline'} className="flex-1 h-12 gap-2 text-base" onClick={() => setLanguage('en')}>
+                      🇺🇸 {t('english')}
+                    </Button>
+                    <Button type="button" variant={language === 'ur' ? 'default' : 'outline'} className="flex-1 h-12 gap-2 text-base font-urdu" onClick={() => setLanguage('ur')}>
+                      🇵🇰 {t('urdu')}
                     </Button>
                   </div>
+                </SectionCard>
+
+                {/* Branding */}
+                <SectionCard title="Company Branding" desc="Logo shown in the UI and on printed receipts" icon={ImageIcon}>
+                  <div className="flex items-start gap-5">
+                    <div
+                      onClick={() => fileInputRef.current?.click()}
+                      className={cn('w-20 h-20 rounded-xl border-2 border-dashed flex flex-col items-center justify-center overflow-hidden cursor-pointer transition-all bg-muted/20 shrink-0 group relative', previewLogo ? 'border-transparent' : 'border-border/50 hover:border-primary/40 hover:bg-muted/40')}
+                    >
+                      {previewLogo ? (
+                        <>
+                          <img src={previewLogo} alt="Logo" className="w-full h-full object-contain p-2 group-hover:opacity-30 transition-opacity" />
+                          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            <UploadIcon size={18} className="text-foreground" />
+                          </div>
+                        </>
+                      ) : (
+                        <Store size={28} className="text-muted-foreground/30 group-hover:text-primary group-hover:opacity-100 transition-all" />
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="w-fit gap-1.5">
+                        <Upload size={13} /> Upload Image
+                      </Button>
+                      <p className="text-xs text-muted-foreground">Square PNG or JPG, max 1 MB.</p>
+                      {previewLogo && (
+                        <button type="button" onClick={() => { setPreviewLogo(''); update('store_logo', ''); }} className="text-[11px] text-destructive hover:underline text-left w-fit">
+                          Remove logo
+                        </button>
+                      )}
+                    </div>
+                    <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoChange} />
+                  </div>
+                </SectionCard>
+
+                {/* Business info */}
+                <SectionCard title="Business Information" desc="Appears on receipts, statements, and registration" icon={Building2}>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <Field icon={<User />} label="Owner Full Name" value={settings.owner_full_name} onChange={v => update('owner_full_name', v)} placeholder="e.g. Munib Ahmad" />
+                      <div className="space-y-1.5">
+                        <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Username (Locked)</Label>
+                        <div className="relative">
+                          <User className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/40" size={14} />
+                          <Input className="pl-8 h-9 text-sm opacity-60" value={settings.owner_username} disabled placeholder="admin" />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Store Name <span className="text-destructive">*</span></Label>
+                      <div className="relative">
+                        <Store className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/60" size={14} />
+                        <Input required value={settings.store_name} onChange={e => update('store_name', e.target.value)} placeholder="e.g. OsaTech Retail Shop" className="pl-8 h-9 text-sm" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <Field icon={<Phone />} label="Contact Phone" value={settings.store_phone} onChange={v => update('store_phone', v)} placeholder="+92 300 1234567" />
+                      <Field icon={<Phone />} label="Mobile Number" value={settings.owner_mobile} onChange={v => { update('owner_mobile', v); update('store_phone', v); }} placeholder="+92 300 1234567" />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <Field icon={<Mail />} label="Email (Optional)" value={settings.owner_email} onChange={v => update('owner_email', v)} placeholder="owner@example.com" type="email" />
+                      {/* Receipt mini-preview */}
+                      <div className="rounded-lg border border-dashed border-border/60 bg-muted/10 p-3 relative">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/50 mb-2">Receipt Header Preview</p>
+                        <div className="text-center">
+                          <p className="font-bold text-sm">{settings.store_name || 'Store Name'}</p>
+                          <p className="text-[10px] text-muted-foreground mt-0.5">{settings.store_phone || 'Phone'}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Street Address</Label>
+                      <div className="relative">
+                        <MapPin className="absolute left-3 top-3 text-muted-foreground/60" size={14} />
+                        <textarea
+                          value={settings.store_address} rows={2}
+                          onChange={e => update('store_address', e.target.value)}
+                          placeholder="123 Main Street, Karachi"
+                          className="w-full flex rounded-lg border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring pl-9 resize-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </SectionCard>
+              </>
+            )}
+
+            {/* ══ RECEIPT ════════════════════════════════════════════════════ */}
+            {activeTab === 'receipt' && (
+              <>
+                <SectionCard title="Receipt Footer" desc="Custom message printed at the bottom of every receipt" icon={FileText}>
+                  <div className="relative">
+                    <FileText className="absolute left-3 top-3 text-muted-foreground/50" size={14} />
+                    <textarea
+                      value={settings.receipt_footer} rows={2}
+                      onChange={e => update('receipt_footer', e.target.value)}
+                      placeholder="Thank you for visiting!"
+                      className="w-full flex rounded-lg border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring pl-9 resize-none"
+                    />
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Print & Receipt Settings" desc="Choose paper size and invoice layout" icon={Printer}>
+                  <div className="space-y-6">
+                    {/* Paper size */}
+                    <div className="space-y-3">
+                      <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Default Paper Size</Label>
+                      <div className="grid grid-cols-3 gap-3">
+                        {[
+                          { value: 'thermal', label: 'Thermal (80mm)', desc: 'Receipt roll' },
+                          { value: 'a5',      label: 'A5 Paper',       desc: '148 × 210mm'  },
+                          { value: 'a4',      label: 'A4 Paper',       desc: '210 × 297mm'  },
+                        ].map(opt => (
+                          <button key={opt.value} type="button" onClick={() => update('receipt_size', opt.value)}
+                            className={cn('flex flex-col items-center p-4 rounded-xl border-2 transition-all text-left cursor-pointer', settings.receipt_size === opt.value ? 'border-primary bg-primary/5 shadow-sm' : 'border-border/50 hover:border-primary/30 hover:bg-muted/30')}>
+                            <div className={cn('mb-2 rounded border-2 flex items-center justify-center text-[10px] font-bold', settings.receipt_size === opt.value ? 'border-primary text-primary' : 'border-muted-foreground/30 text-muted-foreground', opt.value === 'thermal' ? 'w-5 h-10' : opt.value === 'a5' ? 'w-7 h-9' : 'w-7 h-10')}>
+                              {opt.value === 'thermal' ? '80' : opt.value === 'a5' ? 'A5' : 'A4'}
+                            </div>
+                            <span className="text-xs font-semibold">{opt.label}</span>
+                            <span className="text-[10px] text-muted-foreground mt-0.5">{opt.desc}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Invoice style */}
+                    <div className="space-y-3 border-t border-border/50 pt-5">
+                      <div>
+                        <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Invoice Style</Label>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">Compact receipt or structured formal invoice.</p>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {[
+                          { value: 'thermal', label: '🧾 Thermal Receipt', desc: 'Compact scrollable — great for cash registers & quick sales' },
+                          { value: 'formal',  label: '📄 Formal Invoice',  desc: 'Structured A4 with S.No, Qty, Unit Price, Amount & balance' },
+                        ].map(opt => (
+                          <button key={opt.value} type="button" onClick={() => update('invoice_style', opt.value)}
+                            className={cn('flex flex-col p-4 rounded-xl border-2 text-left transition-all cursor-pointer', settings.invoice_style === opt.value ? 'border-primary bg-primary/5 shadow-sm' : 'border-border/50 hover:border-primary/30 hover:bg-muted/30')}>
+                            <span className="text-sm font-bold">{opt.label}</span>
+                            <span className="text-[11px] text-muted-foreground mt-1 leading-relaxed">{opt.desc}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Invoice notes */}
+                    <div className="space-y-2 border-t border-border/50 pt-5">
+                      <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Invoice Notes / Terms</Label>
+                      <p className="text-[11px] text-muted-foreground">Printed on every invoice (return policy, warranty, etc.)</p>
+                      <textarea
+                        value={settings.invoice_notes || ''} rows={3}
+                        onChange={e => update('invoice_notes', e.target.value)}
+                        placeholder={'• Warranty is 3 days only\n• No returns on software\n• Goods once sold cannot be returned'}
+                        className="w-full flex rounded-lg border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
+                      />
+                    </div>
+
+                    {/* Live preview */}
+                    <div className="space-y-3 border-t border-border/50 pt-5">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Live Print Preview</Label>
+                        <Button type="button" variant="outline" size="sm" className="gap-1.5 h-8 text-xs"
+                          onClick={() => {
+                            const el = document.getElementById('receipt-preview');
+                            if (!el) return;
+                            const win = window.open('', '_blank', 'width=900,height=700');
+                            if (!win) return;
+                            win.document.write(`<!DOCTYPE html><html><head><title>Print Preview</title><style>@media print{body{margin:0;}}body{font-family:monospace;background:#f5f5f5;display:flex;justify-content:center;padding:20px;}.page{background:white;padding:24px;${settings.receipt_size === 'thermal' ? 'width:302px;' : settings.receipt_size === 'a5' ? 'width:559px;' : 'width:794px;'}box-shadow:0 2px 8px rgba(0,0,0,0.15);}</style></head><body><div class="page">${el.innerHTML}</div></body><script>window.onload=function(){window.print();}<\/script></html>`);
+                            win.document.close();
+                          }}>
+                          <Printer size={13} /> Print Preview
+                        </Button>
+                      </div>
+                      <div className="border-2 border-dashed border-border/50 rounded-xl overflow-hidden bg-white dark:bg-neutral-900 flex justify-center p-4">
+                        <div id="receipt-preview" className={cn('font-mono text-[11px] leading-relaxed bg-white text-black transition-all', settings.receipt_size === 'thermal' ? 'w-[280px]' : settings.receipt_size === 'a5' ? 'w-[480px]' : 'w-[680px]')}>
+                          <div className="text-center border-b pb-2 mb-2">
+                            {previewLogo && <img src={previewLogo} alt="logo" className="h-10 mx-auto mb-1 object-contain" />}
+                            <div className="font-bold text-sm">{settings.store_name || 'Store Name'}</div>
+                            {settings.store_phone && <div>{settings.store_phone}</div>}
+                            {settings.store_address && <div className="text-[10px]">{settings.store_address}</div>}
+                          </div>
+                          <div className="flex justify-between border-b pb-1 mb-1"><span>Date:</span><span>{new Date().toLocaleDateString('en-PK')}</span></div>
+                          <div className="flex justify-between border-b pb-1 mb-1"><span>Invoice #:</span><span>#0001-SAMPLE</span></div>
+                          <div className="border-b pb-2 mb-2">
+                            <div className="flex justify-between font-bold">
+                              <span className="flex-1">Item</span><span className="w-10 text-right">Qty</span>
+                              <span className="w-20 text-right">Price</span><span className="w-20 text-right">Total</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="flex-1">Sample Product</span><span className="w-10 text-right">2</span>
+                              <span className="w-20 text-right">PKR 500</span><span className="w-20 text-right">PKR 1,000</span>
+                            </div>
+                          </div>
+                          <div className="flex justify-between font-bold text-sm border-t pt-1"><span>TOTAL</span><span>PKR 1,000</span></div>
+                          <div className="text-center mt-3 pt-2 border-t text-[10px] text-gray-500">{settings.receipt_footer || 'Thank you!'}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </SectionCard>
+              </>
+            )}
+
+            {/* ══ SECURITY ═══════════════════════════════════════════════════ */}
+            {activeTab === 'security' && (
+              <SectionCard title="Security & Access" desc="Terminal PIN and inventory alert thresholds" icon={ShieldCheck}>
+                <div className="space-y-6">
+                  <div className="max-w-sm space-y-1.5">
+                    <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Terminal Login Password</Label>
+                    <div className="relative">
+                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/50" size={14} />
+                      <Input
+                        type={showPassword ? 'text' : 'password'}
+                        value={settings.pos_password}
+                        onChange={e => update('pos_password', e.target.value)}
+                        placeholder="Enter numeric PIN"
+                        className="pl-8 pr-10 h-9 font-mono text-sm"
+                      />
+                      <button type="button" onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors">
+                        {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">Used to unlock the dashboard and system lock screens.</p>
+                  </div>
+
+                  <div className="border-t border-border/50 pt-5 max-w-sm space-y-1.5">
+                    <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Low Stock Alert Threshold</Label>
+                    <Input
+                      type="number" min="0"
+                      value={settings.low_stock_threshold}
+                      onChange={e => update('low_stock_threshold', parseInt(e.target.value) || 0)}
+                      placeholder="e.g. 10"
+                      className="h-9 text-sm"
+                    />
+                    <p className="text-[10px] text-muted-foreground">Items below this quantity trigger a warning in Inventory.</p>
+                  </div>
                 </div>
-              </div>
-            </div>
+              </SectionCard>
+            )}
 
-            {/* Restore DB */}
-            <div className="flex flex-col sm:flex-row items-center justify-between p-4 bg-muted/30 border rounded-xl gap-4">
-              <div className="flex-1">
-                <h4 className="font-semibold text-sm flex items-center gap-2"><Upload size={16} className="text-emerald-500" /> Restore Database (.db)</h4>
-                <p className="text-xs text-muted-foreground mt-1">Import a raw SQLite database file (pos.db). Best way to restore full backups.</p>
-              </div>
-              <Button type="button" variant="outline" onClick={handleImportDb} className="w-full sm:w-auto shrink-0 shadow-sm gap-2">
-                <Database size={14} /> Select DB File
+            {/* ══ BACKUP ═════════════════════════════════════════════════════ */}
+            {activeTab === 'backup' && (
+              <>
+                {/* Auto JSON backup */}
+                <SectionCard title="Automated JSON Backup" desc="Auto-save to a local folder every 5 hours" icon={HardDrive}>
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Backup Folder</Label>
+                      <div className="flex gap-2">
+                        <Input value={settings.auto_export_path} readOnly placeholder="No folder selected..." className="h-9 bg-muted/30 text-xs font-mono flex-1" />
+                        <Button type="button" size="sm" variant="outline" onClick={handleSelectDirectory} className="h-9 shrink-0">Browse</Button>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="checkbox" checked={settings.auto_export_enabled} onChange={e => update('auto_export_enabled', e.target.checked)} className="w-4 h-4 accent-primary" />
+                        <span className="text-xs font-medium">Enable Auto-Backup</span>
+                      </label>
+                      <Button type="button" variant="ghost" size="sm" className="text-xs h-7 text-primary hover:bg-primary/10 gap-1" onClick={handleManualExport} disabled={!settings.auto_export_path}>
+                        <Save size={12} /> Export Now
+                      </Button>
+                    </div>
+                  </div>
+                </SectionCard>
+
+                {/* Google Drive */}
+                <SectionCard title="Google Drive Backup" desc="Secure cloud backup with automatic weekly sync" icon={Cloud} accent="linear-gradient(90deg,#3b82f6,#6366f1)">
+                  <div className="space-y-5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        {driveStatus.connected
+                          ? <><CheckCircle2 size={15} className="text-emerald-500" /><span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">Connected to Google Drive</span></>
+                          : <><CloudOff size={15} className="text-muted-foreground" /><span className="text-xs text-muted-foreground">Not linked</span></>}
+                      </div>
+                      <span className={cn('text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-full border', driveStatus.connected ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20' : 'bg-muted/50 text-muted-foreground border-border/60')}>
+                        {driveStatus.connected ? 'Active' : 'Offline'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      {[
+                        { icon: Globe, bg: 'bg-blue-500/10 text-blue-600 dark:text-blue-400', label: 'Mode', value: 'Cloud Sync' },
+                        { icon: ShieldCheck, bg: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400', label: 'Security', value: 'AES-256' },
+                        { icon: Activity, bg: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', label: 'Last Backup', value: formatLastBackup(driveStatus.lastBackup) },
+                      ].map(item => {
+                        const Icon = item.icon;
+                        return (
+                          <div key={item.label} className="p-3 rounded-xl bg-muted/30 border border-border/50 flex items-center gap-3">
+                            <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0', item.bg)}><Icon size={15} /></div>
+                            <div>
+                              <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/60">{item.label}</p>
+                              <p className="text-xs font-bold">{item.value}</p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      {!driveStatus.connected ? (
+                        <>
+                          <Button type="button" onClick={handleConnectDrive} disabled={isConnecting} className="gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20">
+                            {isConnecting ? <><Loader2 size={15} className="animate-spin" />Linking...</> : <><Globe size={15} />Link Google Drive</>}
+                          </Button>
+                          <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-500/8 border border-amber-500/20 text-amber-700 dark:text-amber-400 flex-1">
+                            <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                            <p className="text-[11px] font-medium leading-relaxed">Your data is stored only on this machine. Link Drive to protect against hardware failure.</p>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <Button type="button" onClick={handleDriveBackup} disabled={isBackingUp} className="gap-2 bg-blue-600 hover:bg-blue-700 text-white">
+                            {isBackingUp ? <><Loader2 size={15} className="animate-spin" />Syncing...</> : <><RefreshCw size={15} />Backup Now</>}
+                          </Button>
+                          <div className="flex items-center gap-2 text-[11px] text-blue-600 dark:text-blue-400 font-semibold bg-blue-500/8 border border-blue-500/15 px-3 py-2 rounded-lg">
+                            <CheckCircle2 size={13} /> Weekly automatic backups enabled.
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </SectionCard>
+
+                {/* Cloud backup list */}
+                {driveStatus.connected && (
+                  <SectionCard title="Available Cloud Backups" desc="Recent snapshots found in your Google Drive" icon={Download}>
+                    <div className="flex justify-end mb-3">
+                      <Button type="button" variant="outline" size="sm" onClick={handleFetchBackups} disabled={isFetchingBackups} className="h-8 text-xs gap-1.5">
+                        {isFetchingBackups ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Refresh List
+                      </Button>
+                    </div>
+                    {availableBackups.length > 0 ? (
+                      <div className="rounded-lg border border-border/60 overflow-hidden divide-y divide-border/50">
+                        {pagedBackups.map(b => (
+                          <div key={b.id} className="flex items-center justify-between p-3.5 hover:bg-muted/30 transition-colors">
+                            <div>
+                              <p className="text-xs font-semibold">{b.name}</p>
+                              <div className="flex items-center gap-3 text-[10px] text-muted-foreground mt-0.5">
+                                <span className="flex items-center gap-1"><Database size={9} />{formatSize(b.size)}</span>
+                                <span>{new Date(b.date).toLocaleString()}</span>
+                              </div>
+                            </div>
+                            <Button type="button" size="sm" variant="secondary" className="h-7 text-xs px-3" onClick={() => handleRestoreCloudBackup(b.id)}>
+                              Restore
+                            </Button>
+                          </div>
+                        ))}
+                        {availableBackups.length > BACKUPS_PAGE_SIZE && (
+                          <div className="p-3 flex items-center justify-between bg-muted/10">
+                            <p className="text-[10px] text-muted-foreground">
+                              {Math.min((currentBackupPage-1)*BACKUPS_PAGE_SIZE+1, availableBackups.length)}–{Math.min(currentBackupPage*BACKUPS_PAGE_SIZE, availableBackups.length)} of {availableBackups.length}
+                            </p>
+                            <div className="flex items-center gap-2">
+                              <Button type="button" variant="outline" size="sm" className="h-7 text-xs" disabled={currentBackupPage<=1} onClick={() => setBackupPage(p => Math.max(1,p-1))}>Prev</Button>
+                              <span className="text-[11px] font-medium text-muted-foreground">Page {currentBackupPage}/{totalBackupPages}</span>
+                              <Button type="button" variant="outline" size="sm" className="h-7 text-xs" disabled={currentBackupPage>=totalBackupPages} onClick={() => setBackupPage(p => Math.min(totalBackupPages,p+1))}>Next</Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="py-8 text-center">
+                        <Cloud size={22} className="mx-auto text-muted-foreground/20 mb-2" />
+                        <p className="text-xs text-muted-foreground">No backups listed. Click Refresh to scan Drive.</p>
+                      </div>
+                    )}
+                  </SectionCard>
+                )}
+
+                {/* Data management */}
+                <SectionCard title="Data Management" desc="Export, import, or restore your database" icon={Database} accent="linear-gradient(90deg,#ef4444,#f97316)">
+                  <div className="space-y-3">
+                    {[
+                      {
+                        icon: Download, color: 'text-primary', bg: 'bg-primary/8',
+                        title: 'Export Data', desc: 'Download a full backup in JSON or Excel format.',
+                        action: <div className="flex gap-2">
+                          <Button type="button" variant="outline" onClick={handleExportData} className="text-xs h-8">JSON</Button>
+                          <Button type="button" variant="outline" onClick={handleExportExcel} className="text-xs h-8">Excel</Button>
+                        </div>
+                      },
+                      {
+                        icon: Upload, color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-500/8',
+                        title: 'Restore Database (.db)', desc: 'Import a raw SQLite database file. Best for full restores.',
+                        action: <Button type="button" variant="outline" onClick={handleImportDb} className="text-xs h-8 gap-1.5"><Database size={12} />Select DB File</Button>
+                      },
+                      {
+                        icon: Upload, color: 'text-blue-600 dark:text-blue-400', bg: 'bg-blue-500/8',
+                        title: 'Restore JSON Backup', desc: 'Import a JSON payload to restore the database.',
+                        action: (
+                          <>
+                            <Button type="button" variant="outline" onClick={() => document.getElementById('import-file')?.click()} className="text-xs h-8 gap-1.5"><Upload size={12} />Import File</Button>
+                            <input id="import-file" type="file" accept=".json" onChange={handleImportData} className="hidden" />
+                          </>
+                        )
+                      },
+                    ].map((row, i) => {
+                      const Icon = row.icon;
+                      return (
+                        <div key={i} className="flex items-center justify-between gap-4 p-4 rounded-xl border border-border/50 bg-card/50">
+                          <div className="flex items-start gap-3 flex-1 min-w-0">
+                            <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5', row.bg)}>
+                              <Icon size={15} className={row.color} />
+                            </div>
+                            <div className="min-w-0">
+                              <h4 className="text-xs font-bold">{row.title}</h4>
+                              <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">{row.desc}</p>
+                            </div>
+                          </div>
+                          <div className="shrink-0">{row.action}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </SectionCard>
+              </>
+            )}
+
+            {/* ══ LICENSE ════════════════════════════════════════════════════ */}
+            {activeTab === 'license' && (
+              <>
+                <SectionCard title="License Information" desc="License is optional for offline POS use" icon={KeyRound}>
+                  <div className="space-y-5">
+                    <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_auto] gap-3">
+                      <div className="space-y-1.5">
+                        <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Mode</Label>
+                        <Select value={settings.license_mode} onValueChange={(v: 'offline'|'online') => update('license_mode', v)}>
+                          <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="offline">Offline</SelectItem>
+                            <SelectItem value="online">Online License</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">License Key</Label>
+                        <div className="relative">
+                          <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/60" size={14} />
+                          <Input className="pl-8 h-9 text-sm font-mono" value={settings.activation_key} onChange={e => update('activation_key', e.target.value)} placeholder="Optional" />
+                        </div>
+                      </div>
+                      <div className="flex items-end">
+                        <Button type="button" variant="outline" onClick={handleValidateLicense} disabled={validating} className="h-9 text-xs whitespace-nowrap gap-1.5">
+                          {validating ? <><Loader2 size={12} className="animate-spin" />Checking...</> : <><CheckCircle2 size={12} />Validate</>}
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      <span className={cn('text-[10px] font-black px-2.5 py-1 rounded-full border', settings.license_mode === 'offline' ? 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20')}>
+                        {settings.license_mode === 'offline' ? 'Offline-first' : 'Online license'}
+                      </span>
+                      <span className={cn('text-[10px] font-black px-2.5 py-1 rounded-full border', settings.approval_status === 'blocked' ? 'bg-red-500/10 text-red-600 border-red-500/20' : settings.approval_status === 'pending' ? 'bg-amber-500/10 text-amber-600 border-amber-500/20' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20')}>
+                        {settings.approval_status}
+                      </span>
+                      <span className="text-[10px] font-black px-2.5 py-1 rounded-full border bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 flex items-center gap-1">
+                        <CheckCircle2 size={10} /> Local SQLite active
+                      </span>
+                    </div>
+                  </div>
+                </SectionCard>
+
+                {/* Cloud / API */}
+                <SectionCard title="Cloud / API Configuration" desc="Optional sync endpoint — SQLite remains primary" icon={cloudReady ? Cloud : CloudOff}>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <Field icon={<Cloud />} label="API Base URL" value={settings.cloud_backend_url} onChange={v => update('cloud_backend_url', v)} placeholder="https://api.example.com" />
+                      <Field icon={<ShieldCheck />} label="Auth Token" value={settings.cloud_backend_token} onChange={v => update('cloud_backend_token', v)} placeholder="Bearer token" />
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <StatusPill label="Cloud" value={cloudReady ? 'Configured' : 'Offline'} tone={cloudReady ? 'success' : 'neutral'} />
+                      <StatusPill label="Pending" value={`${syncStatus.pending}`} tone={syncStatus.pending > 0 ? 'warning' : 'success'} />
+                      <StatusPill label="Failed" value={`${syncStatus.failed}`} tone={syncStatus.failed > 0 ? 'danger' : 'success'} />
+                      <StatusPill label="Last Sync" value={syncStatus.lastSync ? new Date(syncStatus.lastSync).toLocaleString('en-PK',{hour:'2-digit',minute:'2-digit',hour12:true}) : 'Never'} tone="neutral" />
+                    </div>
+                  </div>
+                </SectionCard>
+              </>
+            )}
+
+            {/* ── Save footer ─────────────────────────────────────────────── */}
+            <div className="flex items-center justify-end pt-4 border-t border-border/50">
+              <Button type="submit" disabled={isSaving} className="gap-2 px-8 shadow-md shadow-primary/15">
+                {isSaving ? <><RefreshCw size={15} className="animate-spin" />Saving...</> : <><Save size={15} />Save Settings</>}
               </Button>
             </div>
-
-            {/* Restore JSON */}
-            <div className="flex flex-col sm:flex-row items-center justify-between p-4 bg-muted/30 border rounded-xl gap-4">
-              <div className="flex-1">
-                <h4 className="font-semibold text-sm flex items-center gap-2"><Upload size={16} className="text-blue-500" /> Restore JSON Backup</h4>
-                <p className="text-xs text-muted-foreground mt-1">Import a JSON payload to completely restore the database.</p>
-              </div>
-              <div className="w-full sm:w-auto shrink-0">
-                <Button type="button" variant="outline" onClick={() => document.getElementById('import-file')?.click()} className="w-full shadow-sm gap-2">
-                  <Upload size={14} /> Import File
-                </Button>
-                <input id="import-file" type="file" accept=".json" onChange={handleImportData} className="hidden" />
-              </div>
-            </div>
-
-            {/* Seed (commented out in original, kept hidden) */}
-            {/* <div className="flex flex-col sm:flex-row items-center justify-between p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl gap-4">
-              <div className="flex-1">
-                <h4 className="font-semibold text-sm text-blue-600 flex items-center gap-2"><Activity size={16} /> Fill with Demo Data</h4>
-                <p className="text-xs text-muted-foreground mt-1">Populate the app with 100 customers, 200 products, 150 vendors, and 500 sales for testing.</p>
-              </div>
-              <Button type="button" variant="outline" onClick={handleSeedDatabase} disabled={isSaving} className="w-full sm:w-auto shrink-0 shadow-sm gap-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50">
-                <Database size={14} /> Seed 1,000+ Records
-              </Button>
-            </div> */}
-
-            {/* Stress test (commented out in original, kept hidden) */}
-            {/* <div className="flex flex-col sm:flex-row items-center justify-between p-4 bg-muted/30 border border-purple-500/20 rounded-xl gap-4">
-              <div className="flex-1">
-                <h4 className="font-semibold text-sm flex items-center gap-2 text-purple-600"><Zap size={16} className="text-purple-500" /> System Stress Test</h4>
-                <p className="text-xs text-muted-foreground mt-1">Simulate 1,000 extreme concurrent checkouts to benchmark engine payload throughput.</p>
-              </div>
-              <Button type="button" variant="outline" onClick={handleStressTest} disabled={isSaving} className="w-full sm:w-auto shrink-0 shadow-sm gap-2 text-purple-600 hover:text-purple-700 hover:bg-purple-50">
-                <Zap size={14} /> Run Benchmark
-              </Button>
-            </div> */}
-
-            {/* Delete all (commented out in original, kept hidden) */}
-            {/* <div className="flex flex-col sm:flex-row items-center justify-between p-4 bg-destructive/5 border border-destructive/20 rounded-xl gap-4">
-              <div className="flex-1">
-                <h4 className="font-semibold text-sm text-destructive flex items-center gap-2"><Trash2 size={16} /> Wipe System</h4>
-                <p className="text-xs text-destructive/80 mt-1">Permanently delete all sales, products, and customers.</p>
-              </div>
-              <Button type="button" variant="destructive" onClick={handleDeleteAllData} className="w-full sm:w-auto shrink-0 shadow-md gap-2 font-bold">
-                <Trash2 size={15} /> Terminate Data
-              </Button>
-            </div> */}
-          </CardContent>
-        </Card>
-
-        {/* ── Save Footer ───────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-end pt-6 border-t mt-6">
-          <Button type="submit" disabled={isSaving} className="gap-2 px-8 shadow-lg shadow-primary/20">
-            {isSaving ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
-            {isSaving ? 'Saving Changes...' : 'Save All Settings'}
-          </Button>
+          </form>
         </div>
-      </form>
+      </div>
 
-      {/* ── Restore Progress Overlay ───────────────────────────────────────── */}
+      {/* Restore progress overlay */}
       {restoreProgress && (
         <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-6">
-          <Card className="w-full max-w-md shadow-2xl border-primary/20">
-            <CardHeader className="text-center">
-              <CardTitle className="text-lg font-bold flex items-center justify-center gap-3">
-                <Loader2 className="animate-spin text-primary" size={24} />
+          <div className="w-full max-w-sm bg-card border border-border/60 rounded-2xl shadow-2xl p-8">
+            <div className="text-center mb-6">
+              <Loader2 className="animate-spin text-primary mx-auto mb-3" size={28} />
+              <h3 className="font-bold text-sm">
                 {restoreProgress.status === 'downloading' ? 'Downloading from Cloud...' : 'Restoring Database...'}
-              </CardTitle>
-              <CardDescription>Please do not close the application during this process.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6 pb-8">
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                  <span>{restoreProgress.status}</span>
-                  <span>{restoreProgress.progress}%</span>
-                </div>
-                <div className="h-3 w-full bg-muted rounded-full overflow-hidden border">
-                  <div className="h-full bg-primary transition-all duration-300 shadow-[0_0_10px_rgba(59,130,246,0.5)]" style={{ width: `${restoreProgress.progress}%` }} />
-                </div>
+              </h3>
+              <p className="text-[11px] text-muted-foreground mt-1">Do not close the application.</p>
+            </div>
+            <div className="space-y-2">
+              <div className="flex justify-between text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                <span>{restoreProgress.status}</span>
+                <span>{restoreProgress.progress}%</span>
               </div>
-              <p className="text-[10px] text-center text-muted-foreground font-medium animate-pulse">
-                Finalizing local file operations... This may take a moment.
-              </p>
-            </CardContent>
-          </Card>
+              <div className="h-2.5 w-full bg-muted rounded-full overflow-hidden">
+                <div className="h-full bg-primary transition-all duration-300 shadow-[0_0_8px_rgba(59,130,246,0.4)]" style={{ width: `${restoreProgress.progress}%` }} />
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

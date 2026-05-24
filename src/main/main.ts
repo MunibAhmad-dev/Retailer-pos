@@ -2168,9 +2168,10 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
       totalRetailValue: (db.prepare(`
         SELECT COALESCE(SUM(stock * price), 0) as val FROM products
       `).get() as any).val,
-      lowStockProducts: db.prepare(`
-        SELECT id, name, stock, price FROM products WHERE stock <= 10 ORDER BY stock ASC LIMIT 8
-      `).all(),
+      lowStockProducts: (() => {
+        const threshold = (db!.prepare('SELECT COALESCE(low_stock_threshold,10) as t FROM settings WHERE id=1').get() as any)?.t ?? 10;
+        return db!.prepare(`SELECT id, name, stock, price, barcode, category FROM products WHERE stock <= ? ORDER BY stock ASC LIMIT 20`).all(threshold);
+      })(),
       productSalesWindows,
       monthlyItemSales: monthlyMatrixRows,
       bestMonthByProduct: Array.from(bestMonthByProduct.values()),

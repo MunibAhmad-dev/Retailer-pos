@@ -1,104 +1,166 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import {
   DollarSign, ShoppingBag, TrendingUp, TrendingDown, Package, Activity, RefreshCw,
-  ShieldCheck, CreditCard, Boxes, AlertTriangle, Wallet, Users, ArrowRight,
-  Info, Filter, Truck, Store, BarChart3, FileText, Receipt, HandCoins, CheckCircle2, Search
+  ShieldCheck, Boxes, AlertTriangle, Wallet, Users, ArrowRight,
+  Truck, Store, BarChart3, HandCoins, CheckCircle2, Search, Zap, ChevronRight,
+  ArrowUpRight, ArrowDownRight, MapPin, PhoneCall, BadgeAlert, Lock
 } from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { Badge } from '../components/ui/badge';
 import { cn, formatInvoiceId } from '../lib/utils';
 import { useNotifications } from '../components/NotificationProvider';
 import { subService } from '../services/subscription';
 import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Legend
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, PieChart, Pie, Cell
 } from 'recharts';
-interface DashboardProps { onLock: () => void; }
 
+interface DashboardProps { onLock: () => void; onLockSystem?: () => void; }
+
+/* ── Formatting helpers ── */
 const fmt = (n: number) => 'PKR ' + Math.round(n ?? 0).toLocaleString('en-PK');
 
-export default function Dashboard({ onLock }: DashboardProps) {
-  // Date Filtering State
-  // Date Filtering State
-  const [period, setPeriod] = useState<string>('week');
-  const [customStart, setCustomStart] = useState<string>('');
-  const [customEnd, setCustomEnd] = useState<string>('');
+const getGreeting = () => {
+  const h = new Date().getHours();
+  if (h < 12) return { text: 'Good morning', emoji: '☀️' };
+  if (h < 17) return { text: 'Good afternoon', emoji: '🌤️' };
+  return { text: 'Good evening', emoji: '🌙' };
+};
+
+const PIE_COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444'];
+
+const fadeUp = {
+  hidden: { opacity: 0, y: 16 },
+  visible: (i = 0) => ({
+    opacity: 1, y: 0,
+    transition: { duration: 0.38, delay: i * 0.05, ease: [0.23, 1, 0.32, 1] }
+  }),
+};
+
+/* ── Mini sparkline inside KPI cards ── */
+const Sparkline = ({ data, color, gradId }: { data: number[]; color: string; gradId: string }) => {
+  if (data.length < 2) return <div className="h-11" />;
+  return (
+    <ResponsiveContainer width="100%" height={44}>
+      <AreaChart data={data.map((v, i) => ({ i, v }))} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.3} />
+            <stop offset="100%" stopColor={color} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <Area type="monotone" dataKey="v" stroke={color} strokeWidth={1.8}
+          fill={`url(#${gradId})`} dot={false} isAnimationActive={false} />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+};
+
+/* ── Revenue chart tooltip ── */
+const RevTooltip = ({ active, payload, label }: any) => {
+  if (!active || !payload?.length) return null;
+  const d = new Date(label);
+  return (
+    <div className="bg-card/95 backdrop-blur-xl border border-border/50 rounded-2xl px-3 py-2.5 shadow-2xl">
+      <p className="text-[11px] text-muted-foreground mb-0.5">
+        {!isNaN(d.getTime()) ? d.toLocaleDateString('en-PK', { month: 'short', day: 'numeric', year: 'numeric' }) : label}
+      </p>
+      <p className="text-sm font-bold text-indigo-500">{fmt(payload[0].value)}</p>
+    </div>
+  );
+};
+
+/* ── Simple hover tooltip wrapper ── */
+const HoverTip = ({ text, children }: { text: string; children: React.ReactNode }) => (
+  <div className="group/tip relative">
+    {children}
+    <div className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 z-50
+      opacity-0 group-hover/tip:opacity-100 transition-all duration-150
+      translate-y-1 group-hover/tip:translate-y-0">
+      <div className="bg-foreground text-background text-[11px] font-semibold px-2.5 py-1.5
+        rounded-xl shadow-xl whitespace-nowrap">
+        {text}
+        <div className="absolute top-full left-1/2 -translate-x-1/2 w-2 h-1 overflow-hidden">
+          <div className="w-2 h-2 bg-foreground rotate-45 -translate-y-1/2" />
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
+  const [period, setPeriod] = useState('week');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
   const [itemQuery, setItemQuery] = useState('');
   const [itemWindow, setItemWindow] = useState<'week' | 'month'>('month');
   const [itemLimit, setItemLimit] = useState(10);
+  const [stats, setStats] = useState<any | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [timeLeft, setTimeLeft] = useState('');
+  const [now, setNow] = useState(new Date());
+  const [ownerName, setOwnerName] = useState('');
+  const { addNotification } = useNotifications();
 
-  const loadStats = async (isManualRefresh = false, overrides?: { s?: string; e?: string; p?: string }) => {
+  /* Fetch owner name from settings once */
+  useEffect(() => {
+    window.api.getSettings?.().then((res: any) => {
+      if (res?.success && res.data) {
+        const full: string = res.data.owner_full_name || res.data.store_name || '';
+        setOwnerName(full.split(' ')[0] || 'there');
+      }
+    }).catch(() => {});
+  }, []);
+
+  const loadStats = async (isManual = false, overrides?: { s?: string; e?: string; p?: string }) => {
     setLoading(true);
     try {
-      const activePeriod = overrides?.p ?? period;
-      let sDate = overrides?.s ?? customStart;
-      let eDate = overrides?.e ?? customEnd;
-
-      if (activePeriod !== 'custom') {
-        const now = new Date();
-        eDate = new Date().toISOString();
-        if (activePeriod === 'today') sDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-        else if (activePeriod === 'week') sDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6).toISOString();
-        else if (activePeriod === 'month') sDate = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-        else if (activePeriod === 'year') sDate = new Date(now.getFullYear(), 0, 1).toISOString();
+      const p = overrides?.p ?? period;
+      let s = overrides?.s ?? customStart;
+      let e = overrides?.e ?? customEnd;
+      if (p !== 'custom') {
+        const d = new Date();
+        e = d.toISOString();
+        if (p === 'today') s = new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString();
+        else if (p === 'week') s = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 6).toISOString();
+        else if (p === 'month') s = new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+        else if (p === 'year') s = new Date(d.getFullYear(), 0, 1).toISOString();
       }
-
-      const payload = sDate ? { startDate: sDate, endDate: eDate || new Date().toISOString() } : undefined;
+      const payload = s ? { startDate: s, endDate: e || new Date().toISOString() } : undefined;
       const res = await window.api.getDashboardStats(payload);
       if (res?.success && res.data) {
         setStats(res.data);
-        if (isManualRefresh) addNotification('Dashboard refreshed', 'Latest metrics loaded.', 'success');
-      } else if (isManualRefresh) {
-        addNotification('Refresh Failed', res?.error || 'Could not fetch dashboard analytics.', 'error');
+        if (isManual) addNotification('Dashboard refreshed', 'Latest metrics loaded.', 'success');
+      } else if (isManual) {
+        addNotification('Refresh Failed', res?.error || 'Could not fetch analytics.', 'error');
       }
     } catch (err) {
       console.error(err);
-      addNotification('Refresh Failed', 'Could not fetch dashboard analytics.', 'error');
+      if (isManual) addNotification('Refresh Failed', 'Could not fetch analytics.', 'error');
     } finally {
       setLoading(false);
     }
   };
-  const [stats, setStats] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [timeLeft, setTimeLeft] = useState<string>('');
-  const { addNotification } = useNotifications();
 
   useEffect(() => {
     loadStats();
-    const interval = setInterval(() => loadStats(false), 30000);
-
-    const timer = setInterval(() => {
+    const refresh = setInterval(() => loadStats(), 30_000);
+    const clock = setInterval(() => setNow(new Date()), 1_000);
+    const license = setInterval(() => {
       const sub = subService.getState();
       if (sub.expiryDate) {
         const diff = new Date(sub.expiryDate).getTime() - Date.now();
         if (diff > 0) {
-          const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-          const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-          const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-          const secs = Math.floor((diff % (1000 * 60)) / 1000);
-          setTimeLeft(`${days}d ${hours}h ${mins}m ${secs}s`);
-        } else {
-          setTimeLeft('Expired');
-        }
+          const d = Math.floor(diff / 86_400_000);
+          const h = Math.floor((diff % 86_400_000) / 3_600_000);
+          const m = Math.floor((diff % 3_600_000) / 60_000);
+          const sec = Math.floor((diff % 60_000) / 1_000);
+          setTimeLeft(`${d}d ${h}h ${m}m ${sec}s`);
+        } else setTimeLeft('Expired');
       }
-    }, 1000);
-
-    return () => {
-      clearInterval(interval);
-      clearInterval(timer);
-    };
+    }, 1_000);
+    return () => { clearInterval(refresh); clearInterval(clock); clearInterval(license); };
   }, []);
 
   const handleCustomFilter = () => {
@@ -106,759 +168,1007 @@ export default function Dashboard({ onLock }: DashboardProps) {
     loadStats(true, { p: 'custom', s: new Date(customStart).toISOString(), e: customEnd ? new Date(customEnd).toISOString() : '' });
   };
 
-  const salesTrendData = useMemo(() => {
-    const raw = Array.isArray(stats?.salesTrend) ? stats.salesTrend : [];
-    return raw
-      .filter((r: any) => r && r.date)
-      .map((r: any) => ({
-        ...r,
-        revenue: Number(r.revenue) || 0,
-      }));
-  }, [stats?.salesTrend]);
+  /* ── derived data ── */
+  const salesTrend = useMemo(() =>
+    (Array.isArray(stats?.salesTrend) ? stats.salesTrend : [])
+      .filter((r: any) => r?.date)
+      .map((r: any) => ({ ...r, revenue: Number(r.revenue) || 0 })),
+    [stats?.salesTrend]);
 
-  const paymentStatsData = useMemo(() => {
-    const raw = Array.isArray(stats?.paymentStats) ? stats.paymentStats : [];
-    return raw
-      .map((r: any) => ({
-        ...r,
-        revenue: Number(r.revenue) || 0,
-      }))
-      .filter((r: any) => r.revenue > 0);
-  }, [stats?.paymentStats]);
+  const sparkValues = useMemo(() => {
+    const arr = salesTrend.map((r: any) => r.revenue);
+    return arr.length > 1 ? arr.slice(-Math.min(arr.length, 10)) : [];
+  }, [salesTrend]);
+
+  const paymentData = useMemo(() =>
+    (Array.isArray(stats?.paymentStats) ? stats.paymentStats : [])
+      .map((r: any) => ({ ...r, revenue: Number(r.revenue) || 0 }))
+      .filter((r: any) => r.revenue > 0),
+    [stats?.paymentStats]);
 
   const allItemRows = useMemo(() => {
     const rows = Array.isArray(stats?.productSalesWindows) ? stats.productSalesWindows : [];
     const q = itemQuery.trim().toLowerCase();
     return q ? rows.filter((r: any) => String(r.name || '').toLowerCase().includes(q)) : rows;
   }, [stats?.productSalesWindows, itemQuery]);
-  const itemRows = allItemRows.slice(0, itemLimit);
 
-  const deadRows = useMemo(() => {
-    const rows = Array.isArray(stats?.deadProducts) ? stats.deadProducts : [];
-    return rows.slice(0, 30);
-  }, [stats?.deadProducts]);
+  const deadRows = useMemo(() =>
+    (Array.isArray(stats?.deadProducts) ? stats.deadProducts : []).slice(0, 30),
+    [stats?.deadProducts]);
 
   const bestMonthMap = useMemo(() => {
-    const arr = Array.isArray(stats?.bestMonthByProduct) ? stats.bestMonthByProduct : [];
     const m = new Map<string, any>();
-    for (const r of arr) m.set(String(r.product_name || ''), r);
+    for (const r of (Array.isArray(stats?.bestMonthByProduct) ? stats.bestMonthByProduct : []))
+      m.set(String(r.product_name || ''), r);
     return m;
   }, [stats?.bestMonthByProduct]);
 
-  // --- Build stat cards based on period ---
-  let statCards: any[] = [];
-  if (stats) {
-    statCards = [
-      { title: 'Period Revenue', value: fmt(stats.filteredRevenue || 0), sub: 'Total sales cash-in', icon: DollarSign, color: 'text-primary', bg: 'bg-primary/10' },
-      { title: 'Actual Revenue', value: fmt(stats.filteredProfit || 0), sub: 'Sales - Purchase Cost', icon: TrendingUp, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
-      { title: 'Transactions', value: (stats.filteredCount || 0).toLocaleString(), sub: 'Successful sales', icon: Activity, color: 'text-blue-500', bg: 'bg-blue-500/10' },
-      { title: "Today's Revenue", value: fmt(stats.totalSalesToday), sub: 'Today only', icon: DollarSign, color: 'text-indigo-500', bg: 'bg-indigo-500/10' },
-    ];
-  }
+  /* ── stock summary ── */
+  const lowStock: any[] = stats?.lowStockProducts || [];
+  const outOfStockCount = lowStock.filter((p: any) => p.stock === 0).length;
+  const lowStockCount = lowStock.filter((p: any) => p.stock > 0).length;
+  /* backend returns totalProducts (all active products) */
+  const totalProductCount: number = stats?.totalProducts || 0;
+  const inStockCount = Math.max(0, totalProductCount - outOfStockCount - lowStockCount);
+
+  const stockSummaryData = useMemo(() => {
+    return [
+      { name: 'In Stock', value: inStockCount, color: '#10b981' },
+      { name: 'Low Stock', value: lowStockCount, color: '#f59e0b' },
+      { name: 'Out of Stock', value: outOfStockCount, color: '#ef4444' },
+    ].filter(d => d.value > 0);
+  }, [inStockCount, lowStockCount, outOfStockCount]);
+
+  const totalStockValue: number = stats?.totalStockValue || 0;
+  const totalRetailValue: number = stats?.totalRetailValue || 0;
+  const totalLoans: number = stats?.totalOutstandingLoans || 0;
+  const debtorCount: number = stats?.customersInDebt || 0;
+  const totalStockItems = totalProductCount || (inStockCount + lowStockCount + outOfStockCount);
+
+  const greeting = getGreeting();
+  const displayName = ownerName || 'there';
+
+  const PERIODS = [
+    { id: 'today', label: 'Today' },
+    { id: 'week', label: 'This Week' },
+    { id: 'month', label: 'This Month' },
+    { id: 'year', label: 'This Year' },
+    { id: 'custom', label: 'Custom' },
+  ];
 
   const quickActions = [
-    { title: 'New Sale', emoji: '🛒', desc: 'Sell to customers', path: '/sales', icon: ShoppingBag, accent: '#3b82f6', bg: 'hover:bg-blue-500/8 border-blue-500/20 hover:border-blue-500/40' },
-    { title: 'Products', emoji: '📦', desc: 'Manage your items', path: '/products', icon: Package, accent: '#8b5cf6', bg: 'hover:bg-violet-500/8 border-violet-500/20 hover:border-violet-500/40' },
-    { title: 'Purchase', emoji: '🚚', desc: 'Restock from vendors', path: '/purchases', icon: Truck, accent: '#f97316', bg: 'hover:bg-orange-500/8 border-orange-500/20 hover:border-orange-500/40' },
-    { title: 'Inventory', emoji: '🗄️', desc: 'Track stock levels', path: '/inventory', icon: Boxes, accent: '#06b6d4', bg: 'hover:bg-cyan-500/8 border-cyan-500/20 hover:border-cyan-500/40' },
-    { title: 'Customers', emoji: '👥', desc: 'Qaraz / credit list', path: '/customers', icon: Users, accent: '#10b981', bg: 'hover:bg-emerald-500/8 border-emerald-500/20 hover:border-emerald-500/40' },
-    { title: 'Vendors', emoji: '🏪', desc: 'Suppliers & payments', path: '/vendors', icon: Store, accent: '#f59e0b', bg: 'hover:bg-amber-500/8 border-amber-500/20 hover:border-amber-500/40' },
-    { title: 'Accounts', emoji: '💰', desc: 'AP / AR ledgers', path: '/loans', icon: HandCoins, accent: '#ef4444', bg: 'hover:bg-red-500/8 border-red-500/20 hover:border-red-500/40' },
-    { title: 'Reports', emoji: '📊', desc: 'Sales analytics', path: '/reports', icon: BarChart3, accent: '#6366f1', bg: 'hover:bg-indigo-500/8 border-indigo-500/20 hover:border-indigo-500/40' },
+    { title: 'New Sale', path: '/sales', icon: ShoppingBag, from: '#3b82f6', to: '#2563eb' },
+    { title: 'Products', path: '/products', icon: Package, from: '#8b5cf6', to: '#7c3aed' },
+    { title: 'Purchase', path: '/purchases', icon: Truck, from: '#f97316', to: '#ea580c' },
+    { title: 'Inventory', path: '/inventory', icon: Boxes, from: '#06b6d4', to: '#0891b2' },
+    { title: 'Customers', path: '/customers', icon: Users, from: '#10b981', to: '#059669' },
+    { title: 'Vendors', path: '/vendors', icon: Store, from: '#f59e0b', to: '#d97706' },
+    { title: 'Accounts', path: '/loans', icon: HandCoins, from: '#ef4444', to: '#dc2626' },
+    { title: 'Reports', path: '/reports', icon: BarChart3, from: '#6366f1', to: '#4f46e5' },
   ];
 
   if (loading && !stats) {
     return (
-      <div className="flex h-full items-center justify-center min-h-[400px]">
-        <div className="flex flex-col items-center gap-4 text-muted-foreground">
-          <RefreshCw size={40} className="animate-spin text-primary" />
-          <p className="text-sm font-medium animate-pulse">Loading Analytics...</p>
+      <div className="flex h-full min-h-[400px] items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <RefreshCw size={26} className="animate-spin text-primary" />
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-semibold">Loading Analytics</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Fetching your business data…</p>
+          </div>
         </div>
       </div>
     );
   }
 
-  const lowStockList: any[] = stats?.lowStockProducts || [];
-  const totalStockValue: number = stats?.totalStockValue || 0;
-  const totalRetailValue: number = stats?.totalRetailValue || 0;
-  const totalLoans: number = stats?.totalOutstandingLoans || 0;
-  const debtorCount: number = stats?.customersInDebt || 0;
+  const sub = subService.getState();
+
+  const periodLabel = period === 'today' ? 'day' : period === 'week' ? '7 days' : period === 'month' ? 'month' : 'year';
 
   return (
-    <div className="flex flex-col gap-6 pb-10">
-      {(() => {
-        const sub = subService.getState();
-        if (sub.plan !== 'lifetime' && sub.daysRemaining <= 5) {
-          return (
-            <div className="bg-destructive border border-destructive rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4 animate-in slide-in-from-top duration-500 shadow-xl shadow-destructive/20 text-white">
-              <div className="flex items-center gap-3">
-                <div className="bg-white/20 p-2.5 rounded-lg text-white shadow-md backdrop-blur-md animate-pulse">
-                  <AlertTriangle size={22} />
-                </div>
-                <div>
-                  <h4 className="font-black text-white leading-none uppercase tracking-tight">License Expiring Soon</h4>
-                  <p className="text-white/90 text-sm mt-1.5 flex flex-wrap items-center gap-x-2 font-medium">
-                    Ends in: <span className="font-black underline underline-offset-4 decoration-2">{timeLeft || `${sub.daysRemaining} days`}</span>. Renew now to avoid lock-out!
-                  </p>
-                </div>
-              </div>
-              <Link to="/subscription" className="w-full md:w-auto">
-                <Button size="sm" className="w-full bg-white text-destructive hover:bg-white/90 shadow-lg font-black px-6 border-none h-10">
-                  RENEW NOW
-                </Button>
-              </Link>
-            </div>
-          );
-        }
-        return null;
-      })()}
+    <div className="flex flex-col gap-5 pb-12">
 
-      {/* Header + Filters */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight">Overview</h2>
-          <p className="text-muted-foreground text-sm mt-1">
-            {new Date().toLocaleDateString('en-PK', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-          </p>
-        </div>
-        <div className="flex flex-col sm:flex-row items-center gap-1 bg-muted/50 p-1 rounded-xl border border-border/40">
-          {[
-            { id: 'today', label: 'Today' },
-            { id: 'week', label: 'Weekly' },
-            { id: 'month', label: 'Monthly' },
-            { id: 'year', label: 'Yearly' },
-            { id: 'custom', label: 'Custom' }
-          ].map((p) => (
-            <Button
-              key={p.id}
-              variant={period === p.id ? "secondary" : "ghost"}
-              size="sm"
-              className={cn(
-                "h-8 px-3 text-xs font-bold transition-all duration-200 rounded-lg",
-                period === p.id ? "bg-background shadow-sm text-primary" : "text-muted-foreground hover:text-foreground"
-              )}
-              onClick={() => {
-                setPeriod(p.id);
-                if (p.id !== 'custom') loadStats(true, { p: p.id });
-              }}
-            >
-              {p.label}
+      {/* ── License Expiry Banner ── */}
+      {sub.plan !== 'lifetime' && sub.daysRemaining <= 5 && (
+        <motion.div custom={0} variants={fadeUp} initial="hidden" animate="visible">
+          <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-red-600 to-rose-500 p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xl shadow-red-500/20">
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.12),transparent_60%)]" />
+            <div className="flex items-center gap-3 relative z-10">
+              <div className="bg-white/20 p-2.5 rounded-xl animate-pulse">
+                <AlertTriangle size={18} className="text-white" />
+              </div>
+              <div>
+                <p className="font-bold text-white text-sm">License Expiring Soon</p>
+                <p className="text-white/80 text-xs mt-0.5">Ends in <span className="font-bold text-white">{timeLeft || `${sub.daysRemaining}d`}</span> — renew to avoid lockout</p>
+              </div>
+            </div>
+            <Link to="/subscription" className="relative z-10 shrink-0">
+              <Button size="sm" className="bg-white text-red-600 hover:bg-white/90 font-bold h-9 px-5 rounded-xl shadow-lg">Renew Now →</Button>
+            </Link>
+          </div>
+        </motion.div>
+      )}
+
+      {/* ── Header ── */}
+      <motion.div custom={1} variants={fadeUp} initial="hidden" animate="visible">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">
+              {greeting.text}, <span className="text-primary">{displayName}</span> {greeting.emoji}
+            </h1>
+            <p className="text-sm text-muted-foreground mt-0.5">Here's what's happening with your store today.</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-0.5 bg-muted/60 p-1 rounded-xl border border-border/40">
+              {PERIODS.map((p) => (
+                <button key={p.id}
+                  onClick={() => { setPeriod(p.id); if (p.id !== 'custom') loadStats(true, { p: p.id }); }}
+                  className={cn('h-7 px-3 text-xs font-semibold rounded-lg transition-all duration-200',
+                    period === p.id ? 'bg-background text-primary shadow-sm border border-border/30' : 'text-muted-foreground hover:text-foreground'
+                  )}
+                >{p.label}</button>
+              ))}
+            </div>
+            {/* Lock Dashboard — covers content area, sidebar stays usable */}
+            <Button variant="outline" size="sm" onClick={onLock}
+              className="h-9 gap-2 rounded-xl border-border/50 text-muted-foreground hover:border-blue-500/40 hover:text-blue-600 dark:hover:text-blue-400 transition-colors">
+              <ShieldCheck size={14} /><span className="hidden sm:inline text-xs">Lock</span>
             </Button>
-          ))}
+            {/* Lock System — covers everything including sidebar */}
+            {onLockSystem && (
+              <Button variant="outline" size="sm" onClick={onLockSystem}
+                className="h-9 gap-2 rounded-xl border-red-500/25 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20">
+                <Lock size={14} /><span className="hidden sm:inline text-xs">Lock System</span>
+              </Button>
+            )}
+            <button onClick={() => loadStats(true)}
+              className="h-9 w-9 rounded-xl bg-primary flex items-center justify-center shadow-md shadow-primary/25 hover:bg-primary/90 active:scale-95 transition-all"
+              title="Refresh">
+              <RefreshCw className={cn('h-4 w-4 text-primary-foreground', loading && 'animate-spin')} />
+            </button>
+          </div>
         </div>
         {period === 'custom' && (
-          <div className="flex items-center gap-2 animate-in fade-in">
-            <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)}
-              className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm" />
-            <span className="text-muted-foreground text-xs">to</span>
-            <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)}
-              className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm" />
-            <Button size="sm" onClick={handleCustomFilter} className="h-9">Filter</Button>
-          </div>
+          <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2 bg-muted/50 rounded-xl p-2 border border-border/40">
+              <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)}
+                className="h-8 rounded-lg border border-input bg-background px-3 text-xs" />
+              <span className="text-muted-foreground text-xs">→</span>
+              <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)}
+                className="h-8 rounded-lg border border-input bg-background px-3 text-xs" />
+              <Button size="sm" onClick={handleCustomFilter} className="h-8 px-4 rounded-lg text-xs">Apply</Button>
+            </div>
+          </motion.div>
         )}
-        <div className="h-6 w-px bg-border hidden sm:block mx-1" />
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={onLock} className="h-9 gap-2">
-            <ShieldCheck size={16} /><span className="hidden sm:inline">Lock</span>
-          </Button>
-          <Button
-            variant="default"
-            size="sm"
-            onClick={() => loadStats(true)}
-            className="h-9 w-9 p-0 shadow-md transition-transform active:scale-95"
-            title="Refresh Stats"
-          >
-            <RefreshCw className={cn("h-4 w-4 text-white", loading && "animate-spin")} />
-          </Button>
-        </div>
-      </div>
+      </motion.div>
 
       {stats && (
         <>
-          {/* Primary Stat Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-            {statCards.map((card, i) => (
-              <Card key={i} className="hover:-translate-y-1 hover:shadow-lg transition-all duration-300 border-border/50 bg-card/50 backdrop-blur-sm">
-                <CardHeader className="flex flex-row items-center justify-between pb-2">
-                  <CardTitle className="text-[10px] font-black text-muted-foreground uppercase tracking-widest">{card.title}</CardTitle>
-                  <div className={cn('p-2 rounded-lg', card.bg)}>
-                    <card.icon className={cn('h-4 w-4', card.color)} />
+          {/* ── KPI Row 1 — with sparklines + hover tooltip ── */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {[
+              { title: 'Period Revenue', value: fmt(stats.filteredRevenue || 0), sub: `vs previous ${periodLabel}`, icon: DollarSign, color: '#3b82f6', gradId: 'sk-blue', accent: 'blue', pct: stats.revenuePctChange ?? null },
+              { title: 'Actual Revenue', value: fmt(stats.filteredProfit || 0), sub: `vs previous ${periodLabel}`, icon: TrendingUp, color: '#10b981', gradId: 'sk-green', accent: 'emerald', pct: stats.profitPctChange ?? null },
+              { title: 'Transactions', value: (stats.filteredCount || 0).toLocaleString(), sub: `vs previous ${periodLabel}`, icon: Activity, color: '#8b5cf6', gradId: 'sk-violet', accent: 'violet', pct: stats.countPctChange ?? null, noFmt: true },
+              { title: "Today's Revenue", value: fmt(stats.totalSalesToday || 0), sub: 'vs yesterday', icon: Zap, color: '#f59e0b', gradId: 'sk-amber', accent: 'amber', pct: stats.todayPctChange ?? null },
+            ].map((card, i) => {
+              const accMap: Record<string, { bg: string; icon: string; border: string; grad: string }> = {
+                blue: { bg: 'bg-blue-500/10', icon: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500/15', grad: 'from-blue-500/6' },
+                emerald: { bg: 'bg-emerald-500/10', icon: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-500/15', grad: 'from-emerald-500/6' },
+                violet: { bg: 'bg-violet-500/10', icon: 'text-violet-600 dark:text-violet-400', border: 'border-violet-500/15', grad: 'from-violet-500/6' },
+                amber: { bg: 'bg-amber-500/10', icon: 'text-amber-600 dark:text-amber-400', border: 'border-amber-500/15', grad: 'from-amber-500/6' },
+              };
+              const c = accMap[card.accent];
+              return (
+                <motion.div key={i} custom={i + 2} variants={fadeUp} initial="hidden" animate="visible">
+                  <HoverTip text={card.value}>
+                    <div className={cn('relative overflow-hidden rounded-2xl border bg-card hover:-translate-y-1 hover:shadow-lg transition-all duration-300 cursor-default', c.border)}>
+                      <div className={cn('absolute inset-0 bg-gradient-to-br via-transparent to-transparent opacity-70', c.grad)} />
+                      <div className="relative z-10 px-5 pt-5 pb-0">
+                        <div className="flex items-start justify-between mb-3">
+                          <div className={cn('p-2.5 rounded-xl', c.bg)}>
+                            <card.icon size={16} className={c.icon} />
+                          </div>
+                          {card.pct !== null ? (
+                            <span className={cn('inline-flex items-center gap-0.5 text-[10px] font-bold',
+                              card.pct >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500'
+                            )}>
+                              {card.pct >= 0 ? <ArrowUpRight size={11} /> : <ArrowDownRight size={11} />}
+                              {Math.abs(card.pct).toFixed(1)}%
+                            </span>
+                          ) : (
+                            <ChevronRight size={12} className="text-muted-foreground/30 mt-0.5" />
+                          )}
+                        </div>
+                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-1">{card.title}</p>
+                        <p className="text-xl font-bold tracking-tight leading-tight">{card.value}</p>
+                        <p className="text-[10px] text-muted-foreground mt-1">{card.sub}</p>
+                      </div>
+                      {/* sparkline */}
+                      <div className="relative z-10 -mx-0.5">
+                        <Sparkline data={sparkValues} color={card.color} gradId={card.gradId} />
+                      </div>
+                    </div>
+                  </HoverTip>
+                </motion.div>
+              );
+            })}
+          </div>
+
+          {/* ── KPI Row 2 ── */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {[
+              { title: 'Stock Value', value: fmt(totalStockValue), sub: 'Total inventory at cost', icon: Boxes, accent: 'cyan' },
+              { title: 'Retail Stock Value', value: fmt(totalRetailValue), sub: `Profit: ${fmt(totalRetailValue - totalStockValue)}`, icon: TrendingUp, accent: 'emerald' },
+              { title: 'Customer Credit (AR)', value: fmt(totalLoans), sub: `${debtorCount} registered debtors`, icon: Wallet, accent: totalLoans > 0 ? 'red' : 'muted' },
+              { title: 'Low Stock Alert', value: String(lowStock.length), sub: 'Products below threshold', icon: AlertTriangle, accent: lowStock.length > 0 ? 'orange' : 'muted' },
+            ].map((card, i) => {
+              const accMap: Record<string, { bg: string; icon: string; border: string; grad: string; val: string }> = {
+                cyan: { bg: 'bg-cyan-500/10', icon: 'text-cyan-600 dark:text-cyan-400', border: 'border-cyan-500/15', grad: 'from-cyan-500/6', val: 'text-foreground' },
+                emerald: { bg: 'bg-emerald-500/10', icon: 'text-emerald-600 dark:text-emerald-400', border: 'border-emerald-500/15', grad: 'from-emerald-500/6', val: 'text-foreground' },
+                red: { bg: 'bg-red-500/10', icon: 'text-red-600 dark:text-red-400', border: 'border-red-400/20', grad: 'from-red-500/6', val: 'text-red-500' },
+                orange: { bg: 'bg-orange-500/10', icon: 'text-orange-600 dark:text-orange-400', border: 'border-orange-400/20', grad: 'from-orange-500/6', val: 'text-orange-500' },
+                muted: { bg: 'bg-muted', icon: 'text-muted-foreground', border: 'border-border/50', grad: 'from-transparent', val: 'text-foreground' },
+              };
+              const c = accMap[card.accent];
+              return (
+                <motion.div key={i} custom={i + 6} variants={fadeUp} initial="hidden" animate="visible">
+                  <HoverTip text={card.value}>
+                    <div className={cn('relative overflow-hidden rounded-2xl border bg-card p-5 hover:-translate-y-1 hover:shadow-lg transition-all duration-300 cursor-default', c.border)}>
+                      <div className={cn('absolute inset-0 bg-gradient-to-br via-transparent to-transparent opacity-70', c.grad)} />
+                      <div className="relative z-10">
+                        <div className="flex items-start justify-between mb-4">
+                          <div className={cn('p-2.5 rounded-xl', c.bg)}>
+                            <card.icon size={16} className={c.icon} />
+                          </div>
+                          <ChevronRight size={12} className="text-muted-foreground/30" />
+                        </div>
+                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-1">{card.title}</p>
+                        <p className={cn('text-xl font-bold tracking-tight', c.val)}>{card.value}</p>
+                        <p className="text-xs text-muted-foreground mt-1.5">{card.sub}</p>
+                      </div>
+                    </div>
+                  </HoverTip>
+                </motion.div>
+              );
+            })}
+          </div>
+
+          {/* ── Charts: Revenue Overview + Stock Summary ── */}
+          <motion.div custom={10} variants={fadeUp} initial="hidden" animate="visible">
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+
+              {/* Revenue Overview — 3/5 */}
+              <div className="lg:col-span-3 rounded-2xl border border-border/50 bg-card shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between p-5 pb-2">
+                  <div>
+                    <h3 className="text-sm font-semibold flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block animate-pulse" />
+                      Revenue Overview
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">Daily performance metrics</p>
                   </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-2xl font-black tracking-tight">{card.value}</div>
-                  <p className="text-[10px] font-bold text-muted-foreground mt-1 uppercase opacity-70">{card.sub}</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+                </div>
+                <div className="h-[272px] px-1 pb-2">
+                  {salesTrend.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                      <BarChart3 size={32} className="opacity-20" />
+                      <p className="text-xs">No trend data for selected period</p>
+                    </div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={salesTrend} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#6366f1" stopOpacity={0.22} />
+                            <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border) / 0.5)" />
+                        <XAxis dataKey="date" fontSize={10} tickLine={false} axisLine={false}
+                          tick={{ fill: 'hsl(var(--muted-foreground))' }} minTickGap={28} interval="preserveStartEnd"
+                          tickFormatter={str => { const d = new Date(str); return isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); }}
+                        />
+                        <YAxis fontSize={10} tickLine={false} axisLine={false} width={72}
+                          tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                          tickFormatter={v => `PKR ${Number(v).toLocaleString('en-PK')}`}
+                        />
+                        <Tooltip content={<RevTooltip />} />
+                        <Area type="monotone" dataKey="revenue" stroke="#6366f1" strokeWidth={2.5}
+                          fill="url(#revGrad)"
+                          dot={{ fill: '#6366f1', strokeWidth: 2, r: 3.5, stroke: 'hsl(var(--card))' }}
+                          activeDot={{ r: 5.5, stroke: '#6366f1', strokeWidth: 2.5, fill: 'hsl(var(--card))' }}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Card className="border-border/50 shadow-sm hover:-translate-y-1 transition-transform">
-              <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <CardTitle className="text-xs font-medium text-muted-foreground uppercase">Stock Cost Value</CardTitle>
-                <div className="p-2 rounded-lg bg-cyan-500/10"><Boxes className="h-4 w-4 text-cyan-500" /></div>
-              </CardHeader>
-              <CardContent>
-                <div className="text-xl font-bold text-cyan-600">{fmt(totalStockValue)}</div>
-                <p className="text-xs text-muted-foreground mt-1">Total inventory at cost</p>
-              </CardContent>
-            </Card>
+              {/* Stock Summary — 2/5 */}
+              <div className="lg:col-span-2 rounded-2xl border border-border/50 bg-card shadow-sm overflow-hidden">
+                <div className="p-5 pb-2">
+                  <h3 className="text-sm font-semibold flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                    Stock Summary
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">Inventory health overview</p>
+                </div>
+                <div className="flex flex-col" style={{ height: 272 }}>
+                  {stockSummaryData.length === 0 ? (
+                    /* fallback: payment methods */
+                    paymentData.length === 0 ? (
+                      <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                        <Boxes size={32} className="opacity-20" />
+                        <p className="text-xs">No stock data available</p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex-1">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie data={paymentData} cx="50%" cy="48%" innerRadius={52} outerRadius={78}
+                                paddingAngle={4} dataKey="revenue" nameKey="payment_method" stroke="none">
+                                {paymentData.map((_: any, idx: number) => (
+                                  <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                                ))}
+                              </Pie>
+                              <Tooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '14px', border: '1px solid hsl(var(--border))', fontSize: '12px' }}
+                                formatter={(v: any) => [fmt(v), '']} />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="px-4 pb-3 space-y-1.5">
+                          {paymentData.map((e: any, i: number) => {
+                            const total = paymentData.reduce((s: number, x: any) => s + x.revenue, 0);
+                            const pct = total > 0 ? Math.round((e.revenue / total) * 100) : 0;
+                            return (
+                              <div key={i} className="flex items-center justify-between text-xs">
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
+                                  <span className="text-muted-foreground capitalize">{e.payment_method}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-muted-foreground text-[10px]">{fmt(e.revenue)}</span>
+                                  <span className="font-semibold w-8 text-right">{pct}%</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )
+                  ) : (
+                    <>
+                      <div className="flex-1 relative">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie data={stockSummaryData} cx="50%" cy="50%" innerRadius={58} outerRadius={84}
+                              paddingAngle={3} dataKey="value" nameKey="name" stroke="none">
+                              {stockSummaryData.map((entry: any, idx: number) => (
+                                <Cell key={idx} fill={entry.color} />
+                              ))}
+                            </Pie>
+                            <Tooltip
+                              contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '14px', border: '1px solid hsl(var(--border))', fontSize: '12px', boxShadow: '0 20px 40px rgba(0,0,0,0.12)' }}
+                              formatter={(v: any, n: any) => [`${v} items`, n]}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        {/* Center label */}
+                        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                          <p className="text-2xl font-bold tabular-nums">{totalStockItems.toLocaleString()}</p>
+                          <p className="text-[10px] text-muted-foreground font-medium">Total Items</p>
+                        </div>
+                      </div>
+                      <div className="px-4 pb-3 space-y-1.5">
+                        {stockSummaryData.map((seg: any) => {
+                          const pct = totalStockItems > 0 ? Math.round((seg.value / totalStockItems) * 100) : 0;
+                          return (
+                            <div key={seg.name} className="flex items-center justify-between text-xs">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: seg.color }} />
+                                <span className="text-muted-foreground">{seg.name}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold tabular-nums">{seg.value.toLocaleString()}</span>
+                                <span className="text-muted-foreground text-[10px] w-8 text-right">({pct}%)</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <Link to="/inventory" className="block mt-1">
+                          <div className="flex items-center gap-1 text-[11px] text-primary font-semibold hover:underline">
+                            <BarChart3 size={11} /> View Stock Report →
+                          </div>
+                        </Link>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </motion.div>
 
-            <Card className="border-border/50 shadow-sm hover:-translate-y-1 transition-transform">
-              <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <CardTitle className="text-xs font-medium text-muted-foreground uppercase">Retail Stock Value</CardTitle>
-                <div className="p-2 rounded-lg bg-emerald-500/10"><TrendingUp className="h-4 w-4 text-emerald-500" /></div>
-              </CardHeader>
-              <CardContent>
-                <div className="text-xl font-bold text-emerald-600">{fmt(totalRetailValue)}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Potential profit: <span className="font-semibold text-emerald-500">{fmt(totalRetailValue - totalStockValue)}</span>
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className={cn("shadow-sm hover:-translate-y-1 transition-transform", totalLoans > 0 ? "border-red-400/30 bg-red-500/5" : "border-border/50")}>
-              <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <CardTitle className="text-xs font-medium text-muted-foreground uppercase tracking-tight">Customer Credit (AR)</CardTitle>
-                <div className="p-2 rounded-lg bg-red-500/10"><Wallet className="h-4 w-4 text-red-500" /></div>
-              </CardHeader>
-              <CardContent>
-                <div className="text-xl font-bold text-red-600">{fmt(totalLoans)}</div>
-                <p className="text-[10px] text-muted-foreground mt-1 uppercase font-bold">
-                  {debtorCount} Registered Debtors
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card className={cn("shadow-sm hover:-translate-y-1 transition-transform", lowStockList.length > 0 ? "border-orange-400/30 bg-orange-500/5" : "border-border/50")}>
-              <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                <CardTitle className="text-xs font-medium text-muted-foreground uppercase">Low Stock Alert</CardTitle>
-                <div className="p-2 rounded-lg bg-orange-500/10"><AlertTriangle className="h-4 w-4 text-orange-500" /></div>
-              </CardHeader>
-              <CardContent>
-                <div className={cn("text-xl font-bold", lowStockList.length > 0 ? "text-orange-500" : "text-muted-foreground")}>{lowStockList.length}</div>
-                <p className="text-xs text-muted-foreground mt-1">Products below threshold</p>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* ===== Quick Actions Full Width ===== */}
-          <Card className="shadow-md">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg">Quick Actions</CardTitle>
-              <CardDescription>Tap a button to go to any section — icons show what each area does</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
-                {quickActions.map((action, i) => (
-                  <Link key={i} to={action.path}>
-                    <div className={cn(
-                      'flex flex-col items-center justify-center gap-2 p-4 h-28 rounded-2xl border-2 bg-card transition-all duration-200 cursor-pointer group shadow-sm hover:shadow-md hover:-translate-y-0.5',
-                      action.bg
-                    )}>
-                      <span className="text-3xl leading-none">{action.emoji}</span>
-                      <span className="text-sm font-bold text-foreground leading-tight text-center">{action.title}</span>
-                      <span className="text-[10px] text-muted-foreground text-center leading-tight">{action.desc}</span>
+          {/* ── Quick Actions ── */}
+          <motion.div custom={11} variants={fadeUp} initial="hidden" animate="visible">
+            <div className="rounded-2xl border border-border/50 bg-card/60 backdrop-blur-sm p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-sm font-semibold">Quick Actions</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">Navigate to any section instantly</p>
+                </div>
+                <Zap size={14} className="text-muted-foreground/50" />
+              </div>
+              <div className="grid grid-cols-4 sm:grid-cols-8 gap-2.5">
+                {quickActions.map((a, i) => (
+                  <Link key={i} to={a.path}>
+                    <div className="group flex flex-col items-center gap-2 p-3 rounded-2xl border border-border/40 bg-background/60 hover:border-border hover:bg-card hover:shadow-md transition-all duration-200 hover:-translate-y-0.5">
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center shadow-md group-hover:scale-110 transition-transform duration-200"
+                        style={{ background: `linear-gradient(135deg, ${a.from}, ${a.to})` }}>
+                        <a.icon size={17} className="text-white" />
+                      </div>
+                      <span className="text-[11px] font-semibold text-center leading-tight">{a.title}</span>
                     </div>
                   </Link>
                 ))}
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </motion.div>
 
-          {/* ===== Top Products ===== */}
-          <Card className="shadow-md">
-            <CardHeader className="pb-3 border-b border-border/40">
-              <CardTitle>Top Selling Products</CardTitle>
-              <CardDescription>Highest quantity sold in selected period</CardDescription>
-            </CardHeader>
-            <CardContent className="p-0">
-              {stats.topProducts?.length ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/30 hover:bg-muted/30">
-                      <TableHead className="w-12 text-center">#</TableHead>
-                      <TableHead>Product</TableHead>
-                      <TableHead className="text-right">Qty Sold</TableHead>
-                      <TableHead className="text-right pr-6">Revenue</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {stats.topProducts.map((p: any, i: number) => (
-                      <TableRow key={i} className="hover:bg-muted/50">
-                        <TableCell className="text-center font-medium text-muted-foreground">{i + 1}</TableCell>
-                        <TableCell className="font-semibold">{p.name}</TableCell>
-                        <TableCell className="text-right"><Badge variant="outline" className="font-mono">{p.qty_sold}</Badge></TableCell>
-                        <TableCell className="text-right pr-6 font-semibold text-primary">{fmt(p.revenue)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : (
-                <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
-                  <ShoppingBag size={48} className="opacity-10 mb-4" />
-                  <p>No sales data yet.</p>
+          {/* ── Low Stock Alerts (enhanced table) ── */}
+          {lowStock.length > 0 && (
+            <motion.div custom={12} variants={fadeUp} initial="hidden" animate="visible">
+              <div className="rounded-2xl border border-border/50 bg-card shadow-sm overflow-hidden">
+                <div className="flex items-center justify-between p-5 pb-3 border-b border-border/40">
+                  <div>
+                    <h3 className="text-sm font-semibold flex items-center gap-2">
+                      <AlertTriangle size={14} className="text-orange-500" />
+                      Low Stock Alerts
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      <span className="font-semibold text-orange-500">{lowStock.length}</span> products need attention
+                    </p>
+                  </div>
+                  <Link to="/inventory">
+                    <Button variant="outline" size="sm" className="h-8 gap-1 rounded-xl text-xs border-orange-500/25 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/20">
+                      View All <ArrowRight size={11} />
+                    </Button>
+                  </Link>
                 </div>
-              )}
-            </CardContent>
-          </Card>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-muted/20 border-b border-border/30">
+                        <th className="py-3 px-5 text-xs font-medium text-muted-foreground text-left">Product</th>
+                        <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-left">SKU</th>
+                        <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-right">Current Stock</th>
+                        <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-right">Min. Threshold</th>
+                        <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-left">Status</th>
+                        <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-left">Location</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lowStock.map((p: any) => (
+                        <tr key={p.id} className={cn('border-b border-border/20 hover:bg-muted/25 transition-colors', p.stock === 0 && 'bg-red-500/5')}>
+                          <td className="py-3.5 px-5">
+                            <p className="font-medium">{p.name}</p>
+                            {p.category && <p className="text-[10px] text-muted-foreground">{p.category}</p>}
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <span className="font-mono text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-md">
+                              {p.barcode || '—'}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <span className={cn('font-bold tabular-nums text-sm', p.stock === 0 ? 'text-red-500' : 'text-orange-500')}>
+                              {p.stock}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4 text-right">
+                            <span className="text-sm text-muted-foreground tabular-nums">
+                              {p.min_stock ?? p.reorder_point ?? 10}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-4">
+                            {p.stock === 0
+                              ? <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/25 text-xs font-bold">Out of Stock</span>
+                              : <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-orange-500/10 text-orange-700 dark:text-orange-400 border border-orange-500/25 text-xs font-semibold">Low Stock</span>
+                            }
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                              <MapPin size={11} className="opacity-50" />
+                              <span>{p.location || 'Main Warehouse'}</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </motion.div>
+          )}
 
-          <Card className="shadow-md">
-            <CardHeader className="pb-3 border-b border-border/40">
-              <CardTitle>Item Sales Tracker</CardTitle>
-              <CardDescription>Track each product by week/month, dead items, and best sales month.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 pt-4">
-              <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-between">
-                <div className="relative w-full sm:max-w-xs">
-                  <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                  <input
-                    value={itemQuery}
-                    onChange={(e) => { setItemQuery(e.target.value); setItemLimit(10); }}
-                    placeholder="Search item name..."
-                    className="h-9 w-full rounded-md border border-input bg-background pl-8 pr-3 text-sm"
-                  />
+          {/* ── AR / AP ── */}
+          <motion.div custom={13} variants={fadeUp} initial="hidden" animate="visible">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* AR */}
+              <div className="rounded-2xl border border-emerald-500/15 bg-card shadow-sm overflow-hidden hover:shadow-lg transition-all duration-300">
+                <div className="flex items-center justify-between p-5 pb-4 border-b border-emerald-500/10">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="p-1.5 rounded-lg bg-emerald-500/10">
+                        <TrendingUp size={13} className="text-emerald-600 dark:text-emerald-400" />
+                      </div>
+                      <h3 className="text-sm font-bold text-emerald-700 dark:text-emerald-400">Receivable (AR)</h3>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      <span className="font-semibold text-foreground">{stats?.customersInDebt || 0}</span> customers owe{' '}
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400">{fmt(stats?.totalOutstandingLoans || 0)}</span>
+                    </p>
+                  </div>
+                  <Link to="/loans">
+                    <Button variant="outline" size="sm" className="h-8 gap-1 rounded-xl text-xs border-emerald-500/25 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30">
+                      View All <ArrowRight size={11} />
+                    </Button>
+                  </Link>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" variant={itemWindow === 'week' ? 'secondary' : 'outline'} onClick={() => setItemWindow('week')}>Week</Button>
-                  <Button size="sm" variant={itemWindow === 'month' ? 'secondary' : 'outline'} onClick={() => setItemWindow('month')}>Month</Button>
+                <div className="overflow-auto max-h-[220px]">
+                  {!(stats?.topDebtors?.length) ? (
+                    <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground/50">
+                      <CheckCircle2 size={26} className="text-emerald-500/40" />
+                      <p className="text-xs font-medium">No outstanding receivables</p>
+                      <p className="text-xs">All customer payments are clear</p>
+                    </div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead><tr className="border-b border-border/30">
+                        <th className="text-left py-2.5 px-4 text-xs font-medium text-muted-foreground">Customer</th>
+                        <th className="text-right py-2.5 px-4 text-xs font-medium text-muted-foreground">Balance</th>
+                      </tr></thead>
+                      <tbody>
+                        {stats.topDebtors.map((d: any) => (
+                          <tr key={d.id} className="border-b border-border/15 hover:bg-emerald-500/5 transition-colors">
+                            <td className="py-3 px-4">
+                              <p className="font-semibold text-xs">{d.name}</p>
+                              <p className="text-[10px] text-muted-foreground">{d.phone || '—'}</p>
+                            </td>
+                            <td className="py-3 px-4 text-right font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">{fmt(d.balance)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
               </div>
 
-              <div className="overflow-x-auto rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/30 hover:bg-muted/30">
-                      <TableHead>Item</TableHead>
-                      <TableHead className="text-right">Sold Qty</TableHead>
-                      <TableHead className="text-right">Amount</TableHead>
-                      <TableHead>Best Month</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {itemRows.map((r: any) => {
+              {/* AP */}
+              <div className="rounded-2xl border border-amber-500/15 bg-card shadow-sm overflow-hidden hover:shadow-lg transition-all duration-300">
+                <div className="flex items-center justify-between p-5 pb-4 border-b border-amber-500/10">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="p-1.5 rounded-lg bg-amber-500/10">
+                        <TrendingDown size={13} className="text-amber-600 dark:text-amber-400" />
+                      </div>
+                      <h3 className="text-sm font-bold text-amber-700 dark:text-amber-400">Payable (AP)</h3>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      <span className="font-semibold text-foreground">{stats?.vendorsWithDebt || 0}</span> vendors waiting{' '}
+                      <span className="font-bold text-amber-600 dark:text-amber-400">{fmt(stats?.totalOutstandingPayables || 0)}</span>
+                    </p>
+                  </div>
+                  <Link to="/loans">
+                    <Button variant="outline" size="sm" className="h-8 gap-1 rounded-xl text-xs border-amber-500/25 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30">
+                      View All <ArrowRight size={11} />
+                    </Button>
+                  </Link>
+                </div>
+                <div className="overflow-auto max-h-[220px]">
+                  {!(stats?.topPayableVendors?.length) ? (
+                    <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground/50">
+                      <CheckCircle2 size={26} className="text-amber-500/40" />
+                      <p className="text-xs font-medium">No outstanding payables</p>
+                      <p className="text-xs">All vendor payments are up to date</p>
+                    </div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead><tr className="border-b border-border/30">
+                        <th className="text-left py-2.5 px-4 text-xs font-medium text-muted-foreground">Vendor</th>
+                        <th className="text-right py-2.5 px-4 text-xs font-medium text-muted-foreground">Balance</th>
+                      </tr></thead>
+                      <tbody>
+                        {stats.topPayableVendors.map((v: any) => (
+                          <tr key={v.id} className="border-b border-border/15 hover:bg-amber-500/5 transition-colors">
+                            <td className="py-3 px-4">
+                              <p className="font-semibold text-xs">{v.name}</p>
+                              <p className="text-[10px] text-muted-foreground">{v.phone || '—'}</p>
+                            </td>
+                            <td className="py-3 px-4 text-right font-bold text-amber-600 dark:text-amber-400 tabular-nums">{fmt(v.balance)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* ── Top Selling Products ── */}
+          <motion.div custom={14} variants={fadeUp} initial="hidden" animate="visible">
+            <div className="rounded-2xl border border-border/50 bg-card shadow-sm overflow-hidden">
+              <div className="p-5 pb-3 border-b border-border/40">
+                <h3 className="text-sm font-semibold">Top Selling Products</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Highest quantity sold in selected period</p>
+              </div>
+              {stats.topProducts?.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-muted/25 border-b border-border/30">
+                        <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-center w-10">#</th>
+                        <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-left">Product</th>
+                        <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-left hidden sm:table-cell">Category</th>
+                        <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-right">Qty Sold</th>
+                        <th className="py-3 px-5 text-xs font-medium text-muted-foreground text-right">Revenue</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.topProducts.map((p: any, i: number) => (
+                        <tr key={i} className="border-b border-border/20 hover:bg-muted/25 transition-colors">
+                          <td className="py-3.5 px-4 text-center">
+                            <span className={cn('inline-flex w-6 h-6 rounded-full items-center justify-center text-xs font-bold',
+                              i === 0 ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400' :
+                              i === 1 ? 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400' :
+                              i === 2 ? 'bg-orange-100 text-orange-600 dark:bg-orange-950/40 dark:text-orange-400' : 'bg-muted text-muted-foreground'
+                            )}>{i + 1}</span>
+                          </td>
+                          <td className="py-3.5 px-4 font-medium">{p.name}</td>
+                          <td className="py-3.5 px-4 text-xs text-muted-foreground hidden sm:table-cell">{p.category || '—'}</td>
+                          <td className="py-3.5 px-4 text-right">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-primary/8 border border-primary/15 text-primary text-xs font-semibold tabular-nums">{p.qty_sold}</span>
+                          </td>
+                          <td className="py-3.5 px-5 text-right font-bold text-primary tabular-nums">{fmt(p.revenue)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-14 gap-3 text-muted-foreground">
+                  <ShoppingBag size={36} className="opacity-15" />
+                  <p className="text-sm">No sales data for selected period</p>
+                </div>
+              )}
+            </div>
+          </motion.div>
+
+          {/* ── Item Sales Tracker ── */}
+          <motion.div custom={15} variants={fadeUp} initial="hidden" animate="visible">
+            <div className="rounded-2xl border border-border/50 bg-card shadow-sm overflow-hidden">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between p-5 pb-4 border-b border-border/40 gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Item Sales Tracker</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">Per-product performance, dead items, and best months</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="relative">
+                    <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <input value={itemQuery} onChange={e => { setItemQuery(e.target.value); setItemLimit(10); }}
+                      placeholder="Search items…"
+                      className="h-8 w-40 rounded-xl border border-input bg-background pl-7 pr-3 text-xs" />
+                  </div>
+                  <div className="flex bg-muted/60 rounded-xl p-0.5 border border-border/30">
+                    {(['week', 'month'] as const).map(w => (
+                      <button key={w} onClick={() => setItemWindow(w)}
+                        className={cn('h-7 px-3 text-xs font-medium rounded-lg transition-all capitalize',
+                          itemWindow === w ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground'
+                        )}>{w}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-muted/20 border-b border-border/30">
+                      <th className="py-3 px-5 text-xs font-medium text-muted-foreground text-left">Item</th>
+                      <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-right">Sold Qty</th>
+                      <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-right">Amount</th>
+                      <th className="py-3 px-5 text-xs font-medium text-muted-foreground text-left">Best Month</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allItemRows.slice(0, itemLimit).length === 0 ? (
+                      <tr><td colSpan={4} className="py-12 text-center text-xs text-muted-foreground">No items found</td></tr>
+                    ) : allItemRows.slice(0, itemLimit).map((r: any) => {
                       const best = bestMonthMap.get(String(r.name || ''));
                       const qty = itemWindow === 'week' ? Number(r.qty_week || 0) : Number(r.qty_month || 0);
                       const amount = itemWindow === 'week' ? Number(r.amount_week || 0) : Number(r.amount_month || 0);
                       return (
-                        <TableRow key={r.id}>
-                          <TableCell className="font-semibold">{r.name}</TableCell>
-                          <TableCell className="text-right"><Badge variant="outline" className="font-mono">{qty}</Badge></TableCell>
-                          <TableCell className="text-right font-semibold">{fmt(amount)}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {best ? `${best.ym} (${fmt(Number(best.amount || 0))})` : 'No monthly data'}
-                          </TableCell>
-                        </TableRow>
+                        <tr key={r.id} className="border-b border-border/20 hover:bg-muted/25 transition-colors">
+                          <td className="py-3.5 px-5 font-medium">{r.name}</td>
+                          <td className="py-3.5 px-4 text-right">
+                            <span className="inline-flex px-2 py-0.5 rounded-full bg-muted border border-border/40 text-xs font-semibold text-muted-foreground tabular-nums">{qty}</span>
+                          </td>
+                          <td className="py-3.5 px-4 text-right font-semibold tabular-nums">{fmt(amount)}</td>
+                          <td className="py-3.5 px-5 text-xs text-muted-foreground">{best ? `${best.ym} (${fmt(Number(best.amount || 0))})` : '—'}</td>
+                        </tr>
                       );
                     })}
-                  </TableBody>
-                </Table>
+                  </tbody>
+                </table>
               </div>
               {itemLimit < allItemRows.length && (
-                <div className="flex justify-center pt-1">
-                  <Button size="sm" variant="outline" onClick={() => setItemLimit(l => l + 10)} className="text-xs gap-1">
-                    Load More ({allItemRows.length - itemLimit} remaining)
+                <div className="flex justify-center p-4 border-t border-border/30">
+                  <Button size="sm" variant="outline" onClick={() => setItemLimit(l => l + 10)} className="h-8 text-xs rounded-xl gap-1">
+                    Load More <span className="text-muted-foreground">({allItemRows.length - itemLimit} left)</span>
                   </Button>
                 </div>
               )}
-
-              <div>
-                <h4 className="text-sm font-bold mb-2">Dead Items (No sales in current month)</h4>
-                {deadRows.length ? (
+              {deadRows.length > 0 && (
+                <div className="p-5 pt-4 border-t border-border/30 bg-muted/10">
+                  <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-3">Dead Items — No Sales This Month</p>
                   <div className="flex flex-wrap gap-2">
                     {deadRows.map((d: any) => (
-                      <Badge key={d.id} variant="outline" className="text-xs">
-                        {d.name} (Stock: {d.stock})
-                      </Badge>
+                      <span key={d.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-muted border border-border/40 text-xs font-medium text-muted-foreground">
+                        {d.name}
+                        <span className="px-1.5 py-0.5 rounded-full bg-background border border-border/30 text-xs font-bold">{d.stock}</span>
+                      </span>
                     ))}
                   </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">No dead items found this month.</p>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* ===== AP / AR Invoice Tables ===== */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Receivables (AR) */}
-            <Card className="shadow-md border-primary/20 bg-primary/5 dark:bg-primary/10 overflow-hidden relative group transition-all hover:shadow-lg">
-              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition-transform">
-                <Receipt size={100} />
-              </div>
-              <CardHeader className="pb-3 border-b border-primary/10 flex flex-row items-center justify-between relative z-10">
-                <div>
-                  <CardTitle className="text-lg font-black text-primary flex items-center gap-2">
-                    <TrendingUp className="text-emerald-500" size={20} /> Receivable (AR)
-                  </CardTitle>
-                  <CardDescription className="text-muted-foreground font-medium">
-                    {stats?.customersInDebt || 0} customers owe <span className="text-primary font-bold">{fmt(stats?.totalOutstandingLoans || 0)}</span>
-                  </CardDescription>
-                </div>
-                <Link to="/loans">
-                  <Button variant="outline" size="sm" className="gap-1 border-primary/30 text-primary hover:bg-primary/10 text-xs shrink-0 bg-background/50 backdrop-blur-sm">
-                    View All <ArrowRight size={12} />
-                  </Button>
-                </Link>
-              </CardHeader>
-              <CardContent className="p-0 relative z-10">
-                <div className="overflow-auto max-h-[220px]">
-                  <Table>
-                    <TableHeader className="bg-primary/5">
-                      <TableRow className="border-b border-primary/10">
-                        <TableHead className="text-[10px] uppercase font-bold text-primary/70">Customer</TableHead>
-                        <TableHead className="text-[10px] uppercase font-bold text-primary/70 text-right pr-4">Balance</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {(stats?.topDebtors || []).length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={2} className="text-center py-10">
-                             <div className="flex flex-col items-center gap-2 opacity-40">
-                                <Activity size={32} />
-                                <p className="text-xs font-bold uppercase tracking-widest">No outstanding receivables</p>
-                             </div>
-                          </TableCell>
-                        </TableRow>
-                      ) : (stats?.topDebtors || []).map((d: any) => (
-                        <TableRow key={d.id} className="hover:bg-primary/5 border-b border-primary/5">
-                          <TableCell className="py-3 px-4">
-                             <p className="font-bold text-sm">{d.name}</p>
-                             <p className="text-[10px] text-muted-foreground">{d.phone || '—'}</p>
-                          </TableCell>
-                          <TableCell className="text-right pr-4 font-black text-primary text-base">{fmt(d.balance)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Payables (AP) */}
-            <Card className="shadow-md border-amber-500/20 bg-amber-500/5 dark:bg-amber-500/10 overflow-hidden relative group transition-all hover:shadow-lg">
-              <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:scale-110 transition-transform">
-                <Truck size={100} />
-              </div>
-              <CardHeader className="pb-3 border-b border-amber-500/10 flex flex-row items-center justify-between relative z-10">
-                <div>
-                  <CardTitle className="text-lg font-black text-amber-700 dark:text-amber-500 flex items-center gap-2">
-                    <TrendingDown className="text-red-500" size={20} /> Payable (AP)
-                  </CardTitle>
-                  <CardDescription className="text-muted-foreground font-medium">
-                    {stats?.vendorsWithDebt || 0} vendors waiting <span className="text-amber-600 dark:text-amber-500 font-bold">{fmt(stats?.totalOutstandingPayables || 0)}</span>
-                  </CardDescription>
-                </div>
-                <Link to="/loans">
-                  <Button variant="outline" size="sm" className="gap-1 border-amber-500/30 text-amber-700 dark:text-amber-500 hover:bg-amber-100 dark:hover:bg-amber-900/40 text-xs shrink-0 bg-background/50 backdrop-blur-sm">
-                    View All <ArrowRight size={12} />
-                  </Button>
-                </Link>
-              </CardHeader>
-              <CardContent className="p-0 relative z-10">
-                <div className="overflow-auto max-h-[220px]">
-                  <Table>
-                    <TableHeader className="bg-amber-500/5">
-                      <TableRow className="border-b border-amber-500/10">
-                        <TableHead className="text-[10px] uppercase font-bold text-amber-700/70">Vendor</TableHead>
-                        <TableHead className="text-[10px] uppercase font-bold text-amber-700/70 text-right pr-4">Balance</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {(stats?.topPayableVendors || []).length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={2} className="text-center py-10">
-                             <div className="flex flex-col items-center gap-2 opacity-40">
-                                <Activity size={32} />
-                                <p className="text-xs font-bold uppercase tracking-widest">No outstanding payables</p>
-                             </div>
-                          </TableCell>
-                        </TableRow>
-                      ) : (stats?.topPayableVendors || []).map((v: any) => (
-                        <TableRow key={v.id} className="hover:bg-amber-500/5 border-b border-amber-500/5">
-                          <TableCell className="py-3 px-4">
-                             <p className="font-bold text-sm text-amber-900 dark:text-amber-100">{v.name}</p>
-                             <p className="text-[10px] text-muted-foreground">{v.phone || '—'}</p>
-                          </TableCell>
-                          <TableCell className="text-right pr-4 font-black text-amber-700 dark:text-amber-500 text-base">{fmt(v.balance)}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* ===== Charts Section (Moved to bottom) ===== */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6 items-stretch">
-            {/* Revenue Trend Chart */}
-            <Card className="shadow-md overflow-hidden border border-border/60 bg-card min-h-[360px]">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <TrendingUp className="text-emerald-500" size={18} /> Revenue Trend
-                </CardTitle>
-                <CardDescription className="text-muted-foreground text-xs">Daily performance metrics</CardDescription>
-              </CardHeader>
-              <CardContent className="h-[280px] md:h-[320px] pt-4">
-                {salesTrendData.length === 0 ? (
-                  <div className="h-full w-full flex items-center justify-center text-muted-foreground text-sm">
-                    No trend data available for selected period.
-                  </div>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={salesTrendData} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
-                      <defs>
-                        <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#10b981" stopOpacity={0.8} />
-                          <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                      <XAxis
-                        dataKey="date"
-                        fontSize={10}
-                        tickLine={false}
-                        axisLine={false}
-                        stroke="hsl(var(--muted-foreground))"
-                        minTickGap={24}
-                        interval="preserveStartEnd"
-                        tickFormatter={(str) => {
-                          const date = new Date(str);
-                          if (Number.isNaN(date.getTime())) return '';
-                          return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-                        }}
-                      />
-                      <YAxis
-                        fontSize={10}
-                        tickLine={false}
-                        axisLine={false}
-                        stroke="hsl(var(--muted-foreground))"
-                        width={80}
-                        tickFormatter={(value) => `Rs.${Number(value).toLocaleString('en-PK')}`}
-                      />
-                      <Tooltip
-                        contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '12px', border: '1px solid hsl(var(--border))', color: 'hsl(var(--foreground))' }}
-                        itemStyle={{ color: '#10b981' }}
-                        labelFormatter={(label) => {
-                          const d = new Date(label as string);
-                          return Number.isNaN(d.getTime()) ? String(label) : d.toLocaleDateString('en-PK', { year: 'numeric', month: 'short', day: 'numeric' });
-                        }}
-                        formatter={(value: any) => [fmt(value), 'Revenue']}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="revenue"
-                        stroke="#10b981"
-                        fillOpacity={1}
-                        fill="url(#colorRev)"
-                        strokeWidth={3}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Payment Distribution Chart */}
-            <Card className="shadow-md border border-border/60 bg-card min-h-[360px]">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <CreditCard className="text-blue-500" size={18} /> Payment Methods
-                </CardTitle>
-                <CardDescription className="text-muted-foreground text-xs">Revenue share by type</CardDescription>
-              </CardHeader>
-              <CardContent className="h-[280px] md:h-[320px]">
-                {paymentStatsData.length === 0 ? (
-                  <div className="h-full w-full flex items-center justify-center text-muted-foreground text-sm">
-                    No payment method data available for selected period.
-                  </div>
-                ) : (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={paymentStatsData}
-                        cx="50%"
-                        cy="46%"
-                        innerRadius={62}
-                        outerRadius={92}
-                        paddingAngle={3}
-                        dataKey="revenue"
-                        nameKey="payment_method"
-                        stroke="none"
-                        labelLine={false}
-                      >
-                        {paymentStatsData.map((entry: any, index: number) => (
-                          <Cell key={`cell-${index}`} fill={['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'][index % 5]} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '12px', border: '1px solid hsl(var(--border))', color: 'hsl(var(--foreground))' }}
-                        formatter={(value: any) => fmt(value)}
-                        labelFormatter={(label) => String(label)}
-                      />
-                      <Legend iconType="circle" verticalAlign="bottom" height={40} wrapperStyle={{ fontSize: '11px', paddingTop: '6px' }} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* ===== Low Stock Table ===== */}
-          {lowStockList.length > 0 && (
-            <Card className="shadow-md border-orange-400/20">
-              <CardHeader className="border-b border-orange-400/20 bg-orange-500/5 flex flex-row items-center justify-between pb-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2 text-orange-600">
-                    <AlertTriangle size={18} /> Low Stock Warning
-                  </CardTitle>
-                  <CardDescription>Products below 10 units — restock immediately</CardDescription>
-                </div>
-                <Link to="/inventory">
-                  <Button variant="outline" size="sm" className="gap-2 border-orange-500/30 text-orange-600 hover:bg-orange-50">
-                    View Inventory <ArrowRight size={14} />
-                  </Button>
-                </Link>
-              </CardHeader>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/20">
-                      <TableHead>Product</TableHead>
-                      <TableHead className="text-right">Stock Remaining</TableHead>
-                      <TableHead className="text-right pr-6">Selling Price</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {lowStockList.map((p: any) => (
-                      <TableRow key={p.id} className={cn('hover:bg-muted/40', p.stock === 0 && 'bg-destructive/5')}>
-                        <TableCell className="font-semibold">{p.name}</TableCell>
-                        <TableCell className="text-right">
-                          <Badge variant={p.stock === 0 ? 'destructive' : 'outline'}
-                            className={cn('font-mono', p.stock > 0 && 'text-orange-600 border-orange-400/40 bg-orange-500/10')}>
-                            {p.stock === 0 ? 'OUT OF STOCK' : `${p.stock} left`}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right pr-6 text-primary font-semibold">{fmt(p.price)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* ===== Loans Summary ===== */}
-          {totalLoans > 0 && (
-            <Card className="shadow-md border-red-400/20">
-              <CardHeader className="border-b border-red-400/20 bg-red-500/5 flex flex-row items-center justify-between pb-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2 text-red-600">
-                    <Wallet size={18} /> Outstanding Customer Loans
-                  </CardTitle>
-                  <CardDescription>{debtorCount} customers have pending balances</CardDescription>
-                </div>
-                <Link to="/loans">
-                  <Button variant="outline" size="sm" className="gap-2 border-red-400/30 text-red-600 hover:bg-red-50">
-                    Manage Loans <ArrowRight size={14} />
-                  </Button>
-                </Link>
-              </CardHeader>
-              <CardContent className="flex flex-col lg:flex-row items-center justify-between p-6 gap-6">
-                <div className="flex items-center gap-4 w-full">
-                  <div className="h-16 w-16 rounded-2xl bg-red-500/10 flex items-center justify-center border border-red-500/20 shadow-inner">
-                    <Wallet size={32} className="text-red-600" />
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wider text-red-600/70 mb-1">Total Outstanding Debt</p>
-                    <p className="text-4xl font-black text-red-600 tracking-tight">{fmt(totalLoans)}</p>
-                  </div>
-                </div>
-                <Card className="w-full lg:max-w-md shadow-xl border-amber-500/30 dark:border-amber-500/20 bg-amber-50/80 dark:bg-amber-950/20 backdrop-blur-md">
-                  <CardHeader className="pb-3 border-b border-amber-500/20 bg-amber-500/10">
-                    <CardTitle className="text-xs font-black !text-black dark:!text-amber-200 flex items-center gap-2 uppercase tracking-widest">
-                      <Info size={14} className="!text-black dark:!text-amber-400" /> Financial Insights
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-5 space-y-5">
-                    <div className="flex gap-4 items-start">
-                      <div className="w-9 h-9 rounded-2xl bg-amber-500/20 dark:bg-amber-500/30 flex items-center justify-center shrink-0 border border-amber-500/30 shadow-sm">
-                        <HandCoins size={18} className="!text-black dark:!text-amber-400" />
-                      </div>
-                      <p className="text-[12px] leading-snug !text-black dark:!text-amber-100 font-bold">
-                        Your <strong className="!text-black dark:!text-amber-400 uppercase tracking-tighter">receivables</strong> are payments owed to you. Monitor these closely to maintain healthy cash flow.
-                      </p>
-                    </div>
-                    <div className="flex gap-4 items-start">
-                      <div className="w-9 h-9 rounded-2xl bg-blue-500/20 dark:bg-blue-500/30 flex items-center justify-center shrink-0 border border-blue-500/30 shadow-sm">
-                        <TrendingUp size={18} className="!text-black dark:!text-blue-400" />
-                      </div>
-                      <p className="text-[12px] leading-snug !text-black dark:!text-blue-100 font-bold">
-                        <strong className="!text-black dark:!text-blue-400 uppercase tracking-tighter">Net Profit</strong> represents your earnings after all costs. A margin of 15-20% is considered healthy.
-                      </p>
-                    </div>
-                  </CardContent>
-                </Card>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* ===== Recent Transactions Table ===== */}
-          <Card className="shadow-md">
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle>Recent Transactions</CardTitle>
-                <CardDescription>Latest 10 sales activity</CardDescription>
-              </div>
-              <Link to="/transactions">
-                <Button variant="outline" size="sm" className="gap-2">
-                  View All <ArrowRight size={14} />
-                </Button>
-              </Link>
-            </CardHeader>
-            <CardContent className="p-0">
-              {stats.recentSales?.length ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/30">
-                      <TableHead className="w-24">Inv #</TableHead>
-                      <TableHead>Time</TableHead>
-                      <TableHead>Method</TableHead>
-                      <TableHead className="text-right pr-6">Total</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {stats.recentSales.map((s: any) => (
-                      <TableRow key={s.id} className="hover:bg-muted/50">
-                        <TableCell className="font-mono text-xs text-foreground">{formatInvoiceId(s.id, s.date_created)}</TableCell>
-                        <TableCell className="text-sm">{new Date(s.date_created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline" className={cn(
-                            "capitalize font-bold text-[10px] px-2 py-0.5 text-black dark:text-white border-black/20",
-                            s.payment_method === 'cash'
-                              ? "bg-emerald-100 dark:border-emerald-900/50 dark:bg-emerald-950/50"
-                              : s.payment_method === 'online'
-                                ? "bg-blue-100 dark:border-blue-900/50 dark:bg-blue-950/50"
-                                : "bg-slate-100 dark:border-slate-800 dark:bg-slate-900"
-                          )}>
-                            {s.payment_method}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right pr-6 font-bold text-primary">{fmt(s.total)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              ) : (
-                <div className="py-20 text-center text-muted-foreground flex flex-col items-center gap-3">
-                  <Activity size={48} className="opacity-10" />
-                  <p>No recent transactions found.</p>
                 </div>
               )}
-            </CardContent>
-          </Card>
+            </div>
+          </motion.div>
+
+          {/* ── Outstanding Receivables (AR) — premium redesign ── */}
+          {totalLoans > 0 && (
+            <motion.div custom={16} variants={fadeUp} initial="hidden" animate="visible">
+              <div
+                className="rounded-2xl bg-card overflow-hidden shadow-sm"
+                style={{ border: '1px solid rgba(239,68,68,0.16)' }}
+              >
+                {/* Gradient top accent */}
+                <div className="h-[3px] bg-gradient-to-r from-red-600 via-rose-500 to-orange-400" />
+
+                {/* ── Header ── */}
+                <div className="flex items-center justify-between px-6 py-4 border-b border-red-500/10">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/15 shrink-0">
+                      <Wallet size={15} className="text-red-500 dark:text-red-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold">Outstanding Receivables</h3>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        Customer AR ledger · Money owed to you
+                      </p>
+                    </div>
+                  </div>
+                  <Link to="/loans">
+                    <Button
+                      variant="outline" size="sm"
+                      className="h-8 gap-1.5 rounded-xl text-xs border-red-400/25 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/20"
+                    >
+                      Manage <ArrowRight size={11} />
+                    </Button>
+                  </Link>
+                </div>
+
+                {/* ── KPI metric strip ── */}
+                <div className="grid grid-cols-3 divide-x divide-border/30 border-b border-border/20">
+                  {[
+                    {
+                      label: 'Total Outstanding',
+                      value: fmt(totalLoans),
+                      val2: null,
+                      color: 'text-red-500 dark:text-red-400',
+                      bg: 'bg-red-500/5',
+                      icon: BadgeAlert,
+                      iconColor: 'text-red-500/60',
+                    },
+                    {
+                      label: 'Active Debtors',
+                      value: String(debtorCount),
+                      val2: 'customers',
+                      color: 'text-foreground',
+                      bg: '',
+                      icon: Users,
+                      iconColor: 'text-muted-foreground/40',
+                    },
+                    {
+                      label: 'Avg per Customer',
+                      value: debtorCount > 0 ? fmt(Math.round(totalLoans / debtorCount)) : 'PKR 0',
+                      val2: null,
+                      color: 'text-foreground',
+                      bg: '',
+                      icon: HandCoins,
+                      iconColor: 'text-muted-foreground/40',
+                    },
+                  ].map((m, i) => (
+                    <div key={i} className={cn('relative px-5 py-4 overflow-hidden', m.bg)}>
+                      <m.icon size={36} className={cn('absolute -right-2 -bottom-2 pointer-events-none', m.iconColor)} />
+                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest mb-1.5 relative z-10">
+                        {m.label}
+                      </p>
+                      <p className={cn('text-xl font-bold tabular-nums tracking-tight relative z-10', m.color)}>
+                        {m.value}
+                        {m.val2 && <span className="text-xs text-muted-foreground font-normal ml-1">{m.val2}</span>}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* ── Debtor progress bars ── */}
+                {stats?.topDebtors?.length > 0 ? (
+                  <div className="p-5 sm:p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+                        Top Debtors · Collection Priority
+                      </p>
+                      <span className="text-[10px] text-muted-foreground bg-muted px-2.5 py-0.5 rounded-full border border-border/40">
+                        % of total balance
+                      </span>
+                    </div>
+
+                    <div className="space-y-5">
+                      {stats.topDebtors.slice(0, 5).map((d: any, i: number) => {
+                        const pct = totalLoans > 0 ? (d.balance / totalLoans) * 100 : 0;
+
+                        const PALETTE = [
+                          { bar: 'from-red-600 to-rose-500',       ring: '#ef4444', label: 'Critical', badge: 'bg-red-500/12 text-red-600 dark:text-red-400 border-red-500/20' },
+                          { bar: 'from-orange-500 to-amber-500',   ring: '#f97316', label: 'High',     badge: 'bg-orange-500/12 text-orange-600 dark:text-orange-400 border-orange-500/20' },
+                          { bar: 'from-amber-500 to-yellow-400',   ring: '#f59e0b', label: 'Medium',   badge: 'bg-amber-500/12 text-amber-700 dark:text-amber-400 border-amber-500/20' },
+                          { bar: 'from-yellow-400 to-lime-400',    ring: '#eab308', label: 'Low',      badge: 'bg-yellow-500/12 text-yellow-700 dark:text-yellow-400 border-yellow-500/20' },
+                          { bar: 'from-lime-500 to-emerald-400',   ring: '#84cc16', label: 'Minimal',  badge: 'bg-lime-500/12 text-lime-700 dark:text-lime-400 border-lime-500/20' },
+                        ];
+                        const p = PALETTE[i] ?? PALETTE[PALETTE.length - 1];
+
+                        return (
+                          <div key={d.id}>
+                            {/* Row header */}
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                {/* Rank badge */}
+                                <div
+                                  className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black text-white shrink-0"
+                                  style={{ background: p.ring, boxShadow: `0 2px 8px ${p.ring}55` }}
+                                >
+                                  {i + 1}
+                                </div>
+                                <div className="min-w-0">
+                                  <span className="text-sm font-semibold truncate block">{d.name}</span>
+                                  {d.phone && (
+                                    <span className="flex items-center gap-1 text-[10px] text-muted-foreground mt-0.5">
+                                      <PhoneCall size={9} />
+                                      {d.phone}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2 shrink-0 ml-3">
+                                <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded-full border', p.badge)}>
+                                  {p.label}
+                                </span>
+                                <div className="text-right">
+                                  <span className="text-sm font-bold tabular-nums">{fmt(d.balance)}</span>
+                                  <span className="block text-[10px] text-muted-foreground tabular-nums">{pct.toFixed(1)}%</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Animated progress bar */}
+                            <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                              <motion.div
+                                initial={{ width: 0 }}
+                                animate={{ width: `${pct}%` }}
+                                transition={{ delay: 0.22 + i * 0.09, duration: 0.95, ease: [0.23, 1, 0.32, 1] }}
+                                className={cn('h-full rounded-full bg-gradient-to-r', p.bar)}
+                                style={{ boxShadow: `2px 0 8px ${p.ring}55` }}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* View all link */}
+                    {debtorCount > 5 && (
+                      <Link to="/loans" className="inline-flex items-center gap-1.5 mt-5 text-[11px] text-primary font-semibold hover:underline underline-offset-2">
+                        <Users size={11} />
+                        View all {debtorCount} debtors →
+                      </Link>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground/50">
+                    <CheckCircle2 size={28} className="text-emerald-400/50" />
+                    <p className="text-xs font-medium">No debtor records found</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
+          {/* ── Recent Transactions ── */}
+          <motion.div custom={17} variants={fadeUp} initial="hidden" animate="visible">
+            <div className="rounded-2xl border border-border/50 bg-card shadow-sm overflow-hidden">
+              <div className="flex items-center justify-between p-5 pb-3 border-b border-border/40">
+                <div>
+                  <h3 className="text-sm font-semibold">Recent Transactions</h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">Latest 10 sales activity</p>
+                </div>
+                <Link to="/transactions">
+                  <Button variant="outline" size="sm" className="h-8 gap-1 rounded-xl text-xs">
+                    View All <ArrowRight size={11} />
+                  </Button>
+                </Link>
+              </div>
+              {stats.recentSales?.length ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-muted/20 border-b border-border/30">
+                        <th className="py-3 px-5 text-xs font-medium text-muted-foreground text-left">Invoice #</th>
+                        <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-left">Time</th>
+                        <th className="py-3 px-4 text-xs font-medium text-muted-foreground text-left">Method</th>
+                        <th className="py-3 px-5 text-xs font-medium text-muted-foreground text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.recentSales.map((s: any) => (
+                        <tr key={s.id} className="border-b border-border/20 hover:bg-muted/25 transition-colors">
+                          <td className="py-3.5 px-5 font-mono text-xs text-muted-foreground">{formatInvoiceId(s.id, s.date_created)}</td>
+                          <td className="py-3.5 px-4 text-xs text-muted-foreground tabular-nums">
+                            {new Date(s.date_created).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td className="py-3.5 px-4">
+                            {/* ── Payment method badge – clear in both light and dark ── */}
+                            {s.payment_method === 'cash' && (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500 text-white capitalize">
+                                {s.payment_method}
+                              </span>
+                            )}
+                            {s.payment_method === 'card' && (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-500 text-white capitalize">
+                                {s.payment_method}
+                              </span>
+                            )}
+                            {s.payment_method === 'online' && (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-violet-500 text-white capitalize">
+                                {s.payment_method}
+                              </span>
+                            )}
+                            {s.payment_method === 'bank_transfer' && (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-cyan-500 text-white capitalize">
+                                Bank Transfer
+                              </span>
+                            )}
+                            {!['cash', 'card', 'online', 'bank_transfer'].includes(s.payment_method) && (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-500 text-white capitalize">
+                                {s.payment_method}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-5 text-right font-bold text-primary tabular-nums">{fmt(s.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-14 gap-3 text-muted-foreground">
+                  <Activity size={36} className="opacity-15" />
+                  <p className="text-sm">No recent transactions found</p>
+                </div>
+              )}
+            </div>
+          </motion.div>
         </>
       )}
     </div>

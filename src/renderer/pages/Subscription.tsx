@@ -1,12 +1,33 @@
 import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
+import { motion } from 'framer-motion';
+import {
+  ShieldCheck, ShieldAlert, Key, Clock, Calendar, Wallet,
+  Copy, Fingerprint, Zap, Mail, Phone, CheckCircle2,
+  AlertCircle, ArrowRight, Sparkles, Lock, Infinity
+} from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Save, Upload, Store, Phone, MapPin, FileText, Lock, Mail, Image as ImageIcon, Database, Download, Trash2, ShieldCheck, Eye, EyeOff, Zap, Key, ShieldAlert, Clock, Calendar, Wallet, Copy, Fingerprint } from 'lucide-react';
-import { useNotifications } from '../components/NotificationProvider';
-import { subService, SubscriptionState } from '../services/subscription';
 import { Badge } from '../components/ui/badge';
 import { cn } from '../lib/utils';
+import { useNotifications } from '../components/NotificationProvider';
+import { subService, SubscriptionState } from '../services/subscription';
+
+/* ── animation helpers ─────────────────────────────────────── */
+const fadeUp = {
+  hidden: { opacity: 0, y: 22 },
+  show: (i = 0) => ({
+    opacity: 1, y: 0,
+    transition: { delay: i * 0.07, duration: 0.45, ease: [0.22, 1, 0.36, 1] },
+  }),
+};
+
+/* ── plan catalogue ─────────────────────────────────────────── */
+const PLANS = [
+  { id: 'weekly',   label: 'Weekly',   days: 7,    icon: Zap,        accent: '#f59e0b', bg: 'rgba(245,158,11,0.08)',  border: 'rgba(245,158,11,0.22)' },
+  { id: 'monthly',  label: 'Monthly',  days: 30,   icon: Clock,      accent: '#3b82f6', bg: 'rgba(59,130,246,0.08)',  border: 'rgba(59,130,246,0.22)' },
+  { id: 'yearly',   label: 'Yearly',   days: 365,  icon: Calendar,   accent: '#8b5cf6', bg: 'rgba(139,92,246,0.08)',  border: 'rgba(139,92,246,0.22)' },
+  { id: 'lifetime', label: 'Lifetime', days: null, icon: ShieldCheck, accent: '#10b981', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.22)' },
+];
 
 export default function Subscription() {
   const [subState, setSubState] = useState<SubscriptionState | null>(null);
@@ -15,27 +36,24 @@ export default function Subscription() {
   const [isActivating, setIsActivating] = useState(false);
   const [fingerprint, setFingerprint] = useState('');
   const [fpCopied, setFpCopied] = useState(false);
+  const [timeLeft, setTimeLeft] = useState<string>('');
   const { addNotification } = useNotifications();
 
-  const [timeLeft, setTimeLeft] = useState<string>('');
   useEffect(() => {
     loadSubscription();
-
-    // Load device fingerprint
-    window.api.getFingerprint().then((res) => {
+    window.api.getFingerprint().then((res: any) => {
       if (res.success && res.data) setFingerprint(res.data);
     });
-
     const timer = setInterval(() => {
       const state = subService.getState();
       if (state.expiryDate) {
         const diff = new Date(state.expiryDate).getTime() - Date.now();
         if (diff > 0) {
-          const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-          const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-          const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-          const secs = Math.floor((diff % (1000 * 60)) / 1000);
-          setTimeLeft(`${days}d ${hours}h ${mins}m ${secs}s`);
+          const d = Math.floor(diff / 86400000);
+          const h = Math.floor((diff % 86400000) / 3600000);
+          const m = Math.floor((diff % 3600000) / 60000);
+          const s = Math.floor((diff % 60000) / 1000);
+          setTimeLeft(`${d}d ${h}h ${m}m ${s}s`);
         } else {
           setTimeLeft('Expired');
         }
@@ -47,17 +65,12 @@ export default function Subscription() {
   const loadSubscription = async () => {
     const state = await subService.initialize();
     setSubState(state);
-
     try {
       const settings = await window.api.getSettings();
-      if (settings.success && settings.data) {
-        if (settings.data.business_name) {
-          setBusinessName(settings.data.business_name);
-        }
+      if (settings.success && settings.data?.business_name) {
+        setBusinessName(settings.data.business_name);
       }
-    } catch (e) {
-      console.error("Failed to load business name for subscription view");
-    }
+    } catch {}
   };
 
   const handleCopyFingerprint = async () => {
@@ -71,19 +84,18 @@ export default function Subscription() {
   const handleActivate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activationKey) return;
-
     setIsActivating(true);
     try {
       const res = await window.api.activateAppV2(activationKey.trim());
       if (res.success) {
-        addNotification("Subscription Renewed", "Your license key has been successfully applied.", "success");
+        addNotification('Subscription Renewed', 'Your license key has been successfully applied.', 'success');
         setActivationKey('');
         await loadSubscription();
       } else {
-        addNotification("Activation Failed", res.error || "Invalid license key", "error");
+        addNotification('Activation Failed', res.error || 'Invalid license key', 'error');
       }
     } catch (err: any) {
-      addNotification("Activation Error", err.message, "error");
+      addNotification('Activation Error', err.message, 'error');
     } finally {
       setIsActivating(false);
     }
@@ -91,234 +103,375 @@ export default function Subscription() {
 
   if (!subState) return null;
 
+  const isLifetime = subState.plan === 'lifetime';
+  const isActive   = subState.isActive && !subState.isGracePeriod;
+  const isGrace    = subState.isGracePeriod;
+  const isExpired  = subState.isExpired && !subState.isGracePeriod;
+
+  const activePlan = PLANS.find(p => p.id === subState.plan) ?? PLANS[1];
+
+  /* ── status colour tokens ───────────────────────────────── */
+  const statusCfg = isLifetime
+    ? { label: 'Lifetime', badge: 'bg-emerald-500', icon: ShieldCheck, glow: 'rgba(16,185,129,0.18)', ring: '#10b981' }
+    : isActive
+    ? { label: 'Active',   badge: 'bg-emerald-500', icon: ShieldCheck, glow: 'rgba(16,185,129,0.12)', ring: '#10b981' }
+    : isGrace
+    ? { label: 'Grace Period', badge: 'bg-amber-500', icon: AlertCircle, glow: 'rgba(245,158,11,0.14)', ring: '#f59e0b' }
+    : { label: 'Expired', badge: 'bg-red-600', icon: ShieldAlert, glow: 'rgba(239,68,68,0.14)', ring: '#ef4444' };
+
+  const StatusIcon = statusCfg.icon;
+
   return (
-    <div className="max-w-4xl mx-auto space-y-6 pb-12 animate-in fade-in">
-      <div className="mb-10 text-center">
-        <h1 className="text-3xl font-extrabold tracking-tight">Subscription Management</h1>
-        <p className="text-muted-foreground mt-2">Manage your license and activate premium features.</p>
-      </div>
+    <div className="max-w-4xl mx-auto pb-16 space-y-7">
 
-      {/* Plan Cards Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        {[
-          { name: 'Weekly', days: 7, icon: <Zap size={20} className="text-yellow-600" />, color: 'bg-yellow-500/5 border-yellow-500/20' },
-          { name: 'Monthly', days: 30, icon: <Clock size={20} className="text-blue-600" />, color: 'bg-blue-500/5 border-blue-500/20' },
-          { name: 'Yearly', days: 365, icon: <Calendar size={20} className="text-purple-600" />, color: 'bg-purple-500/5 border-purple-500/20' },
-          { name: 'Lifetime', days: '∞ Unlimited', icon: <ShieldCheck size={20} className="text-emerald-600" />, color: 'bg-emerald-500/5 border-emerald-500/20' },
-        ].map(plan => (
-          <div key={plan.name} className={cn("p-5 rounded-2xl border flex flex-col items-center text-center gap-2 transition-all hover:shadow-md hover:-translate-y-1", plan.color)}>
-            <div className="p-3 rounded-xl bg-white/80 shadow-sm mb-1">{plan.icon}</div>
-            <h3 className="font-bold text-sm">{plan.name}</h3>
-            <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-widest">{plan.days} {typeof plan.days === 'number' ? 'Days' : ''}</p>
-          </div>
-        ))}
-      </div>
+      {/* ── HERO STATUS CARD ─────────────────────────────── */}
+      <motion.div
+        variants={fadeUp} initial="hidden" animate="show" custom={0}
+        style={{ background: `radial-gradient(ellipse at 60% 0%, ${statusCfg.glow} 0%, transparent 65%)` }}
+        className="relative rounded-2xl border border-border/60 bg-card overflow-hidden p-6 md:p-8"
+      >
+        {/* decorative grid */}
+        <div className="pointer-events-none absolute inset-0 opacity-[0.025]"
+          style={{ backgroundImage: 'linear-gradient(rgba(99,102,241,0.6) 1px,transparent 1px),linear-gradient(90deg,rgba(99,102,241,0.6) 1px,transparent 1px)', backgroundSize: '32px 32px' }}
+        />
 
-      {subState.plan !== 'lifetime' && subState.daysRemaining <= 5 && (
-        <div className="bg-destructive border border-destructive rounded-xl p-5 flex flex-col md:flex-row items-center justify-between gap-6 animate-in slide-in-from-top duration-500 shadow-xl shadow-destructive/20 text-white">
-          <div className="flex items-center gap-4">
-            <div className="bg-white/20 p-3 rounded-2xl text-white backdrop-blur-md shadow-inner animate-pulse">
-              <ShieldAlert size={28} />
+        <div className="relative flex flex-col md:flex-row md:items-center gap-6">
+          {/* Icon ring */}
+          <div className="shrink-0 relative">
+            <div
+              className="w-20 h-20 rounded-2xl flex items-center justify-center"
+              style={{ background: `linear-gradient(135deg, ${statusCfg.glow} 0%, rgba(255,255,255,0.04) 100%)`, border: `1.5px solid ${statusCfg.ring}40` }}
+            >
+              <StatusIcon size={36} style={{ color: statusCfg.ring }} />
             </div>
-            <div>
-              <h3 className="text-xl font-black uppercase tracking-tight">Urgent: License Expiring</h3>
-              <p className="text-white/80 text-sm font-medium mt-1">
-                Remaining Time: <span className="font-black text-white underline underline-offset-4 decoration-2">{timeLeft || `${subState.daysRemaining} days`}</span>
+            <div
+              className="absolute inset-0 rounded-2xl animate-pulse"
+              style={{ boxShadow: `0 0 28px 4px ${statusCfg.glow}` }}
+            />
+          </div>
+
+          {/* Days / status */}
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-2 mb-1">
+              <span className={cn("text-[10px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-full text-white", statusCfg.badge)}>
+                {statusCfg.label}
+              </span>
+              {businessName && (
+                <span className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                  {businessName}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-end gap-3 mt-2">
+              <span className="text-6xl md:text-7xl font-black leading-none tracking-tight" style={{ color: statusCfg.ring }}>
+                {isLifetime ? '∞' : Math.max(0, subState.daysRemaining)}
+              </span>
+              {!isLifetime && (
+                <div className="mb-2">
+                  <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest leading-none">Days</p>
+                  <p className="text-xs text-muted-foreground leading-none mt-1">Remaining</p>
+                </div>
+              )}
+              {isLifetime && (
+                <div className="mb-2">
+                  <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest">Lifetime</p>
+                  <p className="text-xs text-muted-foreground">Never expires</p>
+                </div>
+              )}
+            </div>
+
+            {timeLeft && !isLifetime && timeLeft !== 'Expired' && (
+              <p className="text-xs font-mono text-muted-foreground mt-2 tabular-nums">{timeLeft}</p>
+            )}
+          </div>
+
+          {/* Expiry date */}
+          {subState.expiryDate && !isLifetime && (
+            <div className="shrink-0 text-right">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold">Expires</p>
+              <p className="text-sm font-semibold mt-1">
+                {new Date(subState.expiryDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-0.5 capitalize font-medium">
+                {subState.plan} plan
               </p>
             </div>
-          </div>
-          <div className="font-mono text-sm font-bold bg-black/20 px-4 py-2 rounded-lg border border-white/20 backdrop-blur-md">
-            EXPIRES ON: {new Date(subState.expiryDate || 0).toLocaleDateString()}
-          </div>
+          )}
         </div>
+      </motion.div>
+
+      {/* ── URGENT EXPIRY BANNER ─────────────────────────── */}
+      {!isLifetime && subState.daysRemaining <= 5 && (
+        <motion.div variants={fadeUp} initial="hidden" animate="show" custom={1}
+          className="rounded-xl border border-red-500/30 bg-red-500/8 p-4 flex items-center gap-4"
+        >
+          <div className="shrink-0 w-10 h-10 rounded-xl bg-red-500/15 flex items-center justify-center">
+            <ShieldAlert size={20} className="text-red-500 animate-pulse" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-red-600 dark:text-red-400">Urgent: License Expiring</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Time remaining: <span className="font-mono font-bold text-foreground">{timeLeft || `${subState.daysRemaining} days`}</span>
+            </p>
+          </div>
+          <p className="text-[10px] font-mono font-bold text-muted-foreground shrink-0">
+            {new Date(subState.expiryDate || 0).toLocaleDateString()}
+          </p>
+        </motion.div>
       )}
 
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t">
-        <p className="text-muted-foreground text-sm">Your Current Status</p>
-        {businessName && (
-          <Badge variant="secondary" className="px-4 py-1.5 text-sm font-bold bg-primary/10 text-primary border-primary/20">
-            {businessName}
-          </Badge>
-        )}
-      </div>
+      {/* ── PLAN CARDS ───────────────────────────────────── */}
+      <motion.div variants={fadeUp} initial="hidden" animate="show" custom={2}>
+        <p className="text-[10px] font-black uppercase tracking-[0.12em] text-muted-foreground/60 mb-3">Available Plans</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {PLANS.map((plan) => {
+            const Icon = plan.icon;
+            const isCurrent = subState.plan === plan.id;
+            return (
+              <div
+                key={plan.id}
+                style={{
+                  background: isCurrent ? plan.bg : undefined,
+                  borderColor: isCurrent ? plan.border : undefined,
+                }}
+                className={cn(
+                  "relative p-4 rounded-xl border flex flex-col items-center text-center gap-2 transition-all duration-200",
+                  isCurrent
+                    ? "shadow-md"
+                    : "border-border/50 bg-card hover:border-border hover:-translate-y-0.5"
+                )}
+              >
+                {isCurrent && (
+                  <span
+                    className="absolute -top-2 left-1/2 -translate-x-1/2 text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full text-white"
+                    style={{ background: plan.accent }}
+                  >
+                    Current
+                  </span>
+                )}
+                <div
+                  className="w-9 h-9 rounded-lg flex items-center justify-center"
+                  style={{ background: `${plan.accent}18`, border: `1px solid ${plan.accent}30` }}
+                >
+                  <Icon size={18} style={{ color: plan.accent }} />
+                </div>
+                <p className="text-xs font-bold">{plan.label}</p>
+                <p className="text-[10px] text-muted-foreground font-semibold">
+                  {plan.days === null ? '∞ Unlimited' : `${plan.days} Days`}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </motion.div>
 
-      {/* Device Fingerprint Card */}
-      <Card className="border-border shadow-sm bg-gradient-to-r from-primary/5 via-background to-purple-500/5 border-primary/15">
-        <CardContent className="p-5">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3 min-w-0 flex-1">
-              <div className="bg-primary/10 p-2.5 rounded-xl border border-primary/20 flex-shrink-0">
-                <Fingerprint size={20} className="text-primary" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-bold mb-1">Device Fingerprint</p>
-                <p className="font-mono text-xs break-all text-foreground/90 leading-relaxed select-all">{fingerprint || 'Loading...'}</p>
-              </div>
+      {/* ── FINGERPRINT ─────────────────────────────────── */}
+      <motion.div variants={fadeUp} initial="hidden" animate="show" custom={3}
+        className="rounded-xl border border-primary/15 bg-gradient-to-r from-primary/5 via-card to-violet-500/5 p-4"
+      >
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+              <Fingerprint size={18} className="text-primary" />
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              className={cn(
-                "flex-shrink-0 h-9 px-4 text-xs font-bold gap-1.5 rounded-lg transition-all active:scale-95",
-                fpCopied ? "bg-green-500/10 border-green-500/30 text-green-600" : "hover:bg-primary/10 hover:border-primary/30 hover:text-primary"
-              )}
-              onClick={handleCopyFingerprint}
-              disabled={!fingerprint}
-            >
-              {fpCopied ? (
-                <><ShieldCheck size={14} /> Copied!</>
-              ) : (
-                <><Copy size={14} /> Copy</>
-              )}
-            </Button>
-          </div>
-          <p className="text-[10px] text-muted-foreground mt-3 ml-[52px] italic">Share this fingerprint with the developer when requesting a license key</p>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Status Card */}
-        <Card className="border-border shadow-sm">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Calendar size={20} className="text-muted-foreground" />
-              Current Status
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="flex items-center justify-between border-b pb-4">
-              <span className="text-muted-foreground text-sm">Status</span>
-              {subState.isActive && !subState.isGracePeriod && <Badge className="bg-green-500 hover:bg-green-600">Active</Badge>}
-              {subState.isGracePeriod && <Badge className="bg-amber-500 hover:bg-amber-600">Grace Period</Badge>}
-              {subState.isExpired && !subState.isGracePeriod && <Badge variant="destructive">Expired</Badge>}
-            </div>
-
-            <div className="flex items-center justify-between border-b pb-4">
-              <span className="text-muted-foreground text-sm">Current Plan</span>
-              <span className="font-medium capitalize">{subState.plan}</span>
-            </div>
-
-            <div className="flex items-center justify-between border-b pb-4">
-              <span className="text-muted-foreground text-sm">Days Remaining</span>
-              <span className={`text-2xl font-bold ${subState.daysRemaining <= 5 ? 'text-destructive' : 'text-primary'}`}>
-                {subState.plan === 'lifetime' ? '∞' : Math.max(0, subState.daysRemaining)}
-              </span>
-            </div>
-
-            {subState.expiryDate && subState.plan !== 'lifetime' && (
-              <div className="flex items-center justify-between pt-2">
-                <span className="text-muted-foreground text-sm">Expiration Date</span>
-                <span className="font-medium text-sm">
-                  {new Date(subState.expiryDate).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                </span>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Renewal Card */}
-        <Card className="border-border shadow-sm">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Key size={20} className="text-muted-foreground" />
-              Renew License
-            </CardTitle>
-            <CardDescription>Enter your encrypted fingerprint-locked key.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleActivate} className="space-y-4">
-              <div className="space-y-2">
-                <Input
-                  type="text"
-                  placeholder="Paste license key here..."
-                  value={activationKey}
-                  onChange={(e) => setActivationKey(e.target.value)}
-                  className="font-mono text-xs"
-                />
-              </div>
-              <Button type="submit" disabled={!activationKey || isActivating} className="w-full">
-                {isActivating ? 'Verifying...' : 'Apply License Key'}
-              </Button>
-            </form>
-
-            <div className="mt-8 bg-muted/50 p-4 rounded-lg border text-sm space-y-3">
-              <div className="flex items-center gap-2 font-semibold">
-                <ShieldAlert size={16} className="text-primary" />
-                How renewals work
-              </div>
-              <p className="text-muted-foreground text-xs leading-relaxed">
-                When you enter a new license key, the purchased days are <strong>added</strong> to your current remaining days. You will not lose any existing time if you renew early.
+            <div className="min-w-0 flex-1">
+              <p className="text-[9px] text-muted-foreground uppercase tracking-widest font-black mb-1">Device Fingerprint</p>
+              <p className="font-mono text-[11px] break-all text-foreground/85 leading-relaxed select-all">
+                {fingerprint || 'Loading...'}
               </p>
             </div>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className={cn(
+              "shrink-0 h-8 px-3 text-[11px] font-bold gap-1.5 rounded-lg transition-all active:scale-95",
+              fpCopied
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-600"
+                : "hover:bg-primary/10 hover:border-primary/30 hover:text-primary"
+            )}
+            onClick={handleCopyFingerprint}
+            disabled={!fingerprint}
+          >
+            {fpCopied ? <><CheckCircle2 size={13} /> Copied!</> : <><Copy size={13} /> Copy</>}
+          </Button>
+        </div>
+        <p className="text-[10px] text-muted-foreground mt-3 ml-12 italic">
+          Share this fingerprint with the developer when requesting a license key.
+        </p>
+      </motion.div>
 
-      {/* Payment & Support Card */}
-      <Card className="border-border shadow-sm bg-primary/5 border-primary/20 overflow-hidden">
+      {/* ── STATUS + RENEWAL GRID ────────────────────────── */}
+      <motion.div variants={fadeUp} initial="hidden" animate="show" custom={4}
+        className="grid gap-4 md:grid-cols-2"
+      >
+        {/* Status */}
+        <div className="rounded-xl border border-border/60 bg-card p-5 space-y-4">
+          <div className="flex items-center gap-2 pb-3 border-b border-border/50">
+            <Calendar size={16} className="text-muted-foreground" />
+            <h3 className="text-sm font-bold">Current Status</h3>
+          </div>
+
+          {[
+            {
+              label: 'Status',
+              value: (
+                <span className={cn("text-[10px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full text-white", statusCfg.badge)}>
+                  {statusCfg.label}
+                </span>
+              )
+            },
+            {
+              label: 'Plan',
+              value: <span className="text-sm font-semibold capitalize">{subState.plan}</span>
+            },
+            {
+              label: 'Days Remaining',
+              value: (
+                <span className={cn("text-2xl font-black tabular-nums", subState.daysRemaining <= 5 ? 'text-red-500' : 'text-primary')}>
+                  {isLifetime ? '∞' : Math.max(0, subState.daysRemaining)}
+                </span>
+              )
+            },
+            ...(subState.expiryDate && !isLifetime ? [{
+              label: 'Expiry Date',
+              value: (
+                <span className="text-xs font-medium text-right">
+                  {new Date(subState.expiryDate).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}
+                </span>
+              )
+            }] : []),
+          ].map((row, i, arr) => (
+            <div key={row.label} className={cn("flex items-center justify-between", i < arr.length - 1 && "pb-3 border-b border-border/40")}>
+              <span className="text-xs text-muted-foreground">{row.label}</span>
+              {row.value}
+            </div>
+          ))}
+        </div>
+
+        {/* Renewal */}
+        <div className="rounded-xl border border-border/60 bg-card p-5 flex flex-col">
+          <div className="flex items-center gap-2 pb-3 border-b border-border/50 mb-4">
+            <Key size={16} className="text-muted-foreground" />
+            <h3 className="text-sm font-bold">Renew License</h3>
+          </div>
+          <p className="text-[11px] text-muted-foreground mb-4">
+            Enter your encrypted fingerprint-locked key below.
+          </p>
+
+          <form onSubmit={handleActivate} className="space-y-3 flex-1 flex flex-col">
+            <Input
+              type="text"
+              placeholder="Paste license key here..."
+              value={activationKey}
+              onChange={(e) => setActivationKey(e.target.value)}
+              className="font-mono text-xs h-10"
+            />
+            <Button
+              type="submit"
+              disabled={!activationKey || isActivating}
+              className="w-full h-10 font-bold gap-2"
+            >
+              {isActivating
+                ? <><div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Verifying...</>
+                : <><Key size={14} /> Apply License Key</>}
+            </Button>
+          </form>
+
+          <div className="mt-4 p-3 rounded-lg bg-muted/40 border border-border/40">
+            <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-1.5">
+              <AlertCircle size={11} /> How it works
+            </div>
+            <p className="text-[10px] text-muted-foreground leading-relaxed">
+              New days are <strong className="text-foreground">added</strong> to existing remaining days. Renewing early never loses you time.
+            </p>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* ── PAYMENT + SUPPORT ────────────────────────────── */}
+      <motion.div variants={fadeUp} initial="hidden" animate="show" custom={5}
+        className="rounded-2xl border border-border/60 bg-card overflow-hidden"
+      >
         <div className="grid md:grid-cols-2">
-          <CardContent className="p-8 border-b md:border-b-0 md:border-r border-primary/10">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="bg-primary/10 p-3 rounded-xl">
-                <Wallet size={24} className="text-primary" />
+
+          {/* Payment methods */}
+          <div className="p-6 border-b md:border-b-0 md:border-r border-border/50">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+                <Wallet size={17} className="text-primary" />
               </div>
-              <h3 className="text-xl font-bold">Payment Methods</h3>
+              <h3 className="text-sm font-bold">Payment Methods</h3>
             </div>
-
-            <div className="space-y-6">
-              <div className="flex items-center justify-between p-4 bg-background rounded-xl border border-primary/10 shadow-sm group hover:border-primary/30 transition-all">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-emerald-600 rounded-lg flex items-center justify-center font-black text-white text-xs text-center leading-tight tracking-tighter">EASY<br />PAISA</div>
-                  <div>
-                    <p className="font-bold text-sm">Easypaisa Transfer</p>
-                    <p className="text-xs text-muted-foreground">Account: </p>
-                  </div>
-                </div>
-                <div className="text-[10px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold uppercase">Active</div>
-              </div>
-
-              <div className="flex items-center justify-between p-4 bg-background rounded-xl border border-primary/10 shadow-sm group hover:border-primary/30 transition-all">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-red-600 rounded-lg flex items-center justify-center font-black text-white text-xs text-center leading-tight tracking-tighter">JAZZ<br />CASH</div>
-                  <div>
-                    <p className="font-bold text-sm">JazzCash Transfer</p>
-                    <p className="text-xs text-muted-foreground">Account: 0329-8748232</p>
-                  </div>
-                </div>
-                <div className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold uppercase">Active</div>
-              </div>
-            </div>
-
-            <p className="text-[11px] text-muted-foreground mt-6 italic">
-              * Please send a screenshot of the payment receipt to the developer after transfer to receive your key.
-            </p>
-          </CardContent>
-
-          <CardContent className="p-8 bg-background/50">
-            <div className="flex items-center gap-3 mb-6">
-              <div className="bg-primary/10 p-3 rounded-xl">
-                <Mail size={24} className="text-primary" />
-              </div>
-              <h3 className="text-xl font-bold">Contact Support</h3>
-            </div>
-
-            <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
-              If you have any issues with activation or need a custom license plan, please contact our support team.
-            </p>
 
             <div className="space-y-3">
-              <div className="flex items-center justify-between p-3 bg-background rounded-lg border text-sm group">
-                <span className="text-muted-foreground text-xs uppercase font-bold tracking-wider">Email</span>
-                <span className="font-mono font-bold text-primary select-all">munibahmad4735@gmail.com</span>
+              {/* Easypaisa */}
+              <div className="flex items-center gap-4 p-3.5 rounded-xl border border-border/50 bg-background/50 hover:border-emerald-500/30 transition-colors">
+                <div className="w-11 h-11 bg-emerald-600 rounded-xl flex items-center justify-center shrink-0">
+                  <span className="text-white font-black text-[9px] text-center leading-tight tracking-tighter">EASY<br/>PAISA</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold">Easypaisa Transfer</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">Account: —</p>
+                </div>
+                <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  Active
+                </span>
               </div>
-              <div className="flex items-center justify-between p-3 bg-background rounded-lg border text-sm group">
-                <span className="text-muted-foreground text-xs uppercase font-bold tracking-wider">WhatsApp</span>
-                <span className="font-mono font-bold text-primary select-all">03298748232</span>
+
+              {/* JazzCash */}
+              <div className="flex items-center gap-4 p-3.5 rounded-xl border border-border/50 bg-background/50 hover:border-red-500/30 transition-colors">
+                <div className="w-11 h-11 bg-red-600 rounded-xl flex items-center justify-center shrink-0">
+                  <span className="text-white font-black text-[9px] text-center leading-tight tracking-tighter">JAZZ<br/>CASH</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold">JazzCash Transfer</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">Account: 0329-8748232</p>
+                </div>
+                <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20">
+                  Active
+                </span>
               </div>
             </div>
-          </CardContent>
+
+            <p className="text-[10px] text-muted-foreground mt-4 italic leading-relaxed">
+              * Send a screenshot of the payment receipt to the developer after transfer to receive your key.
+            </p>
+          </div>
+
+          {/* Support */}
+          <div className="p-6 bg-background/30">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+                <Mail size={17} className="text-primary" />
+              </div>
+              <h3 className="text-sm font-bold">Contact Support</h3>
+            </div>
+
+            <p className="text-[11px] text-muted-foreground mb-4 leading-relaxed">
+              Issues with activation? Need a custom plan? Reach out directly.
+            </p>
+
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-background/60">
+                <span className="text-[9px] text-muted-foreground uppercase font-black tracking-wider">Email</span>
+                <span className="font-mono text-[11px] font-bold text-primary select-all">munibahmad4735@gmail.com</span>
+              </div>
+              <div className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-background/60">
+                <span className="text-[9px] text-muted-foreground uppercase font-black tracking-wider">WhatsApp</span>
+                <span className="font-mono text-[11px] font-bold text-primary select-all">03298748232</span>
+              </div>
+            </div>
+
+            <div className="mt-4 p-3 rounded-lg border border-primary/15 bg-primary/5">
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                <span className="font-bold text-foreground">Response time:</span> Usually within a few hours during business hours (PKT).
+              </p>
+            </div>
+          </div>
         </div>
-      </Card>
+      </motion.div>
     </div>
   );
 }
