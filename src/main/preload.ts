@@ -136,7 +136,13 @@ const api = {
   createStockAdjustment: (data: any) => ipcRenderer.invoke('create-stock-adjustment', data),
   getStockAdjustments: (productId?: number) => ipcRenderer.invoke('get-stock-adjustments', productId),
   cancelSale: (id: number) => ipcRenderer.invoke('cancel-sale', id),
-  cancelPurchase: (id: number) => ipcRenderer.invoke('cancel-purchase', id)
+  cancelPurchase: (id: number) => ipcRenderer.invoke('cancel-purchase', id),
+
+  // Cloud sync queue
+  getPendingSyncItems: (limit?: number) => ipcRenderer.invoke('get-pending-sync-items', limit ?? 20),
+  markSyncItemsDone: (ids: number[]) => ipcRenderer.invoke('mark-sync-items-done', ids),
+  markSyncItemFailed: (id: number, error: string) => ipcRenderer.invoke('mark-sync-item-failed', id, error),
+  enqueueSaleSync: (saleId: number) => ipcRenderer.invoke('enqueue-sale-sync', saleId),
 };
 
 contextBridge.exposeInMainWorld('api', api);

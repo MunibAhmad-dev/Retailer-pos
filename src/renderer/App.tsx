@@ -6,6 +6,7 @@ import { NotificationProvider } from './components/NotificationProvider';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { subService } from './services/subscription';
+import { initPosSync, stopPosSync } from './services/api/posSync';
 import Layout from './components/Layout';
 import Login from './components/Login';
 import Dashboard from './pages/Dashboard';
@@ -44,6 +45,9 @@ export default function App() {
 
   React.useEffect(() => {
     checkActivation();
+    // Start the cloud sync worker (no-op if cloud_backend_url is not configured)
+    initPosSync().catch(() => {});
+    return () => stopPosSync();
   }, []);
 
   const checkActivation = async () => {

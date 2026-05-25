@@ -1725,6 +1725,91 @@ ipcMain.handle('enqueue-sync-item', async (_, item: { entityType: string; operat
   }
 });
 
+// ─── Cloud Sync Queue Handlers ────────────────────────────────────────────────
+
+// Get pending sync queue items (up to N), skipping items that have exhausted retries
+ipcMain.handle('get-pending-sync-items', async (_, limit = 20) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const items = db.prepare(`
+      SELECT id, entity_type, operation, payload, attempts
+      FROM cloud_sync_queue
+      WHERE status = 'pending' AND attempts < 5
+      ORDER BY id ASC
+      LIMIT ?
+    `).all(limit);
+    return { success: true, data: items };
+  } catch (e: any) {
+    logger.error('get-pending-sync-items failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Mark multiple sync items as successfully synced
+ipcMain.handle('mark-sync-items-done', async (_, ids: number[]) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    if (!Array.isArray(ids) || ids.length === 0) return { success: true };
+    const stmt = db.prepare(`
+      UPDATE cloud_sync_queue
+      SET status = 'synced', updated_at = datetime('now', 'localtime')
+      WHERE id = ?
+    `);
+    const run = db.transaction((idList: number[]) => {
+      for (const id of idList) stmt.run(id);
+    });
+    run(ids);
+    return { success: true };
+  } catch (e: any) {
+    logger.error('mark-sync-items-done failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Mark one sync item as failed; bump attempt count; auto-fail after 5 attempts
+ipcMain.handle('mark-sync-item-failed', async (_, id: number, error: string) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    db.prepare(`
+      UPDATE cloud_sync_queue
+      SET attempts   = attempts + 1,
+          last_error = ?,
+          status     = CASE WHEN attempts + 1 >= 5 THEN 'failed' ELSE 'pending' END,
+          updated_at = datetime('now', 'localtime')
+      WHERE id = ?
+    `).run(error || '', id);
+    return { success: true };
+  } catch (e: any) {
+    logger.error('mark-sync-item-failed failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
+// Enqueue a sale for cloud sync by its local sale ID (reads sale + items from DB)
+ipcMain.handle('enqueue-sale-sync', async (_, saleId: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const sale = db.prepare(`
+      SELECT s.*,
+             GROUP_CONCAT(si.product_name || ' (x' || si.quantity || ')') AS items_summary,
+             COUNT(si.id) AS items_count
+      FROM sales s
+      LEFT JOIN sale_items si ON s.id = si.sale_id
+      WHERE s.id = ?
+      GROUP BY s.id
+    `).get(saleId) as any;
+    if (!sale) return { success: false, error: 'Sale not found' };
+    db.prepare(`
+      INSERT INTO cloud_sync_queue (entity_type, operation, payload, status)
+      VALUES ('sale', 'create', ?, 'pending')
+    `).run(JSON.stringify(sale));
+    return { success: true };
+  } catch (e: any) {
+    logger.error('enqueue-sale-sync failed:', e);
+    return { success: false, error: e.message };
+  }
+});
+
 // ============= SALES HANDLERS =============
 
 ipcMain.handle('create-sale', async (_, data: {
@@ -1877,6 +1962,21 @@ ipcMain.handle('create-sale', async (_, data: {
 
     // Trigger auto-export after a successful sale
     triggerAutoExport();
+
+    // Auto-enqueue this sale for cloud sync (fire-and-forget, non-blocking)
+    try {
+      const saleRow = db.prepare(`
+        SELECT s.*, GROUP_CONCAT(si.product_name || ' (x' || si.quantity || ')') AS items_summary, COUNT(si.id) AS items_count
+        FROM sales s LEFT JOIN sale_items si ON s.id = si.sale_id
+        WHERE s.id = ? GROUP BY s.id
+      `).get(saleId as number) as any;
+      if (saleRow) {
+        db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('sale', 'create', ?, 'pending')`)
+          .run(JSON.stringify(saleRow));
+      }
+    } catch (syncErr: any) {
+      logger.warn('Auto-enqueue sale sync failed (non-fatal):', syncErr.message);
+    }
 
     return { success: true, data: { saleId } };
   } catch (error: any) {

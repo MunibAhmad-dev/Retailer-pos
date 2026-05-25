@@ -74,6 +74,10 @@ export default function Setup({ onComplete }: SetupProps) {
   const [fpCopied, setFpCopied] = useState(false);
   const [saving, setSaving] = useState(false);
   const [activationKey, setActivationKey] = useState('');
+  const [verificationMethod, setVerificationMethod] = useState<'offline' | 'online' | null>(null);
+  const [onlineVerificationStatus, setOnlineVerificationStatus] = useState<'waiting' | 'approved' | 'failed' | null>(null);
+  const [onlineVerificationError, setOnlineVerificationError] = useState<string | null>(null);
+  const [pollAttempts, setPollAttempts] = useState(0);
   const [form, setForm] = useState({
     store_name: '', owner_full_name: '', store_phone: '',
     owner_email: '', store_address: '',
@@ -107,7 +111,9 @@ export default function Setup({ onComplete }: SetupProps) {
     setSaving(true);
     try {
       const key = withKey ? activationKey.trim() : '';
-      const payload = {
+      
+      // Save to local Electron storage (this saves settings locally)
+      const localPayload = {
         store_name: form.store_name.trim(),
         business_name: form.store_name.trim(),
         owner_full_name: form.owner_full_name.trim(),
@@ -118,9 +124,16 @@ export default function Setup({ onComplete }: SetupProps) {
         activation_key: key,
         license_mode: key ? 'online' : 'offline',
         setup_completed: true,
+        // Use the mobile number as the instance ID for cloud registration
+        instance_id: form.store_phone.trim(),
       };
-      const res = await window.api.updateSettings(payload as any);
+      const res = await window.api.updateSettings(localPayload as any);
       if (!res.success) throw new Error(res.error || 'Could not save setup');
+
+      // Note: Cloud registration happens automatically via the posSync worker
+      // which periodically calls registerInstance() if cloud_backend_url is configured.
+      // This ensures the Setup form doesn't block on cloud connectivity.
+
       if (key) {
         const lic = await window.api.activateAppV2(key);
         if (!lic.success)
@@ -140,6 +153,86 @@ export default function Setup({ onComplete }: SetupProps) {
     await navigator.clipboard.writeText(fingerprint);
     setFpCopied(true);
     setTimeout(() => setFpCopied(false), 2500);
+  };
+
+  /* ── Online Verification ────────────────────────────────────────── */
+  const handleOnlineVerify = async () => {
+    setSaving(true);
+    setOnlineVerificationStatus('waiting');
+    setOnlineVerificationError(null);
+    try {
+      // First, save setup locally
+      const localPayload = {
+        store_name: form.store_name.trim(),
+        business_name: form.store_name.trim(),
+        owner_full_name: form.owner_full_name.trim(),
+        store_phone: form.store_phone.trim(),
+        owner_mobile: form.store_phone.trim(),
+        owner_email: form.owner_email.trim(),
+        store_address: form.store_address.trim(),
+        instance_id: form.store_phone.trim(),
+        license_mode: 'online',
+        setup_completed: true,
+      };
+      
+      const res = await window.api.updateSettings(localPayload as any);
+      if (!res.success) throw new Error(res.error || 'Could not save setup');
+
+      // Now poll the backend for approval status
+      setPollAttempts(0);
+      pollForApproval(form.store_phone.trim(), 0);
+    } catch (err: any) {
+      setOnlineVerificationStatus('failed');
+      setOnlineVerificationError(err?.message || 'Could not start online verification');
+      setSaving(false);
+    }
+  };
+
+  const pollForApproval = async (instanceId: string, attempts: number) => {
+    if (attempts > 120) { // Poll for max 10 minutes (120 * 5 sec)
+      setOnlineVerificationStatus('failed');
+      setOnlineVerificationError('Approval timeout. Please contact support.');
+      setSaving(false);
+      return;
+    }
+
+    try {
+      // Check if instance is approved via a simple HTTP call to backend
+      const cloudUrl = (window as any).api?.getSettings?.()?.['cloud_backend_url'] || process.env.REACT_APP_CLOUD_BACKEND_URL || '';
+      if (!cloudUrl) {
+        // If no cloud URL configured, just complete setup
+        addNotification('Setup Complete', 'Your POS is ready to use (Offline Mode).', 'success');
+        setSaving(false);
+        onComplete();
+        return;
+      }
+
+      const checkResponse = await fetch(`${cloudUrl.replace(/\/$/, '')}/api/instances/status`, {
+        headers: { 'Authorization': `Bearer ${(window as any).api?.getCloudToken?.() || ''}` }
+      }).catch(() => null);
+
+      if (checkResponse?.ok) {
+        const data = await checkResponse.json();
+        if (data?.success && data?.approval_status === 'approved') {
+          setOnlineVerificationStatus('approved');
+          setPollAttempts(attempts + 1);
+          addNotification('Approved!', 'Your business has been approved by OsaTech. Setup complete!', 'success');
+          setTimeout(() => {
+            setSaving(false);
+            onComplete();
+          }, 1500);
+          return;
+        }
+      }
+
+      // Keep polling
+      setPollAttempts(attempts + 1);
+      setTimeout(() => pollForApproval(instanceId, attempts + 1), 5000);
+    } catch (err: any) {
+      // Continue polling on error
+      setPollAttempts(attempts + 1);
+      setTimeout(() => pollForApproval(instanceId, attempts + 1), 5000);
+    }
   };
 
   /* ── shared inline styles ─────────────────────────────────── */

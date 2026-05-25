@@ -277,7 +277,7 @@ export default function Sales() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | ''>('');
   const [customerSearch, setCustomerSearch] = useState('');
 
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'online'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'online' | 'udhaar'>('cash');
   const [discountValue, setDiscountValue] = useState<string>('');
   const [discountType, setDiscountType] = useState<'fixed' | 'percentage'>('fixed');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -756,9 +756,12 @@ export default function Sales() {
 
     setIsProcessing(true);
 
+    // Udhaar = full credit, 0 paid. Otherwise use entered amount or fallback.
     const parsedAmountPaid = Number(amountPaid);
     const fallbackAmountPaid = selectedCustomerId ? 0 : total;
-    const amtPaid = amountPaid === "" || !Number.isFinite(parsedAmountPaid) ? fallbackAmountPaid : parsedAmountPaid;
+    const amtPaid = paymentMethod === 'udhaar'
+      ? 0
+      : (amountPaid === "" || !Number.isFinite(parsedAmountPaid) ? fallbackAmountPaid : parsedAmountPaid);
 
     if (amtPaid > total) {
       addNotification("Invalid Payment", "Amount paid cannot exceed the sale total.", "error");
@@ -767,12 +770,16 @@ export default function Sales() {
     }
 
     let paymentStatus = 'Paid';
-    if (!isNaN(amtPaid) && amtPaid < total) {
+    if (paymentMethod === 'udhaar') {
+      paymentStatus = 'Pending';
+    } else if (!isNaN(amtPaid) && amtPaid < total) {
       paymentStatus = 'Partial';
-    }
-    if (!isNaN(amtPaid) && amtPaid <= 0 && total > 0) {
+    } else if (!isNaN(amtPaid) && amtPaid <= 0 && total > 0) {
       paymentStatus = 'Pending';
     }
+
+    // Map 'udhaar' to 'credit' for storage so isCreditMethod() detects it
+    const storedMethod = paymentMethod === 'udhaar' ? 'credit' : paymentMethod;
 
     try {
       const result = await window.api.createSale({
@@ -780,7 +787,7 @@ export default function Sales() {
         subtotal,
         discount: discountAmount,
         total,
-        payment_method: paymentMethod,
+        payment_method: storedMethod,
         payment_status: paymentStatus,
         amount_paid: isNaN(amtPaid) ? (selectedCustomerId ? 0 : total) : amtPaid,
         register_id: currentRegister?.id || null,
@@ -814,6 +821,7 @@ export default function Sales() {
         setDiscountValue('');
         setAmountPaid('');
         setSelectedCustomerId('');
+        setPaymentMethod('cash');
 
         setTimeout(() => {
           setShowCheckoutModal(false);
@@ -859,9 +867,15 @@ export default function Sales() {
   const hasAmountPaidValue = amountPaid.trim() !== '';
   const enteredAmountPaid = hasAmountPaidValue ? Number(amountPaid) : NaN;
   const normalizedAmountPaid = Number.isFinite(enteredAmountPaid) ? enteredAmountPaid : 0;
-  const effectiveAmountPaid = hasAmountPaidValue ? normalizedAmountPaid : (selectedCustomerId ? 0 : total);
+  // Udhaar = full credit, amount paid is always 0; otherwise use entered or fallback
+  const effectiveAmountPaid = paymentMethod === 'udhaar'
+    ? 0
+    : hasAmountPaidValue ? normalizedAmountPaid : (selectedCustomerId ? 0 : total);
   const isOverPayment = effectiveAmountPaid > total;
-  const isWalkInPartial = !selectedCustomerId && effectiveAmountPaid < total;
+  // Block walk-in partial ONLY for cash/online — udhaar requires a customer (handled separately)
+  const isWalkInPartial = paymentMethod !== 'udhaar' && !selectedCustomerId && effectiveAmountPaid < total;
+  // Udhaar requires a customer to be selected so debt is tracked
+  const isUdhaarWithoutCustomer = paymentMethod === 'udhaar' && !selectedCustomerId;
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] animate-in fade-in">
@@ -1164,9 +1178,24 @@ export default function Sales() {
                   onClick={() => setPaymentMethod(m)}
                   className="flex-1 capitalize shadow-none transition-all"
                 >
-                  {m === 'online' ? 'Online' : m}
+                  {m === 'online' ? 'Online' : 'Cash'}
                 </Button>
               ))}
+              <Button
+                variant={paymentMethod === 'udhaar' ? 'default' : 'outline'}
+                onClick={() => {
+                  setPaymentMethod('udhaar');
+                  setAmountPaid('0');
+                }}
+                className={cn(
+                  'flex-1 shadow-none transition-all',
+                  paymentMethod === 'udhaar'
+                    ? 'bg-rose-600 hover:bg-rose-700 text-white border-transparent'
+                    : 'border-rose-500/40 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30'
+                )}
+              >
+                Udhaar
+              </Button>
             </div>
 
             <div className="w-full space-y-1.5 mb-1 mt-1">
@@ -1263,7 +1292,7 @@ export default function Sales() {
           <Card className="w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
             <CardHeader className="flex flex-row items-center justify-between pb-2 border-b">
               <CardTitle className="text-xl">Checkout</CardTitle>
-              <Button variant="ghost" size="icon" onClick={() => setShowCheckoutModal(false)} className="-mr-2">
+              <Button variant="ghost" size="icon" onClick={() => { setShowCheckoutModal(false); setPaymentMethod('cash'); }} className="-mr-2">
                 <X size={18} />
               </Button>
             </CardHeader>
@@ -1386,52 +1415,62 @@ export default function Sales() {
                 </div>
 
                 <div className="space-y-2 mt-4">
-                  <label className="text-sm font-semibold">Amount Paid (PKR)</label>
+                  <label className="text-sm font-semibold">
+                    Amount Paid (PKR)
+                    {paymentMethod === 'udhaar' && (
+                      <span className="ml-2 text-xs font-normal text-rose-500">— Udhaar: PKR 0</span>
+                    )}
+                  </label>
                   <Input
                     type="text"
-                    value={amountPaid}
+                    value={paymentMethod === 'udhaar' ? '0' : amountPaid}
+                    disabled={paymentMethod === 'udhaar'}
                     onChange={(e) => {
                       const digitsOnly = e.target.value.replace(/[^0-9]/g, '');
-                      if (!digitsOnly) {
-                        setAmountPaid('');
-                        return;
-                      }
-
+                      if (!digitsOnly) { setAmountPaid(''); return; }
                       const numericValue = Number(digitsOnly);
-                      if (!Number.isFinite(numericValue)) {
-                        setAmountPaid('');
-                        return;
-                      }
-
+                      if (!Number.isFinite(numericValue)) { setAmountPaid(''); return; }
                       const clampedValue = Math.min(numericValue, Math.max(0, total));
                       setAmountPaid(String(clampedValue));
                     }}
-                    className="text-lg font-bold bg-background"
+                    className={cn(
+                      'text-lg font-bold bg-background',
+                      paymentMethod === 'udhaar' && 'opacity-50 cursor-not-allowed'
+                    )}
                   />
                   {isOverPayment && (
                     <p className="text-xs text-destructive font-medium">
                       Amount paid cannot be greater than total amount.
                     </p>
                   )}
-                  {selectedCustomerId ? (
-                    <p className="text-xs text-muted-foreground">
-                      Remaining balance: {fmtPKR(Math.max(0, total - effectiveAmountPaid))} will be added to customer's Qaraz (Credit).
+                  {isUdhaarWithoutCustomer && (
+                    <p className="text-xs text-destructive font-medium">
+                      ⚠ Udhaar requires a customer — select one above to track this debt.
                     </p>
-                  ) : (
-                    isWalkInPartial && (
-                      <p className="text-xs text-destructive font-medium">
-                        Warning: Walk-in customers cannot have partial payments. Please select a customer to track credit.
-                      </p>
-                    )
+                  )}
+                  {!isUdhaarWithoutCustomer && selectedCustomerId && paymentMethod === 'udhaar' && (
+                    <p className="text-xs text-rose-500 font-medium">
+                      Full amount of {fmtPKR(total)} will be added to customer's Qaraz.
+                    </p>
+                  )}
+                  {!isUdhaarWithoutCustomer && selectedCustomerId && paymentMethod !== 'udhaar' && effectiveAmountPaid < total && (
+                    <p className="text-xs text-muted-foreground">
+                      Remaining {fmtPKR(total - effectiveAmountPaid)} will be added to customer's Qaraz.
+                    </p>
+                  )}
+                  {isWalkInPartial && (
+                    <p className="text-xs text-destructive font-medium">
+                      Walk-in customers cannot have partial payments. Select a customer or use Udhaar.
+                    </p>
                   )}
                 </div>
               </div>
             </CardContent>
             <CardFooter className="flex gap-3 pt-0">
-              <Button variant="outline" className="w-full" onClick={() => setShowCheckoutModal(false)}>Cancel</Button>
+              <Button variant="outline" className="w-full" onClick={() => { setShowCheckoutModal(false); setPaymentMethod('cash'); }}>Cancel</Button>
               <Button
                 onClick={processPayment}
-                disabled={isProcessing || isWalkInPartial || isOverPayment}
+                disabled={isProcessing || isWalkInPartial || isOverPayment || isUdhaarWithoutCustomer}
                 className="w-full"
               >
                 {isProcessing ? <RefreshCw size={18} className="animate-spin mr-2" /> : <CheckCircle size={18} className="mr-2" />}

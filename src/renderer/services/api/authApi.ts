@@ -22,7 +22,15 @@ export async function login(payload: LoginPayload) {
 
 // Registers the current business with the cloud backend.
 export async function registerBusiness(payload: RegisterBusinessPayload) {
-  return request<any>({ method: 'POST', url: '/businesses/register', data: payload });
+  return request<any>({ method: 'POST', url: '/instances/register', data: {
+    instance_id: payload.mobile,
+    store_name: payload.businessName,
+    owner_name: payload.ownerName,
+    owner_mobile: payload.mobile,
+    owner_email: payload.email || '',
+    store_address: payload.address || '',
+    business_name: payload.businessName,
+  } });
 }
 
 // Validates a license without requiring local POS storage to stop working.

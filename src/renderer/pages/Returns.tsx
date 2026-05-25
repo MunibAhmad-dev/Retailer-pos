@@ -1,653 +1,876 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Undo2, Search, Filter, Calendar, ArrowRight, Package, User, Truck, RefreshCcw, MoreHorizontal, Eye, Printer, Plus, MessageCircle, X, Trash2 } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
+ import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  BarChart3, DollarSign, ShoppingBag, TrendingUp, RefreshCw, Award,
+  Calendar, ChevronRight, Activity, Percent, Search, X, Layers,
+  TrendingDown, Wallet, LayoutDashboard, Clock, ArrowUpRight, CreditCard
+} from 'lucide-react';
+import dayjs from 'dayjs';
+import {
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar,
+  ComposedChart, Line
+} from 'recharts';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { useNotifications } from '../components/NotificationProvider';
 import { cn, formatInvoiceId } from '../lib/utils';
-import { useLocation } from 'react-router-dom';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../components/ui/dialog';
-import { Label } from '../components/ui/label';
+import { useNotifications } from '../components/NotificationProvider';
+import { usePagination } from '../hooks/usePagination';
+import { LoadMoreButton } from '../components/Pagination';
 
-const fmtPKR = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
-const getReturnDate = (ret: any) => ret?.date_created || ret?.date_returned || ret?.date_added || null;
-const formatReturnDate = (ret: any) => {
-  const d = getReturnDate(ret);
-  if (!d) return '-';
-  const dt = new Date(d);
-  return Number.isNaN(dt.getTime()) ? '-' : dt.toLocaleString();
+interface ReportData {
+  sales: Array<{ id: number; total: number; date_created: string; payment_method: string }>;
+  revenue: number;
+  topProducts: Array<{ name: string; qty_sold: number; revenue: number }>;
+}
+
+const fmtPKR = (n: number) => 'PKR ' + Math.round(n || 0).toLocaleString('en-PK');
+const fmtK = (n: number) => n >= 1000 ? `PKR ${(n / 1000).toFixed(1)}k` : `PKR ${Math.round(n)}`;
+
+const getDates = (period: string) => {
+  const endDate = dayjs().endOf('day').toISOString();
+  let startDate = '';
+  if (period === 'today') startDate = dayjs().startOf('day').toISOString();
+  else if (period === 'week') startDate = dayjs().subtract(7, 'day').startOf('day').toISOString();
+  else if (period === 'month') startDate = dayjs().startOf('month').toISOString();
+  return { startDate, endDate };
 };
 
-export default function Returns() {
-  const [saleReturns, setSaleReturns] = useState<any[]>([]);
-  const [purchaseReturns, setPurchaseReturns] = useState<any[]>([]);
+const fadeUp = {
+  hidden: { opacity: 0, y: 18 },
+  visible: (i = 0) => ({
+    opacity: 1, y: 0,
+    transition: { duration: 0.4, delay: i * 0.055, ease: [0.23, 1, 0.32, 1] }
+  }),
+};
+
+// ── Shared chart tooltip ────────────────────────────────────────────────────
+const ChartTip = ({ active, payload, label, pkr = true }: any) => {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="bg-card/95 backdrop-blur-xl border border-border/50 rounded-2xl px-3.5 py-3 shadow-2xl min-w-[150px]">
+      {label && <p className="text-[11px] text-muted-foreground mb-2 font-medium">{label}</p>}
+      {payload.map((item: any, i: number) => (
+        <div key={i} className="flex items-center gap-2 mb-1 last:mb-0">
+          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: item.color || item.fill }} />
+          <span className="text-[11px] text-muted-foreground">{item.name}:</span>
+          <span className="text-[11px] font-bold" style={{ color: item.color || item.fill }}>
+            {pkr && (item.name !== 'Orders' && item.name !== 'orders')
+              ? fmtK(item.value)
+              : item.value}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// ── Donut centre label ──────────────────────────────────────────────────────
+const DonutLabel = ({ cx, cy, total, label }: any) => (
+  <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle">
+    <tspan x={cx} dy="-6" fontSize="15" fontWeight="700" fill="currentColor">{total}</tspan>
+    <tspan x={cx} dy="18" fontSize="10" fill="gray">{label}</tspan>
+  </text>
+);
+
+export default function Reports() {
+  const [report, setReport] = useState<ReportData>({ sales: [], revenue: 0, topProducts: [] });
+  const [profitData, setProfitData] = useState<{ revenue: number; cogs: number; expenses: number; profit: number } | null>(null);
+  const [period, setPeriod] = useState<'today' | 'week' | 'month' | 'custom'>('today');
+  const [customStart, setCustomStart] = useState(dayjs().startOf('month').format('YYYY-MM-DD'));
+  const [customEnd, setCustomEnd] = useState(dayjs().format('YYYY-MM-DD'));
   const [loading, setLoading] = useState(true);
-  const [loadingMoreSales, setLoadingMoreSales] = useState(false);
-  const [loadingMorePurchases, setLoadingMorePurchases] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [dateFilter, setDateFilter] = useState<'today' | 'weekly' | 'monthly' | 'custom'>('weekly');
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
-
-  const [salesOffset, setSalesOffset] = useState(0);
-  const [purchaseOffset, setPurchaseOffset] = useState(0);
-  const [salesTotal, setSalesTotal] = useState(0);
-  const [purchaseTotal, setPurchaseTotal] = useState(0);
-
+  const [showModal, setShowModal] = useState(false);
+  const [productSearch, setProductSearch] = useState('');
   const { addNotification } = useNotifications();
-  const PAGE_SIZE = 15;
 
-  const location = useLocation();
+  useEffect(() => { loadReport(); }, [period]);
 
-  const [showReturnModal, setShowReturnModal] = useState(false);
-  const [returnSaleId, setReturnSaleId] = useState<number | null>(null);
-  const [saleItems, setSaleItems] = useState<any[]>([]);
-  const [returnQtys, setReturnQtys] = useState<Record<number, string>>({});
-  const [returnReason, setReturnReason] = useState('Damaged / Defective');
-  const [processingReturn, setProcessingReturn] = useState(false);
-  const isMountedRef = useRef(true);
-
-  useEffect(() => {
-    isMountedRef.current = true;
-    loadReturns(true);
-
-    // Check for sale_id in URL
-    const params = new URLSearchParams(location.search);
-    const saleId = params.get('sale_id');
-    if (saleId) {
-      handleInitiateReturn(Number(saleId));
-    }
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, [location.search, dateFilter, fromDate, toDate]);
-
-  const handleInitiateReturn = async (saleId: number) => {
+  const loadReport = async () => {
     setLoading(true);
     try {
-      const res = await window.api.getSaleItems(saleId);
-      if (res.success) {
-        if (!isMountedRef.current) return;
-        setReturnSaleId(saleId);
-        setSaleItems(res.data);
-        const initialQtys: Record<number, string> = {};
-        res.data.forEach((item: any) => {
-          initialQtys[item.id] = '';
-        });
-        setReturnQtys(initialQtys);
-        setShowReturnModal(true);
+      let sd = '', ed = '';
+      if (period === 'custom') {
+        sd = dayjs(customStart).startOf('day').toISOString();
+        ed = dayjs(customEnd).endOf('day').toISOString();
       } else {
-        addNotification("Error", "Could not load sale items", "error");
+        const d = getDates(period);
+        sd = d.startDate;
+        ed = d.endDate;
       }
-    } catch (err) {
-      addNotification("Error", "Failed to fetch sale details", "error");
-    } finally {
-      if (isMountedRef.current) setLoading(false);
-    }
-  };
-
-  const submitReturn = async () => {
-    const itemsToReturn = saleItems
-      .map(item => {
-        const rawQty = parseInt(String(returnQtys[item.id])) || 0;
-        const qty = Math.min(item.quantity, rawQty);
-        return {
-          id: item.id,
-          product_id: item.product_id,
-          product_name: item.product_name,
-          price: item.price,
-          return_qty: qty
-        };
-      })
-      .filter(item => item.return_qty > 0);
-
-    if (itemsToReturn.length === 0) {
-      addNotification("Warning", "Please specify at least one item to return", "warning");
-      return;
-    }
-
-    const totalRefunded = itemsToReturn.reduce((sum, item) => sum + (item.price * item.return_qty), 0);
-
-    setProcessingReturn(true);
-    try {
-      const res = await window.api.createSaleReturn({
-        sale_id: returnSaleId,
-        items: itemsToReturn,
-        total_returned: totalRefunded,
-        reason: returnReason
-      });
-
-      if (res.success) {
-        addNotification("Success", "Return processed successfully", "success");
-        setShowReturnModal(false);
-        loadReturns(true);
-      } else {
-        addNotification("Error", res.error || "Failed to process return", "error");
-      }
-    } catch (err) {
-      addNotification("Error", "An unexpected error occurred", "error");
-    } finally {
-      setProcessingReturn(false);
-    }
-  };
-
-  const loadReturns = async (fresh = false) => {
-    if (fresh) {
-      setLoading(true);
-      setSalesOffset(0);
-      setPurchaseOffset(0);
-    }
-
-    try {
-      const sOff = fresh ? 0 : salesOffset;
-      const pOff = fresh ? 0 : purchaseOffset;
-
-      const [salesRes, purchaseRes] = await Promise.all([
-        window.api.getSaleReturns({
-          limit: PAGE_SIZE,
-          offset: sOff,
-          dateFilter,
-          startDate: fromDate ? `${fromDate} 00:00:00` : undefined,
-          endDate: toDate ? `${toDate} 23:59:59` : undefined
-        }),
-        window.api.getPurchaseReturns({
-          limit: PAGE_SIZE,
-          offset: pOff,
-          dateFilter,
-          startDate: fromDate ? `${fromDate} 00:00:00` : undefined,
-          endDate: toDate ? `${toDate} 23:59:59` : undefined
-        })
+      const args = period === 'custom' ? { startDate: sd, endDate: ed } : period;
+      const [res, profitRes] = await Promise.all([
+        window.api.getReport(args),
+        window.api.getProfitLossReport({ startDate: sd, endDate: ed })
       ]);
-
-      if (salesRes.success) {
-        if (!isMountedRef.current) return;
-        if (fresh) setSaleReturns(salesRes.data);
-        else setSaleReturns(prev => [...prev, ...salesRes.data]);
-        setSalesTotal(salesRes.total);
-        setSalesOffset(sOff + PAGE_SIZE);
-      }
-
-      if (purchaseRes.success) {
-        if (!isMountedRef.current) return;
-        if (fresh) setPurchaseReturns(purchaseRes.data);
-        else setPurchaseReturns(prev => [...prev, ...purchaseRes.data]);
-        setPurchaseTotal(purchaseRes.total);
-        setPurchaseOffset(pOff + PAGE_SIZE);
-      }
-    } catch (error) {
-      addNotification("Error", "Failed to load returns history", "error");
+      setReport((res?.success && res.data) ? res.data as any : { sales: [], revenue: 0, topProducts: [] });
+      setProfitData(profitRes?.success ? profitRes.data : null);
+    } catch (_) {
+      addNotification('Error', 'Could not load report data.', 'error');
     } finally {
-      if (isMountedRef.current) setLoading(false);
+      setLoading(false);
     }
   };
 
-  const loadMoreSales = async () => {
-    setLoadingMoreSales(true);
-    try {
-      const res = await window.api.getSaleReturns({
-        limit: PAGE_SIZE,
-        offset: salesOffset,
-        dateFilter,
-        startDate: fromDate ? `${fromDate} 00:00:00` : undefined,
-        endDate: toDate ? `${toDate} 23:59:59` : undefined
-      });
-      if (res.success) {
-        setSaleReturns(prev => [...prev, ...res.data]);
-        setSalesTotal(res.total);
-        setSalesOffset(prev => prev + PAGE_SIZE);
-      }
-    } finally {
-      setLoadingMoreSales(false);
-    }
-  };
+  // ── Derived data ────────────────────────────────────────────────────────
+  const cashSales = useMemo(() => report.sales.filter(s => s.payment_method === 'cash'), [report.sales]);
+  const onlineSales = useMemo(() => report.sales.filter(s => s.payment_method !== 'cash'), [report.sales]);
+  const avgOrder = report.sales.length > 0 ? report.revenue / report.sales.length : 0;
+  const profitMargin = profitData?.revenue > 0
+    ? ((profitData.profit / profitData.revenue) * 100).toFixed(1) : '0';
+  const periodLabel = period === 'today' ? 'Today' : period === 'week' ? 'Last 7 Days'
+    : period === 'month' ? 'This Month' : 'Custom Range';
 
-  const loadMorePurchases = async () => {
-    setLoadingMorePurchases(true);
-    try {
-      const res = await window.api.getPurchaseReturns({
-        limit: PAGE_SIZE,
-        offset: purchaseOffset,
-        dateFilter,
-        startDate: fromDate ? `${fromDate} 00:00:00` : undefined,
-        endDate: toDate ? `${toDate} 23:59:59` : undefined
-      });
-      if (res.success) {
-        setPurchaseReturns(prev => [...prev, ...res.data]);
-        setPurchaseTotal(res.total);
-        setPurchaseOffset(prev => prev + PAGE_SIZE);
-      }
-    } finally {
-      setLoadingMorePurchases(false);
-    }
-  };
-
-  const printReturn = async (ret: any, type: 'sale' | 'purchase') => {
-    const isSale = type === 'sale';
-    const partyLabel = isSale ? 'Customer' : 'Vendor';
-    const partyName = isSale ? ret.customer_name : ret.vendor_name;
-    const amount = isSale ? ret.total_refunded : ret.total_returned;
-    const refLabel = isSale ? 'Invoice No' : 'Purchase ID';
-    const refId = isSale ? ret.sale_id : ret.purchase_id;
-    const formattedRef = isSale ? formatInvoiceId(ret.sale_id, ret.sale_date || ret.date_created) : `#${ret.purchase_id}`;
-
-    // Fetch items for this return
-    const itemsRes = isSale
-      ? await window.api.getSaleReturnItems(ret.id)
-      : await window.api.getPurchaseReturnItems(ret.id);
-
-    const items = itemsRes.success ? itemsRes.data : [];
-
-    const html = `
-      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; max-width: 400px; margin: auto; border: 1px solid #eee;">
-        <div style="text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px;">
-          <h2 style="margin: 0; text-transform: uppercase;">Return Receipt</h2>
-          <p style="margin: 5px 0; font-size: 12px; color: #666;">Date: ${formatReturnDate(ret)}</p>
-        </div>
-        
-        <div style="margin-bottom: 20px;">
-          <p style="margin: 5px 0;"><strong>Return ID:</strong> #${ret.id}</p>
-          <p style="margin: 5px 0;"><strong>${refLabel}:</strong> ${formattedRef}</p>
-          <p style="margin: 5px 0;"><strong>${partyLabel}:</strong> ${partyName || 'N/A'}</p>
-          <p style="margin: 5px 0; font-size: 11px; color: #666;"><strong>Orig. Purchase Total:</strong> PKR ${Math.round(ret.original_total).toLocaleString()}</p>
-        </div>
-
-        <div style="margin-bottom: 20px;">
-          <table style="width: 100%; border-collapse: collapse; font-size: 12px;">
-            <thead style="border-bottom: 1px solid #eee;">
-              <tr>
-                <th style="text-align: left; padding: 5px 0;">Item</th>
-                <th style="text-align: center; padding: 5px 0;">Qty</th>
-                <th style="text-align: right; padding: 5px 0;">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${items.map((item: any) => `
-                <tr>
-                  <td style="padding: 5px 0;">${item.product_name}</td>
-                  <td style="text-align: center; padding: 5px 0;">${item.quantity}</td>
-                  <td style="text-align: right; padding: 5px 0;">PKR ${Math.round(item.price * item.quantity).toLocaleString()}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-        
-        <div style="background: #f9f9f9; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-          <p style="margin: 0 0 5px 0; font-size: 12px; text-transform: uppercase; color: #888;">Total ${isSale ? 'Refunded' : 'Returned Value'}</p>
-          <p style="margin: 0; font-size: 24px; font-weight: bold; color: ${isSale ? '#e11d48' : '#2563eb'};">PKR ${Math.round(amount).toLocaleString()}</p>
-        </div>
-        
-        <div style="margin-bottom: 20px;">
-          <p style="margin: 0 0 5px 0; font-weight: bold;">Reason for Return:</p>
-          <p style="margin: 0; font-style: italic; color: #555;">${ret.reason || 'No reason provided'}</p>
-        </div>
-        
-        <div style="text-align: center; font-size: 10px; color: #aaa; margin-top: 30px; border-top: 1px dashed #ddd; pt-10;">
-          <p>This is a computer-generated return receipt.</p>
-        </div>
-      </div>
-    `;
-    await window.api.printInvoice(html);
-  };
-
-  const shareOnWhatsApp = async (ret: any, type: 'sale' | 'purchase') => {
-    const isSale = type === 'sale';
-    const amount = isSale ? ret.total_refunded : ret.total_returned;
-    const refId = isSale ? ret.sale_id : ret.purchase_id;
-    const partyName = isSale ? ret.customer_name : ret.vendor_name;
-
-    // Fetch items for this return
-    const itemsRes = isSale
-      ? await window.api.getSaleReturnItems(ret.id)
-      : await window.api.getPurchaseReturnItems(ret.id);
-
-    const items = itemsRes.success ? itemsRes.data : [];
-
-    let itemsList = "";
-    items.forEach((item: any) => {
-      itemsList += `• ${item.product_name} (x${item.quantity})\n`;
+  // Revenue trend (grouped by date or hour)
+  const trendData = useMemo(() => {
+    if (!report.sales.length) return [];
+    const fmt = period === 'today' ? 'HH' : 'YYYY-MM-DD';
+    const lbl = period === 'today' ? 'h A' : period === 'week' ? 'ddd DD' : 'MMM DD';
+    const map: Record<string, { label: string; Revenue: number; Orders: number }> = {};
+    report.sales.forEach(s => {
+      const key = dayjs(s.date_created).format(fmt);
+      if (!map[key]) map[key] = { label: dayjs(s.date_created).format(lbl), Revenue: 0, Orders: 0 };
+      map[key].Revenue += s.total;
+      map[key].Orders += 1;
     });
+    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([, v]) => v);
+  }, [report.sales, period]);
 
-    const message = `*Return Receipt*\n\n` +
-      `*Return ID:* #${ret.id}\n` +
-      `*${isSale ? 'Invoice No' : 'Purchase Ref'}:* ${formattedRef}\n` +
-      `*Party:* ${partyName || 'N/A'}\n` +
-      `*Date:* ${formatReturnDate(ret)}\n\n` +
-      `*Items Returned:*\n${itemsList}\n` +
-      `*Total ${isSale ? 'Refund' : 'Returned Value'}:* PKR ${Math.round(amount).toLocaleString()}\n` +
-      `*Reason:* ${ret.reason || 'No reason provided'}\n\n` +
-      `_Generated by Retailer POS_`;
+  // Hourly for modal
+  const hourlyData = useMemo(() => {
+    const hrs = Array.from({ length: 24 }, (_, i) => ({
+      hour: dayjs().startOf('day').add(i, 'hour').format('hA'),
+      Revenue: 0, Orders: 0,
+    }));
+    report.sales.forEach(s => {
+      const h = dayjs(s.date_created).hour();
+      hrs[h].Revenue += s.total;
+      hrs[h].Orders += 1;
+    });
+    return hrs;
+  }, [report.sales]);
 
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
-  };
+  // Payment breakdown
+  const paymentData = useMemo(() => [
+    { name: 'Cash', value: cashSales.length, revenue: cashSales.reduce((s, t) => s + t.total, 0), color: '#10b981' },
+    { name: 'Online/Card', value: onlineSales.length, revenue: onlineSales.reduce((s, t) => s + t.total, 0), color: '#3b82f6' },
+  ].filter(d => d.value > 0), [cashSales, onlineSales]);
 
-  const normalizedSearch = searchTerm.trim().toLowerCase();
-  const filteredSales = useMemo(() => saleReturns.filter(r =>
-    (r.customer_name || '').toLowerCase().includes(normalizedSearch) ||
-    String(r.sale_id).includes(normalizedSearch) ||
-    String(r.id).includes(normalizedSearch)
-  ), [saleReturns, normalizedSearch]);
+  // P&L bars
+  const plData = useMemo(() => profitData ? [
+    { name: 'Revenue', value: profitData.revenue, fill: '#10b981' },
+    { name: 'COGS', value: profitData.cogs, fill: '#f59e0b' },
+    { name: 'Expenses', value: profitData.expenses, fill: '#ef4444' },
+    { name: 'Net Profit', value: Math.max(0, profitData.profit), fill: '#8b5cf6' },
+  ] : [], [profitData]);
 
-  const filteredPurchases = useMemo(() => purchaseReturns.filter(r =>
-    (r.vendor_name || '').toLowerCase().includes(normalizedSearch) ||
-    String(r.purchase_id).includes(normalizedSearch) ||
-    String(r.id).includes(normalizedSearch)
-  ), [purchaseReturns, normalizedSearch]);
+  // Top products for horizontal bar
+  const topProductsChart = useMemo(() =>
+    report.topProducts.slice(0, 8)
+      .map(p => ({
+        name: p.name.length > 20 ? p.name.slice(0, 20) + '…' : p.name,
+        Revenue: p.revenue, Qty: p.qty_sold,
+      }))
+      .reverse(),
+    [report.topProducts]);
+
+  const filteredProducts = useMemo(() =>
+    report.topProducts.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase())),
+    [report.topProducts, productSearch]);
+
+  const { visible: visibleProds, hasMore: hasMoreProds, loadMore: loadMoreProds, total: prodsTotal, showing: prodsShowing } = usePagination(filteredProducts, 10, 1);
+  const { visible: visibleSales, hasMore: hasMoreSales, loadMore: loadMoreSales, total: salesTotal, showing: salesShowing } = usePagination(report.sales, 10, 1);
+
+  // ── KPI card config ─────────────────────────────────────────────────────
+  const kpis = [
+    { label: 'Total Revenue', value: fmtPKR(profitData?.revenue || report.revenue), icon: DollarSign, color: 'text-emerald-500', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20', sub: period !== 'today' ? `Avg ${fmtPKR(avgOrder)}/order` : undefined },
+    { label: 'COGS', value: fmtPKR(profitData?.cogs || 0), icon: Activity, color: 'text-amber-500', bg: 'bg-amber-500/10', border: 'border-amber-500/20', sub: profitData?.revenue ? `${((profitData.cogs / profitData.revenue) * 100).toFixed(1)}% of revenue` : undefined },
+    { label: 'Expenses', value: fmtPKR(profitData?.expenses || 0), icon: TrendingDown, color: 'text-red-500', bg: 'bg-red-500/10', border: 'border-red-500/20' },
+    { label: 'Net Profit', value: fmtPKR(profitData?.profit || 0), icon: TrendingUp, color: (profitData?.profit ?? 0) >= 0 ? 'text-primary' : 'text-destructive', bg: 'bg-primary/10', border: 'border-primary/20', sub: `${profitMargin}% margin` },
+    { label: 'Profit Margin', value: `${profitMargin}%`, icon: Percent, color: 'text-violet-500', bg: 'bg-violet-500/10', border: 'border-violet-500/20' },
+    { label: 'Total Orders', value: report.sales.length.toString(), icon: ShoppingBag, color: 'text-blue-500', bg: 'bg-blue-500/10', border: 'border-blue-500/20', sub: `Avg ${fmtPKR(avgOrder)}` },
+    { label: 'Cash / Online', value: `${cashSales.length} / ${onlineSales.length}`, icon: CreditCard, color: 'text-slate-500', bg: 'bg-slate-500/10', border: 'border-slate-500/20' },
+  ];
 
   return (
-    <div className="flex flex-col gap-6 animate-in fade-in duration-500">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Returns Management</h1>
-          <p className="text-muted-foreground mt-1 text-sm">Track and manage customer refunds and vendor returns</p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex gap-1 rounded-lg bg-muted p-1">
-            {(['today', 'weekly', 'monthly', 'custom'] as const).map((f) => (
-              <Button
-                key={f}
-                type="button"
-                variant={dateFilter === f ? 'default' : 'ghost'}
-                size="sm"
-                className="h-8"
-                onClick={() => setDateFilter(f)}
+    <div className="flex flex-col gap-6 w-full mb-8">
+
+      {/* ── Hero Header ── */}
+      <motion.div
+        initial={{ opacity: 0, y: -12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: [0.23, 1, 0.32, 1] }}
+        className="relative overflow-hidden rounded-2xl shadow-2xl"
+        style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 40%, #312e81 65%, #0f172a 100%)' }}
+      >
+        <div className="pointer-events-none absolute -top-14 -right-14 w-64 h-64 rounded-full bg-indigo-500/20 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-10 left-1/4 w-48 h-48 rounded-full bg-violet-500/15 blur-2xl" />
+        <div className="pointer-events-none absolute top-1/2 right-1/3 w-72 h-20 bg-purple-600/5 rounded-full blur-3xl" />
+
+        <div className="relative z-10 p-7">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+            <div>
+              <div className="flex items-center gap-4 mb-4">
+                <div className="bg-indigo-500/20 border border-indigo-400/30 rounded-2xl w-14 h-14 flex items-center justify-center shadow-lg backdrop-blur-sm flex-shrink-0">
+                  <BarChart3 size={26} className="text-indigo-300" />
+                </div>
+                <div>
+                  <p className="text-indigo-300/80 text-xs font-semibold uppercase tracking-widest mb-0.5">Financial Intelligence</p>
+                  <h1 className="text-white text-2xl sm:text-3xl font-bold tracking-tight">Sales Analytics & P&L</h1>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-2 bg-white/10 rounded-full px-4 py-1.5 text-white/80 text-sm font-medium backdrop-blur-sm">
+                  <Calendar size={13} className="text-indigo-300" />
+                  {periodLabel}
+                </div>
+                {report.sales.length > 0 && (
+                  <div className="flex items-center gap-2 bg-white/10 rounded-full px-4 py-1.5 text-white/80 text-sm font-medium backdrop-blur-sm">
+                    <ShoppingBag size={13} className="text-violet-300" />
+                    {report.sales.length} Orders
+                  </div>
+                )}
+                {profitData && (
+                  <div className={cn(
+                    'flex items-center gap-2 rounded-full px-4 py-1.5 text-sm font-medium backdrop-blur-sm border',
+                    profitData.profit >= 0
+                      ? 'bg-emerald-500/20 border-emerald-400/30 text-emerald-300'
+                      : 'bg-red-500/20 border-red-400/30 text-red-300'
+                  )}>
+                    <TrendingUp size={13} />
+                    {profitData.profit >= 0 ? '+' : ''}{fmtPKR(profitData.profit)}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 shrink-0">
+              <div className="flex items-center gap-1 bg-white/10 backdrop-blur-sm p-1 rounded-xl border border-white/20">
+                {(['today', 'week', 'month', 'custom'] as const).map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setPeriod(p)}
+                    disabled={loading}
+                    className={cn(
+                      'px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200',
+                      period === p
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-white/70 hover:text-white hover:bg-white/10'
+                    )}
+                  >
+                    {p === 'today' ? 'Today' : p === 'week' ? 'Week' : p === 'month' ? 'Month' : 'Custom'}
+                  </button>
+                ))}
+                <div className="w-px h-5 bg-white/20 mx-1" />
+                <button
+                  onClick={loadReport}
+                  disabled={loading}
+                  className="text-white/70 hover:text-white hover:bg-white/10 p-1.5 rounded-lg transition-colors"
+                >
+                  <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+              <button
+                onClick={() => setShowModal(true)}
+                className="flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-400 rounded-xl px-4 py-2.5 text-white text-sm font-semibold shadow-lg shadow-indigo-500/30 transition-all duration-200"
               >
-                {f === 'today' ? 'Today' : f === 'weekly' ? 'Weekly' : f === 'monthly' ? 'Monthly' : 'Custom'}
-              </Button>
-            ))}
+                <LayoutDashboard size={14} />
+                Deep Analytics
+              </button>
+            </div>
           </div>
-          {dateFilter === 'custom' && (
-            <>
-              <Input type="date" className="h-10 w-40" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
-              <Input type="date" className="h-10 w-40" value={toDate} onChange={(e) => setToDate(e.target.value)} />
-            </>
-          )}
-          <Button onClick={() => loadReturns(true)} variant="outline" className="gap-2 h-10 shadow-sm border-primary/20 hover:bg-primary/5">
-            <RefreshCcw size={16} className={loading ? "animate-spin" : ""} />
-            Refresh
-          </Button>
         </div>
+      </motion.div>
+
+      {/* ── Custom Range Picker ── */}
+      <AnimatePresence>
+        {period === 'custom' && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.25 }}
+            className="overflow-hidden"
+          >
+            <Card className="border-border/50">
+              <CardContent className="p-4 flex flex-wrap items-end gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-muted-foreground">Start Date</label>
+                  <Input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)} className="h-9 w-44" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-muted-foreground">End Date</label>
+                  <Input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)} className="h-9 w-44" />
+                </div>
+                <Button onClick={loadReport} disabled={loading} className="h-9 gap-2">
+                  <ArrowUpRight size={14} /> Apply Range
+                </Button>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── KPI Cards ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+        {kpis.map(({ label, value, icon: Icon, color, bg, border, sub }, i) => (
+          <motion.div key={label} variants={fadeUp} initial="hidden" animate="visible" custom={i + 1}>
+            <Card className={cn('border overflow-hidden', border)}>
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider leading-tight">{label}</p>
+                  <div className={cn('p-1.5 rounded-xl', bg)}>
+                    <Icon className={cn('w-3.5 h-3.5', color)} />
+                  </div>
+                </div>
+                <p className={cn('text-xl font-bold tracking-tight font-mono', color)}>{value}</p>
+                {sub && <p className="text-[10px] text-muted-foreground mt-0.5">{sub}</p>}
+              </CardContent>
+            </Card>
+          </motion.div>
+        ))}
       </div>
 
-      <Card className="border-none shadow-xl bg-card/60 backdrop-blur-md overflow-hidden">
-        <CardContent className="p-0">
-          <Tabs defaultValue="sales" className="w-full">
-            <div className="px-6 pt-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <TabsList className="bg-muted/50 p-1">
-                <TabsTrigger value="sales" className="gap-2 px-6">
-                  <User size={14} /> Sales Returns
-                </TabsTrigger>
-                <TabsTrigger value="purchases" className="gap-2 px-6">
-                  <Truck size={14} /> Purchase Returns
-                </TabsTrigger>
-              </TabsList>
-
-              <div className="relative w-full md:w-72">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" size={16} />
-                <Input
-                  placeholder="Search by ID or Name..."
-                  className="pl-10 h-10 bg-background/50 border-border/50 focus:border-primary/50 transition-all"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <TabsContent value="sales" className="mt-4 animate-in slide-in-from-left-4 duration-300">
-              <div className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/30 border-y hover:bg-muted/30">
-                      <TableHead className="pl-6 py-4">Return ID</TableHead>
-                      <TableHead>Sale Ref</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Reason</TableHead>
-                      <TableHead className="text-right pr-6">Refunded Amount</TableHead>
-                      <TableHead className="text-center">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredSales.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={7} className="h-40 text-center text-muted-foreground">
-                          <Undo2 size={40} className="mx-auto mb-3 opacity-20" />
-                          No sale returns found
-                        </TableCell>
-                      </TableRow>
-                    ) : filteredSales.map((ret) => (
-                      <TableRow key={ret.id} className="group hover:bg-primary/5 transition-colors cursor-default">
-                        <TableCell className="pl-6 font-mono font-bold text-primary">#{ret.id}</TableCell>
-                        <TableCell className="font-mono text-xs font-bold text-foreground/80">{formatInvoiceId(ret.sale_id, ret.sale_date || ret.date_created)}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary">
-                              {ret.customer_name?.charAt(0) || 'W'}
-                            </div>
-                            {ret.customer_name || 'Walk-in'}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground text-xs italic">
-                          {formatReturnDate(ret)}
-                        </TableCell>
-                        <TableCell className="max-w-[200px] truncate text-xs italic text-muted-foreground">
-                          {ret.reason || 'No reason provided'}
-                        </TableCell>
-                        <TableCell className="text-right font-bold text-destructive">
-                          {fmtPKR(ret.total_returned)}
-                        </TableCell>
-                        <TableCell className="text-center pr-6">
-                          <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500" onClick={() => printReturn(ret, 'sale')} title="Print Receipt">
-                              <Printer size={15} />
-                            </Button>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-emerald-500" onClick={() => shareOnWhatsApp(ret, 'sale')} title="Share on WhatsApp">
-                              <MessageCircle size={15} />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-
-                    {saleReturns.length < salesTotal && !searchTerm && (
-                      <TableRow>
-                        <TableCell colSpan={7} className="py-6 text-center">
-                          <Button variant="outline" onClick={loadMoreSales} disabled={loadingMoreSales} className="gap-2 border-primary/20 hover:bg-primary/5">
-                            {loadingMoreSales ? <RefreshCcw size={16} className="animate-spin" /> : <Plus size={16} />}
-                            Load More Sales Returns ({saleReturns.length} of {salesTotal})
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="purchases" className="mt-4 animate-in slide-in-from-right-4 duration-300">
-              <div className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-muted/30 border-y hover:bg-muted/30">
-                      <TableHead className="pl-6 py-4">Return ID</TableHead>
-                      <TableHead>Purchase Ref</TableHead>
-                      <TableHead>Vendor</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Reason</TableHead>
-                      <TableHead className="text-right pr-6">Returned Value</TableHead>
-                      <TableHead className="text-center">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredPurchases.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={7} className="h-40 text-center text-muted-foreground">
-                          <Truck size={40} className="mx-auto mb-3 opacity-20" />
-                          No purchase returns found
-                        </TableCell>
-                      </TableRow>
-                    ) : filteredPurchases.map((ret) => (
-                      <TableRow key={ret.id} className="group hover:bg-primary/5 transition-colors cursor-default">
-                        <TableCell className="pl-6 font-mono font-bold text-primary">#{ret.id}</TableCell>
-                        <TableCell className="font-medium">Purchase #{ret.purchase_id}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <div className="h-8 w-8 rounded-full bg-blue-500/10 flex items-center justify-center text-[10px] font-bold text-blue-600">
-                              {ret.vendor_name?.charAt(0)}
-                            </div>
-                            {ret.vendor_name}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground text-xs italic">
-                          {formatReturnDate(ret)}
-                        </TableCell>
-                        <TableCell className="max-w-[200px] truncate text-xs italic text-muted-foreground">
-                          {ret.reason || 'No reason provided'}
-                        </TableCell>
-                        <TableCell className="text-right font-bold text-blue-600">
-                          {fmtPKR(ret.total_returned)}
-                        </TableCell>
-                        <TableCell className="text-center pr-6">
-                          <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500" onClick={() => printReturn(ret, 'purchase')} title="Print Receipt">
-                              <Printer size={15} />
-                            </Button>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-emerald-500" onClick={() => shareOnWhatsApp(ret, 'purchase')} title="Share on WhatsApp">
-                              <MessageCircle size={15} />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-
-                    {purchaseReturns.length < purchaseTotal && !searchTerm && (
-                      <TableRow>
-                        <TableCell colSpan={7} className="py-6 text-center">
-                          <Button variant="outline" onClick={loadMorePurchases} disabled={loadingMorePurchases} className="gap-2 border-primary/20 hover:bg-primary/5">
-                            {loadingMorePurchases ? <RefreshCcw size={16} className="animate-spin" /> : <Plus size={16} />}
-                            Load More Purchase Returns ({purchaseReturns.length} of {purchaseTotal})
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
-
-      {/* Return Creation Modal */}
-      <Dialog open={showReturnModal} onOpenChange={setShowReturnModal}>
-        <DialogContent className="max-w-2xl bg-card border-none shadow-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-2xl font-bold flex items-center gap-2">
-              <Undo2 className="text-destructive" size={24} />
-              Process Sale Return
-            </DialogTitle>
-            <DialogDescription>
-              Select items and quantities to return for Sale #{returnSaleId}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4 my-4">
-            <div className="rounded-xl border border-border/50 overflow-hidden">
-              <Table>
-                <TableHeader className="bg-muted/50">
-                  <TableRow>
-                    <TableHead>Item</TableHead>
-                    <TableHead className="text-center">Orig. Qty</TableHead>
-                    <TableHead className="text-center">Price</TableHead>
-                    <TableHead className="text-right">Return Qty</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {saleItems.map((item) => (
-                    <TableRow key={item.id}>
-                      <TableCell className="font-medium">{item.product_name}</TableCell>
-                      <TableCell className="text-center">{item.quantity}</TableCell>
-                      <TableCell className="text-center text-xs text-muted-foreground">
-                        {fmtPKR(item.price)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <Input
-                            type="text"
-                            className={cn(
-                              "w-20 h-9 text-right font-bold transition-colors",
-                              (parseInt(String(returnQtys[item.id])) || 0) > item.quantity
-                                ? "border-red-500 bg-red-50 focus-visible:ring-red-500"
-                                : "border-destructive/20 focus:border-destructive/50"
-                            )}
-                            value={returnQtys[item.id] || ''}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/[^0-9]/g, '');
-                              setReturnQtys(prev => ({ ...prev, [item.id]: raw }));
-                            }}
-                            onBlur={() => {
-                              const raw = returnQtys[item.id];
-                              if (!raw) return;
-                              const val = Math.min(item.quantity, parseInt(String(raw)) || 0);
-                              setReturnQtys(prev => ({ ...prev, [item.id]: String(val) }));
-                            }}
-                            placeholder="0"
-                          />
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-
-            <div className="space-y-2 pt-2">
-              <Label className="text-xs font-bold uppercase text-muted-foreground">Reason for Return</Label>
-              <select
-                className="w-full h-11 rounded-xl bg-muted/30 border border-border/50 px-3 text-sm focus:ring-2 focus:ring-destructive outline-none transition-all"
-                value={returnReason}
-                onChange={(e) => setReturnReason(e.target.value)}
-              >
-                <option>Damaged / Defective</option>
-                <option>Wrong Item Delivered</option>
-                <option>Customer Dissatisfied</option>
-                <option>Expired Product</option>
-                <option>Other / Manual Correction</option>
-              </select>
-            </div>
-
-            <div className="bg-destructive/5 rounded-xl p-4 flex items-center justify-between border border-destructive/10 mt-4">
+      {/* ── Revenue Trend Chart (full width) ── */}
+      <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={8}>
+        <Card className="shadow-sm border-border/60">
+          <CardHeader className="px-6 pt-5 pb-3 border-b">
+            <div className="flex items-center justify-between">
               <div>
-                <span className="text-xs text-destructive font-bold uppercase tracking-wider">Total Refund Amount</span>
-                <p className="text-2xl font-black text-destructive">
-                  {fmtPKR(saleItems.reduce((sum, item) => sum + (item.price * (parseInt(String(returnQtys[item.id])) || 0)), 0))}
-                </p>
+                <CardTitle className="text-base font-bold flex items-center gap-2">
+                  <div className="w-2 h-4 rounded-full bg-violet-500" />
+                  Revenue Trend
+                </CardTitle>
+                <CardDescription className="text-xs mt-0.5">
+                  {period === 'today' ? 'Hourly breakdown' : 'Daily revenue over period'}
+                </CardDescription>
               </div>
-              <div className="text-right text-[10px] text-muted-foreground uppercase font-medium">
-                Affects stock &<br />financial records
+              {trendData.length > 0 && (
+                <Badge variant="outline" className="font-mono text-xs text-violet-600 border-violet-500/30">
+                  {fmtPKR(trendData.reduce((s, d) => s + d.Revenue, 0))} total
+                </Badge>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 pt-6">
+            {loading ? (
+              <div className="h-52 flex items-center justify-center text-muted-foreground">
+                <RefreshCw size={20} className="animate-spin mr-2" /> Loading...
+              </div>
+            ) : trendData.length === 0 ? (
+              <div className="h-52 flex flex-col items-center justify-center text-muted-foreground">
+                <BarChart3 size={32} className="opacity-20 mb-2" />
+                <p className="text-sm">No data for {periodLabel.toLowerCase()}</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={220}>
+                <AreaChart data={trendData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.25} />
+                      <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="ordGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#06b6d4" stopOpacity={0.2} />
+                      <stop offset="100%" stopColor="#06b6d4" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
+                  <YAxis yAxisId="rev" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={45} />
+                  <YAxis yAxisId="ord" orientation="right" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} width={30} />
+                  <Tooltip content={<ChartTip />} />
+                  <Area yAxisId="rev" type="monotone" dataKey="Revenue" stroke="#8b5cf6" strokeWidth={2} fill="url(#revGrad)" dot={false} />
+                  <Area yAxisId="ord" type="monotone" dataKey="Orders" stroke="#06b6d4" strokeWidth={1.5} fill="url(#ordGrad)" dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
+      </motion.div>
+
+      {/* ── P&L + Payment Distribution ── */}
+      <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={9}>
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+
+          {/* P&L Breakdown Bar */}
+          <Card className="lg:col-span-3 shadow-sm border-border/60">
+            <CardHeader className="px-6 pt-5 pb-3 border-b">
+              <CardTitle className="text-base font-bold flex items-center gap-2">
+                <div className="w-2 h-4 rounded-full bg-emerald-500" />
+                Profit & Loss Breakdown
+              </CardTitle>
+              <CardDescription className="text-xs">Revenue vs cost structure</CardDescription>
+            </CardHeader>
+            <CardContent className="p-4 pt-6">
+              {loading || plData.length === 0 ? (
+                <div className="h-52 flex flex-col items-center justify-center text-muted-foreground">
+                  {loading
+                    ? <><RefreshCw size={20} className="animate-spin mb-2" />Loading...</>
+                    : <><Layers size={28} className="opacity-20 mb-2" /><p className="text-sm">No P&L data available</p></>
+                  }
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={plData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                    <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={45} />
+                    <Tooltip content={<ChartTip />} cursor={{ fill: 'hsl(var(--muted))', opacity: 0.5 }} />
+                    <Bar dataKey="value" name="Amount" radius={[6, 6, 0, 0]} maxBarSize={80}>
+                      {plData.map((entry, i) => (
+                        <Cell key={i} fill={entry.fill} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+
+              {/* Summary row */}
+              {profitData && !loading && (
+                <div className="grid grid-cols-4 gap-2 mt-3 pt-3 border-t">
+                  {plData.map(d => (
+                    <div key={d.name} className="text-center">
+                      <div className="w-3 h-3 rounded-full mx-auto mb-1" style={{ background: d.fill }} />
+                      <p className="text-[10px] text-muted-foreground">{d.name}</p>
+                      <p className="text-[11px] font-bold font-mono" style={{ color: d.fill }}>{fmtK(d.value)}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Payment Donut */}
+          <Card className="lg:col-span-2 shadow-sm border-border/60">
+            <CardHeader className="px-6 pt-5 pb-3 border-b">
+              <CardTitle className="text-base font-bold flex items-center gap-2">
+                <div className="w-2 h-4 rounded-full bg-blue-500" />
+                Payment Split
+              </CardTitle>
+              <CardDescription className="text-xs">Orders by method</CardDescription>
+            </CardHeader>
+            <CardContent className="p-4 pt-6 flex flex-col items-center">
+              {loading ? (
+                <div className="h-44 flex items-center justify-center text-muted-foreground">
+                  <RefreshCw size={20} className="animate-spin" />
+                </div>
+              ) : paymentData.length === 0 ? (
+                <div className="h-44 flex flex-col items-center justify-center text-muted-foreground">
+                  <CreditCard size={28} className="opacity-20 mb-2" />
+                  <p className="text-sm">No payment data</p>
+                </div>
+              ) : (
+                <>
+                  <ResponsiveContainer width="100%" height={180}>
+                    <PieChart>
+                      <Pie
+                        data={paymentData}
+                        cx="50%" cy="50%"
+                        innerRadius={58} outerRadius={80}
+                        paddingAngle={4} dataKey="value"
+                        labelLine={false}
+                      >
+                        {paymentData.map((entry, i) => (
+                          <Cell key={i} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(val: any, name: string, props: any) => [
+                          `${val} orders (${fmtPKR(props.payload.revenue)})`, name
+                        ]}
+                        contentStyle={{ borderRadius: '12px', border: '1px solid hsl(var(--border))', background: 'hsl(var(--card))' }}
+                      />
+                      <text x="50%" y="50%" textAnchor="middle" dominantBaseline="middle">
+                        <tspan x="50%" dy="-8" fontSize="16" fontWeight="700" fill="hsl(var(--foreground))">{report.sales.length}</tspan>
+                        <tspan x="50%" dy="18" fontSize="10" fill="hsl(var(--muted-foreground))">orders</tspan>
+                      </text>
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div className="flex flex-col gap-2 w-full mt-1">
+                    {paymentData.map(d => (
+                      <div key={d.name} className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-3 h-3 rounded-full" style={{ background: d.color }} />
+                          <span className="text-sm font-medium">{d.name}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs font-bold font-mono" style={{ color: d.color }}>{d.value} orders</span>
+                          <span className="text-[10px] text-muted-foreground block">{fmtPKR(d.revenue)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </motion.div>
+
+      {/* ── Top Products Chart ── */}
+      {topProductsChart.length > 0 && (
+        <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={10}>
+          <Card className="shadow-sm border-border/60">
+            <CardHeader className="px-6 pt-5 pb-3 border-b">
+              <CardTitle className="text-base font-bold flex items-center gap-2">
+                <div className="w-2 h-4 rounded-full bg-amber-500" />
+                Top Products by Revenue
+              </CardTitle>
+              <CardDescription className="text-xs">Top 8 products ranked by sales revenue</CardDescription>
+            </CardHeader>
+            <CardContent className="p-4 pt-6">
+              <ResponsiveContainer width="100%" height={Math.max(180, topProductsChart.length * 38)}>
+                <BarChart layout="vertical" data={topProductsChart} margin={{ top: 0, right: 20, left: 10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} />
+                  <YAxis type="category" dataKey="name" width={130} tick={{ fontSize: 11, fill: 'hsl(var(--foreground))' }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<ChartTip />} cursor={{ fill: 'hsl(var(--muted))', opacity: 0.5 }} />
+                  <Bar dataKey="Revenue" radius={[0, 6, 6, 0]} maxBarSize={22}
+                    fill="url(#barGrad)"
+                  >
+                    <defs>
+                      <linearGradient id="barGrad" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.8} />
+                        <stop offset="100%" stopColor="#f59e0b" stopOpacity={1} />
+                      </linearGradient>
+                    </defs>
+                    {topProductsChart.map((_, i) => (
+                      <Cell key={i} fill={i === 0 ? '#f59e0b' : i === 1 ? '#a78bfa' : i === 2 ? '#34d399' : '#60a5fa'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+
+      {/* ── Tables: Top Products + Recent Transactions ── */}
+      <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={11}>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+          {/* Top Performers Table */}
+          <Card className="shadow-sm border-border/60 flex flex-col min-h-[400px]">
+            <CardHeader className="border-b bg-amber-500/5 py-4 px-5 space-y-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Award size={16} className="text-amber-500" />
+                  <CardTitle className="text-sm font-bold">Top Performers</CardTitle>
+                </div>
+                <div className="relative w-44">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" size={12} />
+                  <Input
+                    placeholder="Search..."
+                    value={productSearch}
+                    onChange={e => setProductSearch(e.target.value)}
+                    className="pl-7 h-7 text-xs bg-background"
+                  />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="flex-1 p-0 overflow-hidden flex flex-col">
+              {loading ? (
+                <div className="flex-1 flex items-center justify-center min-h-[280px] text-muted-foreground">
+                  <RefreshCw size={20} className="animate-spin mr-2" /> Loading...
+                </div>
+              ) : filteredProducts.length > 0 ? (
+                <>
+                  <div className="flex-1 overflow-auto max-h-[440px] custom-scrollbar">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/20 hover:bg-muted/20">
+                          <TableHead className="pl-5 w-14 text-xs">Rank</TableHead>
+                          <TableHead className="text-xs">Product</TableHead>
+                          <TableHead className="text-right text-xs">Vol.</TableHead>
+                          <TableHead className="text-right pr-5 text-xs">Revenue</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {visibleProds.map((p, i) => (
+                          <TableRow key={i} className="hover:bg-muted/30">
+                            <TableCell className="pl-5 text-center">
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  'text-[10px] font-mono h-5 px-1.5 font-bold',
+                                  i === 0 ? 'bg-amber-500/15 text-amber-600 border-amber-500/30'
+                                    : i === 1 ? 'bg-slate-400/15 text-slate-600 border-slate-400/30'
+                                      : i === 2 ? 'bg-orange-400/15 text-orange-600 border-orange-400/30'
+                                        : 'text-muted-foreground'
+                                )}
+                              >
+                                #{i + 1}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="font-semibold text-sm">{p.name}</TableCell>
+                            <TableCell className="text-right font-mono text-xs text-muted-foreground">{p.qty_sold}</TableCell>
+                            <TableCell className="text-right pr-5 font-bold text-amber-600 font-mono text-xs">{fmtPKR(p.revenue)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <div className="px-5 py-3 border-t bg-muted/5">
+                    <LoadMoreButton hasMore={hasMoreProds} onLoadMore={loadMoreProds} showing={prodsShowing} total={prodsTotal} />
+                  </div>
+                </>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center min-h-[280px] text-muted-foreground">
+                  <ShoppingBag size={36} className="opacity-15 mb-3" />
+                  <p className="text-sm font-medium">No products sold {periodLabel.toLowerCase()}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Recent Transactions */}
+          <Card className="shadow-sm border-border/60 flex flex-col min-h-[400px]">
+            <CardHeader className="border-b bg-blue-500/5 py-4 px-5 space-y-0">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Calendar size={16} className="text-blue-500" />
+                  <CardTitle className="text-sm font-bold">Recent Transactions</CardTitle>
+                </div>
+                <button
+                  onClick={() => { window.location.hash = '/transactions'; }}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  View all <ChevronRight size={12} />
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0 flex-1 overflow-hidden flex flex-col">
+              {loading ? (
+                <div className="flex-1 flex items-center justify-center min-h-[280px] text-muted-foreground">
+                  <RefreshCw size={20} className="animate-spin mr-2" /> Loading...
+                </div>
+              ) : report.sales.length > 0 ? (
+                <>
+                  <div className="flex-1 overflow-auto max-h-[440px] custom-scrollbar">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-muted/20 hover:bg-muted/20">
+                          <TableHead className="pl-5 text-xs">Invoice</TableHead>
+                          <TableHead className="text-xs">Method</TableHead>
+                          <TableHead className="text-right pr-5 text-xs">Amount</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {visibleSales.map(s => (
+                          <TableRow key={s.id} className="hover:bg-muted/30">
+                            <TableCell className="pl-5">
+                              <div className="font-mono text-xs font-bold text-foreground/80 leading-tight">
+                                {formatInvoiceId(s.id, s.date_created)}
+                              </div>
+                              <div className="text-[10px] text-muted-foreground mt-0.5">
+                                {dayjs(s.date_created).format('DD MMM, hh:mm A')}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                variant="outline"
+                                className={cn(
+                                  'uppercase text-[9px] px-1.5 h-4 font-semibold',
+                                  s.payment_method !== 'cash'
+                                    ? 'text-blue-600 border-blue-400/40 bg-blue-500/10'
+                                    : 'text-emerald-600 border-emerald-400/40 bg-emerald-500/10'
+                                )}
+                              >
+                                {s.payment_method}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right pr-5 font-bold font-mono text-sm text-primary">
+                              {fmtPKR(s.total)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <div className="px-5 py-3 border-t bg-muted/5">
+                    <LoadMoreButton hasMore={hasMoreSales} onLoadMore={loadMoreSales} showing={salesShowing} total={salesTotal} />
+                  </div>
+                </>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center min-h-[280px] text-muted-foreground">
+                  <DollarSign size={36} className="opacity-15 mb-3" />
+                  <p className="text-sm font-medium">No invoices for {periodLabel.toLowerCase()}</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </motion.div>
+
+      {/* ── Deep Analytics Modal ── */}
+      {showModal && createPortal(
+        <div
+          className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto"
+          onClick={() => setShowModal(false)}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.97, y: 16 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.3, ease: [0.23, 1, 0.32, 1] }}
+            className="min-h-screen flex items-start justify-center p-4 sm:p-8"
+          >
+            <div
+              className="w-full max-w-5xl bg-card rounded-2xl shadow-2xl border border-border/50 overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div
+                className="relative p-6 border-b"
+                style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%)' }}
+              >
+                <div className="pointer-events-none absolute -top-10 -right-10 w-48 h-48 rounded-full bg-indigo-500/15 blur-3xl" />
+                <div className="flex items-center justify-between relative z-10">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-indigo-500/20 border border-indigo-400/30 p-2.5 rounded-xl">
+                      <LayoutDashboard size={20} className="text-indigo-300" />
+                    </div>
+                    <div>
+                      <h2 className="text-white text-lg font-bold">Deep Analytics</h2>
+                      <p className="text-indigo-300/70 text-xs mt-0.5">Advanced breakdown for {periodLabel}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowModal(false)}
+                    className="text-white/50 hover:text-white/90 p-1.5 rounded-xl hover:bg-white/10 transition-colors"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-6 flex flex-col gap-6">
+                {/* Modal KPI Strip */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    { label: 'Avg Order Value', value: fmtPKR(avgOrder), color: 'text-violet-600', bg: 'bg-violet-500/10', icon: Wallet },
+                    { label: 'Total Revenue', value: fmtPKR(profitData?.revenue || report.revenue), color: 'text-emerald-600', bg: 'bg-emerald-500/10', icon: DollarSign },
+                    { label: 'Net Profit', value: fmtPKR(profitData?.profit || 0), color: (profitData?.profit ?? 0) >= 0 ? 'text-blue-600' : 'text-red-600', bg: 'bg-blue-500/10', icon: TrendingUp },
+                    { label: 'Profit Margin', value: `${profitMargin}%`, color: 'text-indigo-600', bg: 'bg-indigo-500/10', icon: Percent },
+                  ].map(({ label, value, color, bg, icon: Icon }) => (
+                    <div key={label} className={cn('rounded-xl p-4 border border-border/40', bg)}>
+                      <div className="flex items-center gap-2 mb-1">
+                        <Icon size={13} className={color} />
+                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">{label}</p>
+                      </div>
+                      <p className={cn('text-lg font-bold font-mono', color)}>{value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Hourly Distribution */}
+                <div>
+                  <div className="flex items-center gap-2 mb-4">
+                    <div className="w-2 h-4 rounded-full bg-cyan-500" />
+                    <h3 className="font-bold text-sm">Hourly Sales Distribution</h3>
+                    <span className="text-xs text-muted-foreground ml-1">Revenue & order volume by hour of day</span>
+                  </div>
+                  {report.sales.length === 0 ? (
+                    <div className="h-52 flex items-center justify-center text-muted-foreground text-sm">No data available</div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={220}>
+                      <ComposedChart data={hourlyData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                        <XAxis dataKey="hour" tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} interval={2} />
+                        <YAxis yAxisId="rev" tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={40} />
+                        <YAxis yAxisId="ord" orientation="right" tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} width={25} />
+                        <Tooltip content={<ChartTip />} cursor={{ fill: 'hsl(var(--muted))', opacity: 0.4 }} />
+                        <Bar yAxisId="rev" dataKey="Revenue" fill="#06b6d4" fillOpacity={0.85} radius={[3, 3, 0, 0]} maxBarSize={20} />
+                        <Line yAxisId="ord" type="monotone" dataKey="Orders" stroke="#f59e0b" strokeWidth={2} dot={false} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+
+                {/* Revenue vs Orders trend (modal) */}
+                {trendData.length > 1 && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-4">
+                      <div className="w-2 h-4 rounded-full bg-violet-500" />
+                      <h3 className="font-bold text-sm">Revenue vs Order Volume</h3>
+                      <span className="text-xs text-muted-foreground ml-1">Correlation between sales count and revenue</span>
+                    </div>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <ComposedChart data={trendData} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="modalRevGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.3} />
+                            <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                        <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
+                        <YAxis yAxisId="rev" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} tickFormatter={v => `${Math.round(v / 1000)}k`} width={42} />
+                        <YAxis yAxisId="ord" orientation="right" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} width={28} />
+                        <Tooltip content={<ChartTip />} />
+                        <Area yAxisId="rev" type="monotone" dataKey="Revenue" stroke="#8b5cf6" strokeWidth={2.5} fill="url(#modalRevGrad)" dot={false} />
+                        <Bar yAxisId="ord" dataKey="Orders" fill="#10b981" fillOpacity={0.7} radius={[2, 2, 0, 0]} maxBarSize={14} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+
+                {/* Payment detail table in modal */}
+                {paymentData.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-4">
+                      <div className="w-2 h-4 rounded-full bg-blue-500" />
+                      <h3 className="font-bold text-sm">Payment Method Breakdown</h3>
+                    </div>
+                    <div className="rounded-xl border border-border/50 overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-muted/30">
+                            <TableHead className="pl-5 text-xs">Method</TableHead>
+                            <TableHead className="text-right text-xs">Orders</TableHead>
+                            <TableHead className="text-right text-xs">% of Total</TableHead>
+                            <TableHead className="text-right pr-5 text-xs">Revenue</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {paymentData.map(d => (
+                            <TableRow key={d.name} className="hover:bg-muted/30">
+                              <TableCell className="pl-5">
+                                <div className="flex items-center gap-2">
+                                  <span className="w-3 h-3 rounded-full" style={{ background: d.color }} />
+                                  <span className="font-semibold text-sm">{d.name}</span>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right font-mono text-sm">{d.value}</TableCell>
+                              <TableCell className="text-right font-mono text-sm text-muted-foreground">
+                                {report.sales.length > 0 ? ((d.value / report.sales.length) * 100).toFixed(1) : 0}%
+                              </TableCell>
+                              <TableCell className="text-right pr-5 font-bold font-mono" style={{ color: d.color }}>
+                                {fmtPKR(d.revenue)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end pt-2">
+                  <Button onClick={() => setShowModal(false)} variant="outline" className="gap-2">
+                    <X size={14} /> Close
+                  </Button>
+                </div>
               </div>
             </div>
-          </div>
-
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setShowReturnModal(false)} disabled={processingReturn}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              className="px-8 font-bold gap-2"
-              onClick={submitReturn}
-              disabled={processingReturn}
-            >
-              {processingReturn ? <RefreshCcw size={16} className="animate-spin" /> : <Undo2 size={18} />}
-              Confirm Return
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </motion.div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 }
