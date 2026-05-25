@@ -829,6 +829,43 @@ export default function Customers() {
                     </div>
                   </div>
 
+                  {/* ── Payment Recording ── */}
+                  {(customerDetails.balance || 0) > 0 && (
+                    <div className="px-5 py-4 border-b border-border/30 bg-emerald-500/3">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-1.5">
+                        <CreditCard size={11} /> Record Payment
+                      </p>
+                      <div className="flex gap-2 mb-2">
+                        <Input
+                          type="text"
+                          placeholder="Amount (PKR)..."
+                          className="flex-1 h-9 text-sm font-mono bg-background"
+                          value={paymentAmount}
+                          onChange={(e) => setPaymentAmount(e.target.value.replace(/[^0-9]/g, ''))}
+                          onKeyDown={(e) => { if (e.key === 'Enter' && paymentAmount) handleAddPayment(); }}
+                        />
+                        <Button
+                          size="sm"
+                          className="h-9 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+                          disabled={paymentLoading || !paymentAmount}
+                          onClick={() => { if (paymentAmount) handleAddPayment(); }}
+                        >
+                          {paymentLoading ? <RefreshCw size={13} className="animate-spin" /> : 'Log'}
+                        </Button>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full h-8 text-xs border-emerald-500/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/5 font-semibold"
+                        disabled={paymentLoading}
+                        onClick={handleMarkAllPaid}
+                      >
+                        <CheckCircle2 size={12} className="mr-1.5" />
+                        Clear Full Balance — {fmtPKR(customerDetails.balance)}
+                      </Button>
+                    </div>
+                  )}
+
                   {/* ── Action Buttons ── */}
                   <div className="px-5 py-4 border-b border-border/30 flex flex-col gap-2.5">
                     <Button

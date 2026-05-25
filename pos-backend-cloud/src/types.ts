@@ -21,6 +21,8 @@ export interface Instance {
   total_revenue: number;
   total_customers: number;
   total_products: number;
+  device_fingerprint: string;
+  license_revoked: number;     // 1 = revoked, POS should clear local license on next poll
   created_at: string;
   updated_at: string;
 }

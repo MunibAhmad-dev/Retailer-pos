@@ -141,6 +141,7 @@ declare global {
       // New Licensing System V2
       getFingerprint: () => Promise<ApiResponse<string>>;
       activateAppV2: (licenseKey: string) => Promise<ApiResponse<void>>;
+      clearLocalLicense: () => Promise<ApiResponse<void>>;
       generateLicenseKey: (data: any) => Promise<ApiResponse<string>>;
       onToggleLicenseIssuer: (callback: () => void) => () => void;
 
@@ -189,6 +190,7 @@ declare global {
       markSyncItemsDone: (ids: number[]) => Promise<ApiResponse<void>>;
       markSyncItemFailed: (id: number, error: string) => Promise<ApiResponse<void>>;
       enqueueSaleSync: (saleId: number) => Promise<ApiResponse<void>>;
+      fullResync: () => Promise<ApiResponse<{ enqueued: number }>>;
     };
   }
 }

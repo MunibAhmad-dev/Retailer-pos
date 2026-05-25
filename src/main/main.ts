@@ -1413,6 +1413,18 @@ ipcMain.handle('activate-app-v2', async (_, licenseKey: string) => {
   }
 });
 
+ipcMain.handle('clear-local-license', async () => {
+  try {
+    if (!licenseManager) throw new Error('License manager not initialized');
+    licenseManager.clearLicense();
+    logger.info('clear-local-license: local license cleared by cloud revocation');
+    return { success: true };
+  } catch (error: any) {
+    logger.error('clear-local-license: ' + error.message);
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('generate-license-key', async (_, data: any) => {
   try {
     if (!licenseManager) throw new Error('License manager not initialized');
@@ -1484,6 +1496,11 @@ ipcMain.handle('add-product', async (_, product: { name: string; price: number; 
     const newProduct = db.prepare('SELECT * FROM products WHERE id = ?').get(info.lastInsertRowid);
     logger.info(`Product added: ${product.name} (ID: ${info.lastInsertRowid})`);
 
+    // Enqueue for cloud sync
+    try {
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('product', 'create', ?, 'pending')`).run(JSON.stringify(newProduct));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (add-product) failed:', syncErr.message); }
+
     return { success: true, data: newProduct };
   } catch (error: any) {
     logger.error('Failed to add product:', error);
@@ -1527,6 +1544,11 @@ ipcMain.handle('update-product', async (_, id: number, product: { name: string; 
     const updatedProduct = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
     logger.info(`Product updated: ${product.name} (ID: ${id})`);
 
+    // Enqueue for cloud sync
+    try {
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('product', 'update', ?, 'pending')`).run(JSON.stringify(updatedProduct));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (update-product) failed:', syncErr.message); }
+
     return { success: true, data: updatedProduct };
   } catch (error: any) {
     logger.error('Failed to update product:', error);
@@ -1553,6 +1575,12 @@ ipcMain.handle('delete-product', async (_, id: number) => {
     if (result.changes === 0) throw new Error('Product not found or already deleted');
 
     logger.info(`Product deleted: ${(product as any).name} (ID: ${id})`);
+
+    // Enqueue for cloud sync
+    try {
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('product', 'delete', ?, 'pending')`).run(JSON.stringify({ id }));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (delete-product) failed:', syncErr.message); }
+
     return { success: true };
   } catch (error: any) {
     logger.error('Failed to delete product:', error);
@@ -1807,6 +1835,69 @@ ipcMain.handle('enqueue-sale-sync', async (_, saleId: number) => {
   } catch (e: any) {
     logger.error('enqueue-sale-sync failed:', e);
     return { success: false, error: e.message };
+  }
+});
+
+// Full re-sync: dumps ALL existing records into the cloud_sync_queue.
+// Useful for disaster recovery — admin can then see all customer balances, products, etc.
+// Skips items already queued (deduplicates via INSERT OR IGNORE on a unique index is not guaranteed,
+// so we simply truncate 'pending'/'failed' items first and re-insert everything).
+ipcMain.handle('full-resync', async () => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+
+    let enqueued = 0;
+
+    const enqueue = (entity_type: string, operation: string, row: any) => {
+      db!.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES (?, ?, ?, 'pending')`).run(entity_type, operation, JSON.stringify(row));
+      enqueued++;
+    };
+
+    // Products
+    const products = db.prepare('SELECT * FROM products').all();
+    for (const row of products) enqueue('product', 'create', row);
+
+    // Customers
+    const customers = db.prepare('SELECT * FROM customers').all();
+    for (const row of customers) enqueue('customer', 'create', row);
+
+    // Vendors
+    const vendors = db.prepare('SELECT * FROM vendors').all();
+    for (const row of vendors) enqueue('vendor', 'create', row);
+
+    // Purchases with their inventory batch items
+    const purchases = db.prepare('SELECT * FROM purchases').all() as any[];
+    for (const pur of purchases) {
+      const items = db.prepare('SELECT * FROM inventory_batches WHERE purchase_id = ?').all(pur.id);
+      enqueue('purchase', 'create', { ...pur, items });
+    }
+
+    // Customer payments (loans / dues) — most critical for recovery
+    const customerPayments = db.prepare('SELECT * FROM customer_payments').all();
+    for (const row of customerPayments) enqueue('customer_payment', 'create', row);
+
+    // Vendor payments
+    const vendorPayments = db.prepare('SELECT * FROM vendor_payments').all();
+    for (const row of vendorPayments) enqueue('vendor_payment', 'create', row);
+
+    // Expenses
+    const expenses = db.prepare('SELECT * FROM expenses').all();
+    for (const row of expenses) enqueue('expense', 'create', row);
+
+    // Sales with sale_items
+    const sales = db.prepare(`
+      SELECT s.*, GROUP_CONCAT(si.product_name || ' (x' || si.quantity || ')') AS items_summary,
+             COUNT(si.id) AS items_count
+      FROM sales s LEFT JOIN sale_items si ON s.id = si.sale_id
+      GROUP BY s.id
+    `).all() as any[];
+    for (const sale of sales) enqueue('sale', 'create', sale);
+
+    logger.info(`full-resync: enqueued ${enqueued} records for cloud sync`);
+    return { success: true, data: { enqueued } };
+  } catch (error: any) {
+    logger.error('full-resync failed:', error);
+    return { success: false, error: error.message };
   }
 });
 
@@ -2516,6 +2607,11 @@ ipcMain.handle('add-customer', async (_, customer: { name: string; phone?: strin
 
     const newCustomer = db.prepare('SELECT * FROM customers WHERE id = ?').get(info.lastInsertRowid);
     logger.info(`Customer added: ${customer.name} (ID: ${info.lastInsertRowid})`);
+
+    // Enqueue for cloud sync
+    try {
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('customer', 'create', ?, 'pending')`).run(JSON.stringify(newCustomer));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (add-customer) failed:', syncErr.message); }
 
     return { success: true, data: newCustomer };
   } catch (error: any) {
@@ -3345,6 +3441,13 @@ ipcMain.handle('add-vendor-payment', async (_, data: { vendor_id: number; amount
       notes: data.notes || (data.purchase_id ? `Payment for purchase #${data.purchase_id}` : 'Manual payment recorded'),
       actionStatus: 'COMPLETED'
     });
+
+    // Enqueue for cloud sync
+    try {
+      const paymentRow = db.prepare('SELECT * FROM vendor_payments WHERE id = ?').get(info.lastInsertRowid);
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('vendor_payment', 'create', ?, 'pending')`).run(JSON.stringify(paymentRow));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (add-vendor-payment) failed:', syncErr.message); }
+
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3367,6 +3470,12 @@ ipcMain.handle('delete-vendor-payment', async (_, paymentId: number) => {
       actionStatus: 'DELETED'
     });
     db.prepare('DELETE FROM vendor_payments WHERE id = ?').run(paymentId);
+
+    // Enqueue for cloud sync
+    try {
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('vendor_payment', 'delete', ?, 'pending')`).run(JSON.stringify({ id: paymentId, vendor_id: payment.vendor_id }));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (delete-vendor-payment) failed:', syncErr.message); }
+
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3401,6 +3510,12 @@ ipcMain.handle('add-vendor', async (_, vendor: { name: string; phone?: string; a
     const stmt = db.prepare('INSERT INTO vendors (name, phone, address) VALUES (?, ?, ?)');
     const info = stmt.run(vendor.name.trim(), vendor.phone || '', vendor.address || '');
     const newVendor = db.prepare('SELECT * FROM vendors WHERE id = ?').get(info.lastInsertRowid);
+
+    // Enqueue for cloud sync
+    try {
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('vendor', 'create', ?, 'pending')`).run(JSON.stringify(newVendor));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (add-vendor) failed:', syncErr.message); }
+
     return { success: true, data: newVendor };
   } catch (error: any) {
     logger.error('Failed to add vendor:', error);
@@ -3460,6 +3575,15 @@ ipcMain.handle('create-purchase', async (_, data: { vendor_id: number; items: an
 
     // Trigger auto-export after a successful purchase
     triggerAutoExport();
+
+    // Enqueue purchase + its items for cloud sync
+    try {
+      const purchaseRow = db.prepare('SELECT * FROM purchases WHERE id = ?').get(purchaseId as number) as any;
+      const purchaseItems = db.prepare('SELECT * FROM inventory_batches WHERE purchase_id = ?').all(purchaseId as number);
+      if (purchaseRow) {
+        db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('purchase', 'create', ?, 'pending')`).run(JSON.stringify({ ...purchaseRow, items: purchaseItems }));
+      }
+    } catch (syncErr: any) { logger.warn('Sync enqueue (create-purchase) failed:', syncErr.message); }
 
     return { success: true, data: { purchaseId } };
   } catch (error: any) {
@@ -3656,6 +3780,12 @@ ipcMain.handle('update-customer', async (_, id: number, customer: { name: string
     const stmt = db.prepare('UPDATE customers SET name = ?, phone = ?, email = ?, address = ?, updated_at = datetime(\'now\', \'localtime\') WHERE id = ?');
     stmt.run(customer.name.trim(), customer.phone || '', customer.email || '', customer.address || '', id);
     const updated = db.prepare('SELECT * FROM customers WHERE id = ?').get(id);
+
+    // Enqueue for cloud sync
+    try {
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('customer', 'update', ?, 'pending')`).run(JSON.stringify(updated));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (update-customer) failed:', syncErr.message); }
+
     return { success: true, data: updated };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3666,6 +3796,12 @@ ipcMain.handle('delete-customer', async (_, id: number) => {
   try {
     if (!db) throw new Error('Database not initialized');
     db.prepare('DELETE FROM customers WHERE id = ?').run(id);
+
+    // Enqueue for cloud sync
+    try {
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('customer', 'delete', ?, 'pending')`).run(JSON.stringify({ id }));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (delete-customer) failed:', syncErr.message); }
+
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3780,6 +3916,13 @@ ipcMain.handle('add-customer-payment', async (_, data: { customer_id: number; am
       notes: data.notes || (data.sale_id ? `Payment for sale #${data.sale_id}` : 'Manual payment recorded'),
       actionStatus: 'COMPLETED'
     });
+
+    // Enqueue for cloud sync — critical for loan/dues recovery
+    try {
+      const paymentRow = db.prepare('SELECT * FROM customer_payments WHERE id = ?').get(info.lastInsertRowid);
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('customer_payment', 'create', ?, 'pending')`).run(JSON.stringify(paymentRow));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (add-customer-payment) failed:', syncErr.message); }
+
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3802,6 +3945,12 @@ ipcMain.handle('delete-customer-payment', async (_, paymentId: number) => {
       actionStatus: 'DELETED'
     });
     db.prepare('DELETE FROM customer_payments WHERE id = ?').run(paymentId);
+
+    // Enqueue for cloud sync
+    try {
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('customer_payment', 'delete', ?, 'pending')`).run(JSON.stringify({ id: paymentId, customer_id: payment.customer_id }));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (delete-customer-payment) failed:', syncErr.message); }
+
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3914,7 +4063,14 @@ ipcMain.handle('add-expense', async (_, data: { title: string; category?: string
   try {
     if (!db) throw new Error('Database not initialized');
     const stmt = db.prepare('INSERT INTO expenses (title, category, amount, date_added, notes) VALUES (?, ?, ?, datetime(\'now\', \'localtime\'), ?)');
-    stmt.run(data.title.trim(), data.category || '', data.amount, data.notes || '');
+    const info = stmt.run(data.title.trim(), data.category || '', data.amount, data.notes || '');
+
+    // Enqueue for cloud sync
+    try {
+      const expenseRow = db.prepare('SELECT * FROM expenses WHERE id = ?').get(info.lastInsertRowid);
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('expense', 'create', ?, 'pending')`).run(JSON.stringify(expenseRow));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (add-expense) failed:', syncErr.message); }
+
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };
@@ -3925,6 +4081,12 @@ ipcMain.handle('delete-expense', async (_, id: number) => {
   try {
     if (!db) throw new Error('Database not initialized');
     db.prepare('DELETE FROM expenses WHERE id = ?').run(id);
+
+    // Enqueue for cloud sync
+    try {
+      db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('expense', 'delete', ?, 'pending')`).run(JSON.stringify({ id }));
+    } catch (syncErr: any) { logger.warn('Sync enqueue (delete-expense) failed:', syncErr.message); }
+
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };

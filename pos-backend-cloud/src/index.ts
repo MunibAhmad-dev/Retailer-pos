@@ -9,6 +9,7 @@ import authRoutes      from './routes/auth';
 import instanceRoutes  from './routes/instances';
 import syncRoutes      from './routes/sync';
 import adminRoutes     from './routes/admin';
+import businessRoutes from './routes/businesses';   // ← add this
 
 // Bootstrap DB (creates tables on first run)
 import './db';
@@ -20,10 +21,9 @@ const PORT = Number(process.env.PORT) || 4000;
 app.use(helmet());
 
 // CORS — allow the admin dashboard origin(s) plus the Electron app (file://)
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3001')
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3001,http://localhost:5173')
   .split(',')
   .map(o => o.trim());
-
 app.use(cors({
   origin: (origin, cb) => {
     // Allow Electron (no origin header) and listed web origins
@@ -60,7 +60,10 @@ app.use('/api/auth',       authLimiter,  authRoutes);
 app.use('/api/instances',  syncLimiter,  instanceRoutes);
 app.use('/api/sync',       syncLimiter,  syncRoutes);
 app.use('/api/admin',                   adminRoutes);
+//besiness
 
+// inside the routes section:
+app.use('/api', businessRoutes);                    // ← add this
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'pos-backend-cloud', timestamp: new Date().toISOString() });

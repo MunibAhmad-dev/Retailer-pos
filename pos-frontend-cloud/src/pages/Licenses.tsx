@@ -1,10 +1,20 @@
 import { useEffect, useState } from 'react';
 import {
   Key, Plus, Trash2, Link2, Loader2,
-  Copy, Check, RefreshCw, ShieldCheck,
+  Copy, Check, RefreshCw, ShieldCheck, Download,
 } from 'lucide-react';
 import { licensesApi, instancesApi, LicenseKey, Instance } from '../api';
 import clsx from 'clsx';
+
+function downloadJson(data: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 const PLANS = ['monthly', 'quarterly', 'yearly', 'lifetime'];
 
@@ -93,7 +103,7 @@ export default function Licenses() {
   };
 
   const handleDeactivate = async (key: string) => {
-    if (!confirm(`Deactivate license ${key}?`)) return;
+    if (!confirm(`Deactivate license?`)) return;
     try {
       await licensesApi.deactivate(key);
       await load();
@@ -108,14 +118,23 @@ export default function Licenses() {
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">License Keys</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">License Keys</h1>
+          <p className="text-sm text-slate-500 dark:text-gray-500 mt-0.5">
             {active.length} active · {inactive.length} inactive
           </p>
         </div>
         <div className="flex gap-2">
           <button onClick={load} className="btn-ghost">
             <RefreshCw size={15} />
+          </button>
+          <button
+            onClick={() => downloadJson(keys, `licenses_${new Date().toISOString().slice(0,10)}.json`)}
+            className="btn-ghost"
+            title="Export all licenses as JSON"
+            disabled={keys.length === 0}
+          >
+            <Download size={15} />
+            Export JSON
           </button>
           <button onClick={() => setShowCreate(true)} className="btn-primary">
             <Plus size={15} />
@@ -131,79 +150,84 @@ export default function Licenses() {
       ) : (
         <>
           {/* Active keys */}
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden mb-5">
-            <div className="px-5 py-4 border-b border-gray-800">
-              <h2 className="text-sm font-semibold text-white">Active Keys ({active.length})</h2>
+          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl overflow-hidden mb-5">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-gray-800">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Active Keys ({active.length})</h2>
             </div>
 
             {active.length === 0 ? (
               <div className="py-14 text-center">
-                <Key className="w-9 h-9 text-gray-700 mx-auto mb-3" />
-                <p className="text-sm text-gray-500">No active licenses yet</p>
+                <Key className="w-9 h-9 text-slate-300 dark:text-gray-700 mx-auto mb-3" />
+                <p className="text-sm text-slate-500 dark:text-gray-500">No active licenses yet</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-gray-800">
+                    <tr className="border-b border-slate-200 dark:border-gray-800">
                       {['License Key', 'Plan', 'Assigned To', 'Expires', 'Notes', ''].map((h) => (
-                        <th key={h} className="text-left px-5 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                        <th key={h} className="text-left px-5 py-3 text-xs font-medium text-slate-500 dark:text-gray-500 uppercase tracking-wider whitespace-nowrap">
                           {h}
                         </th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-800/60">
+                  <tbody className="divide-y divide-slate-200 dark:divide-gray-800/60">
                     {active.map((k) => {
                       const expired = isExpired(k.expires_at) && k.plan !== 'lifetime';
                       return (
-                        <tr key={k.license_key} className="hover:bg-gray-800/40 transition-colors">
+                        <tr key={k.license_key} className="hover:bg-slate-50 dark:hover:bg-gray-800/40 transition-colors">
                           <td className="px-5 py-3.5">
-                            <div className="flex items-center gap-2">
-                              <span className="font-mono text-xs text-gray-200 select-all">{k.license_key}</span>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <code
+                                className="font-mono text-xs text-slate-700 dark:text-gray-300 bg-slate-100 dark:bg-gray-800 px-2 py-1 rounded truncate max-w-[140px]"
+                                title={k.license_key}
+                              >
+                                {k.license_key.length > 18 ? k.license_key.slice(0, 14) + '…' : k.license_key}
+                              </code>
                               <button
                                 onClick={() => handleCopy(k.license_key)}
-                                className="text-gray-600 hover:text-gray-300 transition-colors"
+                                className="text-slate-400 dark:text-gray-600 hover:text-blue-500 transition-colors flex-shrink-0"
                               >
                                 {copiedKey === k.license_key
-                                  ? <Check size={13} className="text-emerald-400" />
+                                  ? <Check size={13} className="text-emerald-500" />
                                   : <Copy size={13} />}
                               </button>
                             </div>
                           </td>
                           <td className="px-5 py-3.5">
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-violet-500/10 border border-violet-500/20 text-violet-400 capitalize">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-violet-500/10 border border-violet-500/20 text-violet-600 dark:text-violet-400 capitalize">
                               {k.plan}
                             </span>
                           </td>
                           <td className="px-5 py-3.5">
                             {k.instance_id ? (
                               <div>
-                                <p className="text-xs text-gray-300">{k.store_name || k.instance_id}</p>
-                                <p className="text-xs text-gray-600 font-mono">{k.owner_mobile}</p>
+                                <p className="text-xs text-slate-700 dark:text-gray-300">{k.store_name || k.instance_id}</p>
+                                <p className="text-xs text-slate-400 dark:text-gray-600 font-mono">{k.owner_mobile}</p>
                               </div>
                             ) : (
                               <button
                                 onClick={() => { setShowAssign(k); setAssignId(''); }}
-                                className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 transition-colors"
+                                className="text-xs text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 flex items-center gap-1 transition-colors"
                               >
                                 <Link2 size={12} /> Assign
                               </button>
                             )}
                           </td>
                           <td className="px-5 py-3.5">
-                            <span className={clsx('text-xs', expired ? 'text-rose-400' : 'text-gray-400')}>
+                            <span className={clsx('text-xs', expired ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-gray-400')}>
                               {k.plan === 'lifetime' ? '∞ Lifetime' : fmtDate(k.expires_at)}
                               {expired && <span className="ml-1 text-rose-500">(expired)</span>}
                             </span>
                           </td>
-                          <td className="px-5 py-3.5 text-xs text-gray-500 max-w-[180px] truncate">
+                          <td className="px-5 py-3.5 text-xs text-slate-500 dark:text-gray-500 max-w-[180px] truncate">
                             {k.notes || '—'}
                           </td>
                           <td className="px-5 py-3.5">
                             <button
                               onClick={() => handleDeactivate(k.license_key)}
-                              className="text-gray-600 hover:text-rose-400 transition-colors"
+                              className="text-slate-400 dark:text-gray-600 hover:text-rose-500 dark:hover:text-rose-400 transition-colors"
                               title="Deactivate"
                             >
                               <Trash2 size={15} />
@@ -220,28 +244,37 @@ export default function Licenses() {
 
           {/* Inactive keys */}
           {inactive.length > 0 && (
-            <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-800">
-                <h2 className="text-sm font-semibold text-gray-500">Inactive Keys ({inactive.length})</h2>
+            <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl overflow-hidden">
+              <div className="px-5 py-4 border-b border-slate-200 dark:border-gray-800">
+                <h2 className="text-sm font-semibold text-slate-500 dark:text-gray-500">Inactive Keys ({inactive.length})</h2>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-gray-800">
+                    <tr className="border-b border-slate-200 dark:border-gray-800">
                       {['License Key', 'Plan', 'Assigned To', 'Deactivated'].map((h) => (
-                        <th key={h} className="text-left px-5 py-3 text-xs font-medium text-gray-600 uppercase tracking-wider">
+                        <th key={h} className="text-left px-5 py-3 text-xs font-medium text-slate-400 dark:text-gray-600 uppercase tracking-wider">
                           {h}
                         </th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-800/60">
+                  <tbody className="divide-y divide-slate-200 dark:divide-gray-800/60">
                     {inactive.map((k) => (
                       <tr key={k.license_key} className="opacity-50">
-                        <td className="px-5 py-3 font-mono text-xs text-gray-400 line-through">{k.license_key}</td>
-                        <td className="px-5 py-3 text-xs text-gray-500 capitalize">{k.plan}</td>
-                        <td className="px-5 py-3 text-xs text-gray-500">{k.store_name || k.instance_id || '—'}</td>
-                        <td className="px-5 py-3 text-xs text-gray-600">{fmtDate(k.issued_at)}</td>
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <code
+                              className="font-mono text-xs text-slate-500 dark:text-gray-400 line-through truncate max-w-[140px]"
+                              title={k.license_key}
+                            >
+                              {k.license_key.length > 18 ? k.license_key.slice(0, 14) + '…' : k.license_key}
+                            </code>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3 text-xs text-slate-500 dark:text-gray-500 capitalize">{k.plan}</td>
+                        <td className="px-5 py-3 text-xs text-slate-500 dark:text-gray-500">{k.store_name || k.instance_id || '—'}</td>
+                        <td className="px-5 py-3 text-xs text-slate-400 dark:text-gray-600">{fmtDate(k.issued_at)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -255,13 +288,13 @@ export default function Licenses() {
       {/* Create modal */}
       {showCreate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 w-full max-w-md shadow-2xl">
-            <h3 className="text-lg font-semibold text-white mb-1">Generate License Key</h3>
-            <p className="text-sm text-gray-500 mb-5">Create a new license key for a POS instance.</p>
+          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-1">Generate License Key</h3>
+            <p className="text-sm text-slate-500 dark:text-gray-500 mb-5">Create a new license key for a POS instance.</p>
 
             <div className="flex flex-col gap-4">
               <div>
-                <label className="block text-xs text-gray-400 mb-1.5">Plan</label>
+                <label className="block text-xs text-slate-500 dark:text-gray-400 mb-1.5">Plan</label>
                 <select
                   value={plan}
                   onChange={(e) => {
@@ -282,7 +315,7 @@ export default function Licenses() {
 
               {plan !== 'lifetime' && (
                 <div>
-                  <label className="block text-xs text-gray-400 mb-1.5">Duration (days)</label>
+                  <label className="block text-xs text-slate-500 dark:text-gray-400 mb-1.5">Duration (days)</label>
                   <input
                     type="number"
                     min="1"
@@ -295,7 +328,7 @@ export default function Licenses() {
               )}
 
               <div>
-                <label className="block text-xs text-gray-400 mb-1.5">Assign to Instance (optional)</label>
+                <label className="block text-xs text-slate-500 dark:text-gray-400 mb-1.5">Assign to Instance (optional)</label>
                 <select
                   value={assignToId}
                   onChange={(e) => setAssignToId(e.target.value)}
@@ -311,7 +344,7 @@ export default function Licenses() {
               </div>
 
               <div>
-                <label className="block text-xs text-gray-400 mb-1.5">Notes (optional)</label>
+                <label className="block text-xs text-slate-500 dark:text-gray-400 mb-1.5">Notes (optional)</label>
                 <input
                   type="text"
                   value={notes}
@@ -322,7 +355,7 @@ export default function Licenses() {
               </div>
 
               {createErr && (
-                <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2">
+                <p className="text-xs text-rose-600 dark:text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2">
                   {createErr}
                 </p>
               )}
@@ -342,12 +375,25 @@ export default function Licenses() {
       {/* Assign modal */}
       {showAssign && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 w-full max-w-md shadow-2xl">
-            <h3 className="text-lg font-semibold text-white mb-1">Assign License</h3>
-            <p className="text-sm text-gray-500 mb-1">Key:</p>
-            <p className="font-mono text-xs text-blue-400 mb-4 select-all">{showAssign.license_key}</p>
+          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-1">Assign License</h3>
+            <p className="text-sm text-slate-500 dark:text-gray-500 mb-1">Key:</p>
+            <div className="flex items-center gap-2 mb-4">
+              <code
+                className="font-mono text-xs text-blue-600 dark:text-blue-400 bg-blue-500/10 px-2 py-1 rounded truncate max-w-[280px]"
+                title={showAssign.license_key}
+              >
+                {showAssign.license_key.length > 20 ? showAssign.license_key.slice(0, 16) + '…' : showAssign.license_key}
+              </code>
+              <button
+                onClick={() => handleCopy(showAssign.license_key)}
+                className="text-slate-400 dark:text-gray-600 hover:text-blue-500 transition-colors flex-shrink-0"
+              >
+                {copiedKey === showAssign.license_key ? <Check size={13} className="text-emerald-500" /> : <Copy size={13} />}
+              </button>
+            </div>
 
-            <label className="block text-xs text-gray-400 mb-1.5">Select POS Instance</label>
+            <label className="block text-xs text-slate-500 dark:text-gray-400 mb-1.5">Select POS Instance</label>
             <select
               value={assignId}
               onChange={(e) => setAssignId(e.target.value)}
@@ -362,7 +408,7 @@ export default function Licenses() {
             </select>
 
             {assignErr && (
-              <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2 mb-4">
+              <p className="text-xs text-rose-600 dark:text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2 mb-4">
                 {assignErr}
               </p>
             )}

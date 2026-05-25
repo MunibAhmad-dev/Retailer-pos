@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Plus, Minus, Search, ShoppingCart as CartIcon, X,
-  CreditCard, Printer, RefreshCw, PenLine, CheckCircle, Loader2, AlertTriangle, Package, Users
+  CreditCard, Printer, RefreshCw, PenLine, CheckCircle, Loader2,
+  AlertTriangle, Package, Users, Sparkles, Tag, Hash,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { cn, formatInvoiceId } from '../lib/utils';
 import { useNotifications } from '../components/NotificationProvider';
 import {
@@ -43,6 +43,7 @@ interface Product {
   unit?: string;
   metadata?: any;
   product_type?: string;
+  barcode?: string;
 }
 
 interface Customer {
@@ -54,7 +55,7 @@ interface Customer {
 interface Settings {
   store_name: string; store_phone: string; store_address: string;
   receipt_footer: string; store_logo: string;
-  invoice_style?: string; // 'thermal' | 'formal'
+  invoice_style?: string;
   invoice_notes?: string;
 }
 
@@ -76,11 +77,9 @@ import RegisterManager from '../components/RegisterManager';
 
 const fmtPKR = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
 
+// ─── Receipt Modal (unchanged logic) ─────────────────────────────────────────
 function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
-  data: ReceiptData;
-  onPrint: () => void;
-  onSavePdf: () => void;
-  onClose: () => void;
+  data: ReceiptData; onPrint: () => void; onSavePdf: () => void; onClose: () => void;
 }) {
   const [isPrinting, setIsPrinting] = useState(false);
   const { addNotification } = useNotifications();
@@ -99,59 +98,31 @@ function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
 
   const handleWhatsApp = () => {
     if (!data.customerPhone) return;
-
     const paidAmt = data.amountPaid ?? data.total;
-    const balance = data.balance ?? 0; // negative = credit owed, positive = change due
+    const balance = data.balance ?? 0;
     const storeName = data.settings.store_name || 'Store';
     const invoiceId = formatInvoiceId(data.saleId, data.date);
-
-    // ── English section ──
     let msg = `🧾 *Invoice: ${invoiceId}*\n*${storeName}*\n`;
-    msg += `📅 ${data.date}\n`;
-    msg += `───────────────────\n`;
-    data.items.forEach(i => {
-      msg += `▪ ${i.name} x${i.quantity} = ${fmtPKR(i.price * i.quantity)}\n`;
-    });
+    msg += `📅 ${data.date}\n───────────────────\n`;
+    data.items.forEach(i => { msg += `▪ ${i.name} x${i.quantity} = ${fmtPKR(i.price * i.quantity)}\n`; });
     msg += `───────────────────\n`;
     if (data.discount > 0) msg += `🏷️ Discount: -${fmtPKR(data.discount)}\n`;
-    msg += `💰 *Total: ${fmtPKR(data.total)}*\n`;
-    msg += `✅ *Paid: ${fmtPKR(paidAmt)}*\n`;
-    if (balance < 0) {
-      msg += `🔴 *Remaining Balance: ${fmtPKR(Math.abs(balance))}*\n`;
-    } else if (balance > 0) {
-      msg += `🟢 *Change Due: ${fmtPKR(balance)}*\n`;
-    } else {
-      msg += `🟢 *Fully Paid*\n`;
-    }
-    msg += `\n`;
-
-    // ── Urdu section ──
-    msg += `━━━━━━━━━━━━━━━━━━━\n`;
-    msg += `🧾 *بل نمبر: ${invoiceId}*\n`;
-    msg += `🏪 *${storeName}*\n`;
-    msg += `━━━━━━━━━━━━━━━━━━━\n`;
-    data.items.forEach(i => {
-      msg += `▪ ${i.name} × ${i.quantity} = ${fmtPKR(i.price * i.quantity)}\n`;
-    });
+    msg += `💰 *Total: ${fmtPKR(data.total)}*\n✅ *Paid: ${fmtPKR(paidAmt)}*\n`;
+    if (balance < 0) msg += `🔴 *Remaining Balance: ${fmtPKR(Math.abs(balance))}*\n`;
+    else if (balance > 0) msg += `🟢 *Change Due: ${fmtPKR(balance)}*\n`;
+    else msg += `🟢 *Fully Paid*\n`;
+    msg += `\n━━━━━━━━━━━━━━━━━━━\n🧾 *بل نمبر: ${invoiceId}*\n🏪 *${storeName}*\n━━━━━━━━━━━━━━━━━━━\n`;
+    data.items.forEach(i => { msg += `▪ ${i.name} × ${i.quantity} = ${fmtPKR(i.price * i.quantity)}\n`; });
     msg += `━━━━━━━━━━━━━━━━━━━\n`;
     if (data.discount > 0) msg += `🏷️ رعایت: -${fmtPKR(data.discount)}\n`;
-    msg += `💰 *کل رقم: ${fmtPKR(data.total)}*\n`;
-    msg += `✅ *ادا شدہ: ${fmtPKR(paidAmt)}*\n`;
-    if (balance < 0) {
-      msg += `🔴 *باقی رقم (ادھار): ${fmtPKR(Math.abs(balance))}*\n`;
-    } else if (balance > 0) {
-      msg += `🟢 *واپسی: ${fmtPKR(balance)}*\n`;
-    } else {
-      msg += `🟢 *مکمل ادائیگی ہو گئی*\n`;
-    }
+    msg += `💰 *کل رقم: ${fmtPKR(data.total)}*\n✅ *ادا شدہ: ${fmtPKR(paidAmt)}*\n`;
+    if (balance < 0) msg += `🔴 *باقی رقم (ادھار): ${fmtPKR(Math.abs(balance))}*\n`;
+    else if (balance > 0) msg += `🟢 *واپسی: ${fmtPKR(balance)}*\n`;
+    else msg += `🟢 *مکمل ادائیگی ہو گئی*\n`;
     msg += `\n🙏 شکریہ! آپ کا دوبارہ خیرمقدم ہے۔`;
-
-    // Format phone number (remove non-digits, ensure country code)
     let phone = data.customerPhone.replace(/\D/g, '');
     if (phone.startsWith('0')) phone = '92' + phone.substring(1);
-
-    const url = `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
-    window.open(url, '_blank');
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(msg)}`, '_blank');
   };
 
   return (
@@ -159,97 +130,60 @@ function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
       <Card className="w-full max-w-sm flex flex-col max-h-[90vh] shadow-2xl animate-in zoom-in-95 duration-200">
         <CardHeader className="flex flex-row items-center justify-between pb-4 border-b">
           <div className="flex items-center gap-2">
-            <CheckCircle size={20} className="text-green-500" />
+            <div className="w-8 h-8 rounded-full bg-emerald-500/15 flex items-center justify-center">
+              <CheckCircle size={18} className="text-emerald-500" />
+            </div>
             <CardTitle className="text-lg">Sale Complete!</CardTitle>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8 -mr-2">
             <X size={18} />
           </Button>
         </CardHeader>
-
         <CardContent className="flex-1 overflow-y-auto p-6 bg-muted/10">
           <div className="bg-background border border-dashed border-border rounded-xl p-5 font-mono text-xs text-foreground shadow-sm">
             {data.settings.store_logo && (
               <img src={data.settings.store_logo} alt="Logo" className="h-10 mx-auto mb-2 object-contain" />
             )}
             <p className="text-center font-bold text-sm mb-0.5">{data.settings.store_name}</p>
-            {data.settings.store_address && (
-              <p className="text-center text-muted-foreground leading-tight">{data.settings.store_address}</p>
-            )}
-            {data.settings.store_phone && (
-              <p className="text-center text-muted-foreground">Tel: {data.settings.store_phone}</p>
-            )}
-
+            {data.settings.store_address && <p className="text-center text-muted-foreground leading-tight">{data.settings.store_address}</p>}
+            {data.settings.store_phone && <p className="text-center text-muted-foreground">Tel: {data.settings.store_phone}</p>}
             <div className="border-b border-dashed border-border my-3" />
-
             <p className="text-center text-muted-foreground font-semibold">Invoice: {formatInvoiceId(data.saleId, data.date)}</p>
             <p className="text-center text-muted-foreground/70 text-[10px]">{data.date}</p>
-
             <div className="border-b border-dashed border-border my-3" />
-
             <div className="space-y-1.5">
               {data.items.map((item) => (
                 <div key={item.id} className="flex justify-between">
                   <span className="flex-1 mr-2 truncate">
-                    {item.name}
-                    {item.is_custom && <span className="text-purple-500 ml-1">(custom)</span>}
-                    {' '}x{item.quantity}
+                    {item.name}{item.is_custom && <span className="text-purple-500 ml-1">(custom)</span>} x{item.quantity}
                   </span>
                   <span className="font-semibold flex-shrink-0">{fmtPKR(item.price * item.quantity)}</span>
                 </div>
               ))}
             </div>
-
             <div className="border-b border-dashed border-border my-3" />
-
-            <div className="flex justify-between text-muted-foreground text-[10px] mt-1">
-              <span>Subtotal</span>
-              <span>{fmtPKR(data.subtotal)}</span>
-            </div>
-            {data.discount > 0 && (
-              <div className="flex justify-between text-destructive text-[10px] mt-0.5">
-                <span>Discount</span>
-                <span>-{fmtPKR(data.discount)}</span>
-              </div>
-            )}
-            <div className="flex justify-between font-bold text-sm mt-1">
-              <span>Total</span>
-              <span>{fmtPKR(data.total)}</span>
-            </div>
-            {data.amountPaid !== undefined && (
-              <div className="flex justify-between text-muted-foreground text-[10px] mt-1">
-                <span>Amount Paid</span>
-                <span>{fmtPKR(data.amountPaid)}</span>
-              </div>
-            )}
+            <div className="flex justify-between text-muted-foreground text-[10px] mt-1"><span>Subtotal</span><span>{fmtPKR(data.subtotal)}</span></div>
+            {data.discount > 0 && <div className="flex justify-between text-destructive text-[10px] mt-0.5"><span>Discount</span><span>-{fmtPKR(data.discount)}</span></div>}
+            <div className="flex justify-between font-bold text-sm mt-1"><span>Total</span><span>{fmtPKR(data.total)}</span></div>
+            {data.amountPaid !== undefined && <div className="flex justify-between text-muted-foreground text-[10px] mt-1"><span>Amount Paid</span><span>{fmtPKR(data.amountPaid)}</span></div>}
             {data.balance !== undefined && data.balance !== 0 && (
               <div className="flex justify-between text-muted-foreground text-[10px] mt-0.5">
                 <span>{data.balance > 0 ? 'Remaining Balance (Qaraz)' : 'Change Due'}</span>
-                <span className={data.balance > 0 ? 'text-amber-600 font-semibold' : 'text-green-600 font-semibold'}>
-                  {fmtPKR(Math.abs(data.balance))}
-                </span>
+                <span className={data.balance > 0 ? 'text-amber-600 font-semibold' : 'text-green-600 font-semibold'}>{fmtPKR(Math.abs(data.balance))}</span>
               </div>
             )}
-            <div className="flex justify-between text-muted-foreground text-[10px] mt-1">
-              <span>Payment</span>
-              <span className="uppercase">{data.paymentMethod === 'online' ? 'Online Payment' : data.paymentMethod}</span>
-            </div>
-
+            <div className="flex justify-between text-muted-foreground text-[10px] mt-1"><span>Payment</span><span className="uppercase">{data.paymentMethod === 'online' ? 'Online Payment' : data.paymentMethod}</span></div>
             {data.settings.receipt_footer && (
-              <>
-                <div className="border-b border-dashed border-border my-3" />
-                <p className="text-center text-muted-foreground">{data.settings.receipt_footer}</p>
-              </>
+              <><div className="border-b border-dashed border-border my-3" /><p className="text-center text-muted-foreground">{data.settings.receipt_footer}</p></>
             )}
           </div>
         </CardContent>
-
         <CardFooter className="flex flex-col gap-3 pt-4 border-t">
           <div className="flex w-full gap-3">
             <Button variant="outline" onClick={onClose} className="flex-1">Close</Button>
             <Button onClick={handlePrint} disabled={isPrinting} className="flex-1 gap-2 shadow-md">
               {isPrinting ? <RefreshCw size={15} className="animate-spin" /> : <Printer size={15} />}
-              {isPrinting ? 'Printing...' : 'Print '}
+              {isPrinting ? 'Printing...' : 'Print'}
             </Button>
           </div>
           <div className="flex gap-3 w-full">
@@ -258,7 +192,7 @@ function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
             </Button>
             {data.customerPhone && (
               <Button onClick={handleWhatsApp} className="flex-1 gap-2 text-xs bg-green-600 hover:bg-green-700 text-white border-transparent">
-                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" className="css-i6dzq1"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
                 WhatsApp
               </Button>
             )}
@@ -269,6 +203,151 @@ function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
   );
 }
 
+// ─── Invoice builders (unchanged) ────────────────────────────────────────────
+function buildReceiptHtml(data: ReceiptData) {
+  const itemsHtml = data.items.map((item) =>
+    `<div class="item"><span>${item.name} x${item.quantity}</span><span>${fmtPKR(item.price * item.quantity)}</span></div>`
+  ).join('');
+  return `
+    ${data.settings.store_logo ? `<img src="${data.settings.store_logo}" style="max-height:48px;display:block;margin:0 auto 4px"/>` : ''}
+    <h2>${data.settings.store_name}</h2>
+    ${data.settings.store_address ? `<p class="center">${data.settings.store_address}</p>` : ''}
+    ${data.settings.store_phone ? `<p class="center">Tel: ${data.settings.store_phone}</p>` : ''}
+    <div class="divider"></div>
+    <p class="center" style="font-weight:bold;font-size:12px;">Invoice: ${formatInvoiceId(data.saleId, data.date)}</p>
+    <p class="center" style="font-size:10px;margin-top:2px;color:#555;">${data.date}</p>
+    <div class="divider"></div>
+    ${itemsHtml}
+    <div class="divider"></div>
+    <div class="total-row" style="font-weight:normal;font-size:11px"><span>Subtotal</span><span>${fmtPKR(data.subtotal)}</span></div>
+    ${Number(data.discount) > 0 ? `<div class="total-row" style="font-weight:normal;font-size:11px;color:red"><span>Discount</span><span>-${fmtPKR(Number(data.discount))}</span></div>` : ''}
+    <div class="total-row"><span>Total</span><span>${fmtPKR(data.total)}</span></div>
+    ${data.amountPaid !== undefined ? `<div class="total-row" style="font-weight:normal;font-size:10px;margin-top:1px"><span>Amount Paid</span><span>${fmtPKR(data.amountPaid)}</span></div>` : ''}
+    ${data.balance !== undefined && data.balance !== 0 ? `<div class="total-row" style="font-weight:normal;font-size:10px;margin-top:1px"><span>${data.balance > 0 ? 'Remaining Balance' : 'Change Due'}</span><span>${fmtPKR(Math.abs(data.balance))}</span></div>` : ''}
+    <div class="total-row" style="font-weight:normal;font-size:10px;margin-top:2px"><span>Payment</span><span>${data.paymentMethod === 'online' ? 'ONLINE PAYMENT' : data.paymentMethod.toUpperCase()}</span></div>
+    <div class="divider"></div>
+    <div style="text-align: center; margin-top: 6px;">
+      <div style="font-size: 11px; font-weight: bold;">${data.settings.receipt_footer}</div>
+      <div style="font-size: 9px; margin-top: 6px; color: #555;">Software made by +923298748232</div>
+    </div>
+  `;
+}
+
+function buildFormalInvoiceHtml(data: ReceiptData) {
+  const fmt2 = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
+  const pkrNum = (n: number) => Math.round(n).toLocaleString('en-PK');
+  const paidAmt = data.amountPaid !== undefined ? data.amountPaid : data.total;
+  const balAmt = data.balance !== undefined ? data.balance : 0;
+  let balanceRow = '';
+  if (balAmt > 0) balanceRow = `<tr><td class="label">BALANCE (CREDIT)</td><td class="value">PKR ${pkrNum(balAmt)}</td></tr>`;
+  else if (balAmt < 0) balanceRow = `<tr><td class="label">CHANGE DUE</td><td class="value">PKR ${pkrNum(Math.abs(balAmt))}</td></tr>`;
+  else balanceRow = `<tr><td class="label">BALANCE</td><td class="value">PKR 0</td></tr>`;
+  const rowsHtml = data.items.map((item, idx) => `
+    <tr class="item-row">
+      <td class="center">${idx + 1}</td>
+      <td>${item.name}</td>
+      <td class="center warranty-cell">—</td>
+      <td class="center">${item.quantity}</td>
+      <td class="right">PKR ${pkrNum(item.price)}</td>
+      <td class="right amount-col">PKR ${pkrNum(item.price * item.quantity)}</td>
+    </tr>
+  `).join('');
+  const emptyCount = Math.max(0, 10 - data.items.length);
+  const emptyRowsHtml = Array(emptyCount).fill(`<tr class="item-row empty-row"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>`).join('');
+  const notesLines = (data.settings.invoice_notes || data.settings.receipt_footer || '')
+    .split('\n').filter(Boolean)
+    .map(l => `<div class="note-line">${l.replace(/^[•\-]\s*/, '')}</div>`).join('');
+  const logoHtml = data.settings.store_logo ? `<img src="${data.settings.store_logo}" class="logo" alt="logo"/>` : '';
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><title>Invoice ${formatInvoiceId(data.saleId, data.date)}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 210mm; background: #fff; color: #1a1a1a; font-family: Arial, Helvetica, sans-serif; font-size: 11pt; }
+  .page { width: 210mm; min-height: 297mm; padding: 12mm 14mm 10mm; display: flex; flex-direction: column; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 8px; border-bottom: 3px solid #cc0000; margin-bottom: 10px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .logo { height: 52px; object-fit: contain; }
+  .store-name { font-size: 20pt; font-weight: 900; color: #cc0000; line-height: 1.1; }
+  .store-sub { font-size: 8pt; color: #555; margin-top: 3px; line-height: 1.5; }
+  .invoice-meta { text-align: right; }
+  .invoice-title { font-size: 18pt; font-weight: 900; color: #1a1a1a; letter-spacing: 2px; }
+  .meta-row { font-size: 9pt; color: #333; margin-top: 4px; }
+  .meta-row span { font-weight: bold; }
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+  thead tr { background: #cc0000; color: #fff; }
+  thead th { padding: 7px 6px; font-size: 9pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border: 1px solid #aaa; white-space: nowrap; }
+  .item-row td { border: 1px solid #ccc; padding: 6px 6px; font-size: 9.5pt; vertical-align: middle; }
+  .item-row:nth-child(even) { background: #fafafa; }
+  .empty-row td { height: 22px; }
+  .center { text-align: center; } .right { text-align: right; } .amount-col { font-weight: 700; }
+  .warranty-cell { color: #888; font-size: 8pt; }
+  .bottom { display: flex; justify-content: space-between; gap: 16px; margin-top: 10px; align-items: flex-start; }
+  .notes-box { flex: 1; border: 1px solid #e0e0e0; border-radius: 4px; padding: 9px 11px; background: #fffbf8; }
+  .notes-title { font-size: 8pt; font-weight: 700; color: #cc0000; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
+  .note-line { font-size: 8pt; color: #c00; line-height: 1.7; padding-left: 8px; position: relative; }
+  .note-line::before { content: "•"; position: absolute; left: 0; }
+  .summary { min-width: 200px; }
+  .summary table { width: 100%; }
+  .summary td { border: 1px solid #ccc; padding: 5px 9px; font-size: 9.5pt; }
+  .summary .label { color: #333; } .summary .value { text-align: right; font-weight: 600; }
+  .summary .discount-row td { color: #cc0000; }
+  .summary .grand-row td { font-weight: 800; font-size: 10.5pt; background: #f5f5f5; }
+  .footer { margin-top: 14px; border-top: 2px solid #cc0000; padding-top: 8px; display: flex; justify-content: space-between; align-items: flex-end; font-size: 8pt; color: #555; }
+  .footer .sign-line { border-bottom: 1px solid #999; width: 160px; margin-top: 14px; }
+  .footer .contact { text-align: right; line-height: 1.7; }
+</style></head><body><div class="page">
+  <div class="header">
+    <div class="brand">${logoHtml}<div><div class="store-name">${data.settings.store_name || 'Store Name'}</div><div class="store-sub">${data.settings.store_address ? data.settings.store_address + '<br/>' : ''}${data.settings.store_phone ? 'Tel: ' + data.settings.store_phone : ''}</div></div></div>
+    <div class="invoice-meta"><div class="invoice-title">INVOICE</div><div class="meta-row"><span>No:</span> ${formatInvoiceId(data.saleId, data.date)}</div><div class="meta-row"><span>Date:</span> ${data.date}</div></div>
+  </div>
+  <table><thead><tr><th style="width:36px">S.No</th><th style="text-align:left">Description</th><th style="width:68px">Warranty</th><th style="width:40px">Qty</th><th style="width:96px">U-Price</th><th style="width:104px">Amount</th></tr></thead><tbody>${rowsHtml}${emptyRowsHtml}</tbody></table>
+  <div class="bottom">
+    <div class="notes-box"><div class="notes-title">Terms &amp; Notes</div>${notesLines || '<div class="note-line" style="color:#aaa;padding-left:0">No notes set.</div>'}</div>
+    <div class="summary"><table>
+      <tr><td class="label">AMOUNT</td><td class="value">PKR ${pkrNum(data.subtotal)}</td></tr>
+      <tr class="discount-row"><td class="label">DISCOUNT</td><td class="value">${Number(data.discount) > 0 ? '- PKR ' + pkrNum(Number(data.discount)) : '—'}</td></tr>
+      <tr class="grand-row"><td class="label">GRAND TOTAL</td><td class="value">PKR ${pkrNum(data.total)}</td></tr>
+      <tr><td class="label">PAID</td><td class="value">PKR ${pkrNum(paidAmt)}</td></tr>
+      ${balanceRow}
+    </table></div>
+  </div>
+  <div class="footer">
+    <div><div style="font-size:8pt;color:#888;margin-bottom:2px">Authorized Signature</div><div class="sign-line"></div></div>
+    <div class="contact">${data.settings.store_name || ''}<br/>${data.settings.store_address ? data.settings.store_address + '<br/>' : ''}${data.settings.store_phone ? 'Tel: ' + data.settings.store_phone : ''}</div>
+  </div>
+</div></body></html>`;
+}
+
+function buildInvoiceHtml(data: ReceiptData) {
+  return data.settings.invoice_style === 'formal' ? buildFormalInvoiceHtml(data) : buildReceiptHtml(data);
+}
+
+// ─── Category colour palette ──────────────────────────────────────────────────
+const CATEGORY_COLORS: Record<string, { from: string; to: string; text: string }> = {
+  'chicken':  { from: '#ea580c', to: '#d97706', text: '#fff' },
+  'bottle':   { from: '#16a34a', to: '#059669', text: '#fff' },
+  'rice':     { from: '#ca8a04', to: '#d97706', text: '#fff' },
+  'chawal':   { from: '#ca8a04', to: '#d97706', text: '#fff' },
+  'chargha':  { from: '#dc2626', to: '#e11d48', text: '#fff' },
+  'channy':   { from: '#92400e', to: '#b45309', text: '#fff' },
+  'glass':    { from: '#0891b2', to: '#0284c7', text: '#fff' },
+  'drinks':   { from: '#2563eb', to: '#4f46e5', text: '#fff' },
+};
+const CARD_GRADIENTS = [
+  { from: '#7c3aed', to: '#6d28d9', text: '#fff' },
+  { from: '#0d9488', to: '#0891b2', text: '#fff' },
+  { from: '#db2777', to: '#be185d', text: '#fff' },
+  { from: '#1d4ed8', to: '#2563eb', text: '#fff' },
+  { from: '#059669', to: '#047857', text: '#fff' },
+  { from: '#b45309', to: '#92400e', text: '#fff' },
+];
+
+function colorForProduct(product: Product) {
+  const cat = (product.category || '').toLowerCase().trim();
+  if (cat && CATEGORY_COLORS[cat]) return CATEGORY_COLORS[cat];
+  return CARD_GRADIENTS[product.id % CARD_GRADIENTS.length];
+}
+
+// ─── Main Sales Component ─────────────────────────────────────────────────────
 export default function Sales() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -276,50 +355,38 @@ export default function Sales() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | ''>('');
   const [customerSearch, setCustomerSearch] = useState('');
-
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'online' | 'udhaar'>('cash');
   const [discountValue, setDiscountValue] = useState<string>('');
   const [discountType, setDiscountType] = useState<'fixed' | 'percentage'>('fixed');
   const [isProcessing, setIsProcessing] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [amountPaid, setAmountPaid] = useState<string>('');
-
   const [showAddCustomer, setShowAddCustomer] = useState(false);
   const [currentRegister, setCurrentRegister] = useState<any>(null);
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
-
   const [settings, setSettings] = useState<Settings>({
-    store_name: 'My Restaurant', store_phone: '', store_address: '', receipt_footer: 'Thank you!', store_logo: ''
+    store_name: 'My Store', store_phone: '', store_address: '', receipt_footer: 'Thank you!', store_logo: ''
   });
-
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null);
   const [showCustom, setShowCustom] = useState(false);
   const [customName, setCustomName] = useState('');
   const [customPrice, setCustomPrice] = useState('');
   const [customQty, setCustomQty] = useState('1');
   const customNameRef = useRef<HTMLInputElement>(null);
+  const [isSearching, setIsSearching] = useState(false);
+  const [activeCategory, setActiveCategory] = useState<string>('');
 
   const { addNotification } = useNotifications();
   const location = useLocation();
 
   useEffect(() => {
-    loadProducts();
-    loadCustomers();
-    loadSettings();
-    checkRegister();
+    loadProducts(); loadCustomers(); loadSettings(); checkRegister();
   }, []);
 
   const checkRegister = async () => {
-    try {
-      const res = await window.api.getCurrentRegister();
-      if (res.success) {
-        setCurrentRegister(res.data);
-      }
-    } catch (err) {
-      console.error(err);
-    }
+    try { const res = await window.api.getCurrentRegister(); if (res.success) setCurrentRegister(res.data); } catch { }
   };
 
   const loadCustomers = async () => {
@@ -332,12 +399,8 @@ export default function Sales() {
         if (cid) {
           setSelectedCustomerId(Number(cid));
         } else {
-          // Default to Walk-in customer
           const walkin = res.data.find((c: any) => c.name.toLowerCase().includes('walk-in'));
-          if (walkin) {
-            setSelectedCustomerId(walkin.id);
-            setCustomerSearch(walkin.name);
-          }
+          if (walkin) { setSelectedCustomerId(walkin.id); setCustomerSearch(walkin.name); }
         }
       }
     } catch { }
@@ -345,9 +408,7 @@ export default function Sales() {
 
   useEffect(() => {
     if (showCustom) {
-      setCustomName('');
-      setCustomPrice('');
-      setCustomQty('1');
+      setCustomName(''); setCustomPrice(''); setCustomQty('1');
       setTimeout(() => customNameRef.current?.focus(), 100);
     }
   }, [showCustom]);
@@ -359,52 +420,44 @@ export default function Sales() {
     try { const res = await window.api.getSettings(); if (res?.success && res.data) setSettings(res.data); } catch { }
   };
 
-  const [isSearching, setIsSearching] = useState(false);
-
   const handleSearch = (v: string) => {
-    setIsSearching(true);
-    setSearchTerm(v);
+    setIsSearching(true); setSearchTerm(v); setActiveCategory('');
     setTimeout(() => setIsSearching(false), 250);
   };
 
-  const filteredProducts = useMemo(() => products.filter((p) =>
-    p.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    p.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (p.barcode || '').toLowerCase().includes(searchTerm.toLowerCase())
-  ), [products, searchTerm]);
+  const handleCategoryFilter = (cat: string) => {
+    setActiveCategory(cat); setSearchTerm('');
+  };
+
+  const filteredProducts = useMemo(() => products.filter((p) => {
+    if (activeCategory) return p.category?.toLowerCase() === activeCategory.toLowerCase();
+    if (!searchTerm) return true;
+    const q = searchTerm.toLowerCase();
+    return p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q) || (p.barcode || '').toLowerCase().includes(q);
+  }), [products, searchTerm, activeCategory]);
 
   const filteredCustomers = useMemo(() => customers.filter((c) =>
     c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
     (c.phone || '').toLowerCase().includes(customerSearch.toLowerCase())
   ), [customers, customerSearch]);
 
-  const { visible: visibleProducts, hasMore, loadMore, total: prodTotal, showing: prodShowing } = usePagination(filteredProducts, 10, 1);
+  const { visible: visibleProducts, hasMore, loadMore, total: prodTotal, showing: prodShowing } = usePagination(filteredProducts, 12, 1);
+
+  const categories = useMemo(() => Array.from(new Set(products.map(p => p.category).filter(Boolean))), [products]);
 
   const addProductToCart = (product: Product) => {
     const key = String(product.id);
     const existing = cart.find((i) => i.id === key);
     if (existing) {
       if (product.stock !== undefined && existing.quantity + 1 > product.stock) {
-        addNotification("Stock Limit", `Only ${product.stock} units available.`, "warning");
-        return;
+        addNotification("Stock Limit", `Only ${product.stock} units available.`, "warning"); return;
       }
       setCart(cart.map((i) => i.id === key ? { ...i, quantity: i.quantity + 1 } : i));
     } else {
       if (product.stock !== undefined && product.stock <= 0) {
-        addNotification("Out of Stock", `${product.name} is out of stock.`, "error");
-        return;
+        addNotification("Out of Stock", `${product.name} is out of stock.`, "error"); return;
       }
-      setCart([...cart, {
-        id: key,
-        product_id: product.id,
-        name: product.name,
-        price: product.price,
-        quantity: 1,
-        is_custom: false,
-        stock: product.stock,
-        metadata: product.metadata,
-        product_type: product.product_type
-      }]);
+      setCart([...cart, { id: key, product_id: product.id, name: product.name, price: product.price, quantity: 1, is_custom: false, stock: product.stock, metadata: product.metadata, product_type: product.product_type }]);
     }
   };
 
@@ -413,8 +466,7 @@ export default function Sales() {
     const price = parseFloat(customPrice);
     const qty = parseInt(customQty) || 1;
     if (!customName.trim() || isNaN(price) || price <= 0) return;
-    const key = `custom-${Date.now()}`;
-    setCart([...cart, { id: key, product_id: null, name: customName.trim(), price, quantity: qty, is_custom: true }]);
+    setCart([...cart, { id: `custom-${Date.now()}`, product_id: null, name: customName.trim(), price, quantity: qty, is_custom: true }]);
     setShowCustom(false);
   };
 
@@ -423,15 +475,13 @@ export default function Sales() {
     const item = cart.find(i => i.id === id);
     if (item && item.stock !== undefined && qty > item.stock) {
       addNotification("Stock Limit", `Only ${item.stock} units available.`, "warning");
-      setCart(cart.map((i) => i.id === id ? { ...i, quantity: item.stock } : i));
-      return;
+      setCart(cart.map((i) => i.id === id ? { ...i, quantity: item.stock } : i)); return;
     }
     setCart(cart.map((i) => i.id === id ? { ...i, quantity: qty } : i));
   };
 
   const updatePrice = (id: string, rawValue: string) => {
-    const val = rawValue.replace(/[^0-9.]/g, '');
-    const price = parseFloat(val) || 0;
+    const price = parseFloat(rawValue.replace(/[^0-9.]/g, '')) || 0;
     setCart(cart.map((i) => i.id === id ? { ...i, price } : i));
   };
 
@@ -441,721 +491,432 @@ export default function Sales() {
     : (parseFloat(discountValue) || 0);
   const total = Math.max(0, subtotal - discountAmount);
 
-  const buildReceiptHtml = (data: ReceiptData) => {
-    const itemsHtml = data.items.map((item) =>
-      `<div class="item"><span>${item.name} x${item.quantity}</span><span>${fmtPKR(item.price * item.quantity)}</span></div>`
-    ).join('');
-    return `
-      ${data.settings.store_logo ? `<img src="${data.settings.store_logo}" style="max-height:48px;display:block;margin:0 auto 4px"/>` : ''}
-      <h2>${data.settings.store_name}</h2>
-      ${data.settings.store_address ? `<p class="center">${data.settings.store_address}</p>` : ''}
-      ${data.settings.store_phone ? `<p class="center">Tel: ${data.settings.store_phone}</p>` : ''}
-      <div class="divider"></div>
-      <p class="center" style="font-weight:bold;font-size:12px;">Invoice: ${formatInvoiceId(data.saleId, data.date)}</p>
-      <p class="center" style="font-size:10px;margin-top:2px;color:#555;">${data.date}</p>
-      <div class="divider"></div>
-      ${itemsHtml}
-      <div class="divider"></div>
-      <div class="total-row" style="font-weight:normal;font-size:11px"><span>Subtotal</span><span>${fmtPKR(data.subtotal)}</span></div>
-      ${Number(data.discount) > 0 ? `<div class="total-row" style="font-weight:normal;font-size:11px;color:red"><span>Discount</span><span>-${fmtPKR(Number(data.discount))}</span></div>` : ''}
-      <div class="total-row"><span>Total</span><span>${fmtPKR(data.total)}</span></div>
-      ${data.amountPaid !== undefined ? `<div class="total-row" style="font-weight:normal;font-size:10px;margin-top:1px"><span>Amount Paid</span><span>${fmtPKR(data.amountPaid)}</span></div>` : ''}
-      ${data.balance !== undefined && data.balance !== 0 ? `<div class="total-row" style="font-weight:normal;font-size:10px;margin-top:1px"><span>${data.balance > 0 ? 'Remaining Balance' : 'Change Due'}</span><span>${fmtPKR(Math.abs(data.balance))}</span></div>` : ''}
-      <div class="total-row" style="font-weight:normal;font-size:10px;margin-top:2px"><span>Payment</span><span>${data.paymentMethod === 'online' ? 'ONLINE PAYMENT' : data.paymentMethod.toUpperCase()}</span></div>
-      
-      <div class="divider"></div>
-      <div style="text-align: center; margin-top: 6px;">
-        <div style="font-size: 11px; font-weight: bold;">${data.settings.receipt_footer}</div>
-        <div style="font-size: 9px; margin-top: 6px; color: #555;">Software made by +923298748232</div>
-      </div>
-    `;
-  };
-
-  const buildFormalInvoiceHtml = (data: ReceiptData) => {
-    const fmt = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
-    const pkrNum = (n: number) => Math.round(n).toLocaleString('en-PK');
-
-    const paidAmt = data.amountPaid !== undefined ? data.amountPaid : data.total;
-    const balAmt = data.balance !== undefined ? data.balance : 0;
-
-    let balanceRow = '';
-    if (balAmt > 0) {
-      balanceRow = `<tr><td class="label">BALANCE (CREDIT)</td><td class="value">PKR ${pkrNum(balAmt)}</td></tr>`;
-    } else if (balAmt < 0) {
-      balanceRow = `<tr><td class="label">CHANGE DUE</td><td class="value">PKR ${pkrNum(Math.abs(balAmt))}</td></tr>`;
-    } else {
-      balanceRow = `<tr><td class="label">BALANCE</td><td class="value">PKR 0</td></tr>`;
-    }
-
-    const rowsHtml = data.items.map((item, idx) => `
-      <tr class="item-row">
-        <td class="center">${idx + 1}</td>
-        <td>${item.name}</td>
-        <td class="center warranty-cell">—</td>
-        <td class="center">${item.quantity}</td>
-        <td class="right">PKR ${pkrNum(item.price)}</td>
-        <td class="right amount-col">PKR ${pkrNum(item.price * item.quantity)}</td>
-      </tr>
-    `).join('');
-
-    const emptyCount = Math.max(0, 10 - data.items.length);
-    const emptyRowsHtml = Array(emptyCount).fill(`
-      <tr class="item-row empty-row">
-        <td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td>
-      </tr>
-    `).join('');
-
-    const notesLines = (data.settings.invoice_notes || data.settings.receipt_footer || '')
-      .split('\n').filter(Boolean)
-      .map(l => `<div class="note-line">${l.replace(/^[•\-]\s*/, '')}</div>`).join('');
-
-    const logoHtml = data.settings.store_logo
-      ? `<img src="${data.settings.store_logo}" class="logo" alt="logo"/>`
-      : '';
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Invoice ${formatInvoiceId(data.saleId, data.date)}</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body {
-    width: 210mm;
-    background: #fff;
-    color: #1a1a1a;
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 11pt;
-  }
-  .page {
-    width: 210mm;
-    min-height: 297mm;
-    padding: 12mm 14mm 10mm;
-    display: flex;
-    flex-direction: column;
-  }
-  /* ── Header ── */
-  .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    padding-bottom: 8px;
-    border-bottom: 3px solid #cc0000;
-    margin-bottom: 10px;
-  }
-  .brand { display: flex; align-items: center; gap: 10px; }
-  .logo { height: 52px; object-fit: contain; }
-  .store-name { font-size: 20pt; font-weight: 900; color: #cc0000; line-height: 1.1; }
-  .store-sub { font-size: 8pt; color: #555; margin-top: 3px; line-height: 1.5; }
-  .invoice-meta { text-align: right; }
-  .invoice-title { font-size: 18pt; font-weight: 900; color: #1a1a1a; letter-spacing: 2px; }
-  .meta-row { font-size: 9pt; color: #333; margin-top: 4px; }
-  .meta-row span { font-weight: bold; }
-  /* ── Items Table ── */
-  table { width: 100%; border-collapse: collapse; margin-top: 6px; }
-  thead tr { background: #cc0000; color: #fff; }
-  thead th {
-    padding: 7px 6px;
-    font-size: 9pt;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    border: 1px solid #aaa;
-    white-space: nowrap;
-  }
-  .item-row td {
-    border: 1px solid #ccc;
-    padding: 6px 6px;
-    font-size: 9.5pt;
-    vertical-align: middle;
-  }
-  .item-row:nth-child(even) { background: #fafafa; }
-  .empty-row td { height: 22px; }
-  .center { text-align: center; }
-  .right { text-align: right; }
-  .amount-col { font-weight: 700; }
-  .warranty-cell { color: #888; font-size: 8pt; }
-  /* ── Bottom Section ── */
-  .bottom { display: flex; justify-content: space-between; gap: 16px; margin-top: 10px; align-items: flex-start; }
-  /* Notes */
-  .notes-box {
-    flex: 1;
-    border: 1px solid #e0e0e0;
-    border-radius: 4px;
-    padding: 9px 11px;
-    background: #fffbf8;
-  }
-  .notes-title { font-size: 8pt; font-weight: 700; color: #cc0000; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 5px; }
-  .note-line { font-size: 8pt; color: #c00; line-height: 1.7; padding-left: 8px; position: relative; }
-  .note-line::before { content: "•"; position: absolute; left: 0; }
-  /* Summary */
-  .summary { min-width: 200px; }
-  .summary table { width: 100%; }
-  .summary td {
-    border: 1px solid #ccc;
-    padding: 5px 9px;
-    font-size: 9.5pt;
-  }
-  .summary .label { color: #333; }
-  .summary .value { text-align: right; font-weight: 600; }
-  .summary .discount-row td { color: #cc0000; }
-  .summary .grand-row td { font-weight: 800; font-size: 10.5pt; background: #f5f5f5; }
-  /* Footer */
-  .footer {
-    margin-top: 14px;
-    border-top: 2px solid #cc0000;
-    padding-top: 8px;
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-end;
-    font-size: 8pt;
-    color: #555;
-  }
-  .footer .sign-line { border-bottom: 1px solid #999; width: 160px; margin-top: 14px; }
-  .footer .contact { text-align: right; line-height: 1.7; }
-  @media print {
-    html, body { width: 210mm; }
-    .page { padding: 8mm 12mm; }
-  }
-</style>
-</head>
-<body>
-<div class="page">
-  <!-- Header -->
-  <div class="header">
-    <div class="brand">
-      ${logoHtml}
-      <div>
-        <div class="store-name">${data.settings.store_name || 'Store Name'}</div>
-        <div class="store-sub">
-          ${data.settings.store_address ? `${data.settings.store_address}<br/>` : ''}
-          ${data.settings.store_phone ? `Tel: ${data.settings.store_phone}` : ''}
-        </div>
-      </div>
-    </div>
-    <div class="invoice-meta">
-      <div class="invoice-title">INVOICE</div>
-      <div class="meta-row"><span>No:</span> ${formatInvoiceId(data.saleId, data.date)}</div>
-      <div class="meta-row"><span>Date:</span> ${data.date}</div>
-    </div>
-  </div>
-
-  <!-- Items Table -->
-  <table>
-    <thead>
-      <tr>
-        <th style="width:36px">S.No</th>
-        <th style="text-align:left">Description</th>
-        <th style="width:68px">Warranty</th>
-        <th style="width:40px">Qty</th>
-        <th style="width:96px">U-Price</th>
-        <th style="width:104px">Amount</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rowsHtml}
-      ${emptyRowsHtml}
-    </tbody>
-  </table>
-
-  <!-- Bottom: Notes + Summary -->
-  <div class="bottom">
-    <div class="notes-box">
-      <div class="notes-title">Terms &amp; Notes</div>
-      ${notesLines || '<div class="note-line" style="color:#aaa;padding-left:0">No notes set. Add them in Settings → Invoice Notes.</div>'}
-    </div>
-    <div class="summary">
-      <table>
-        <tr><td class="label">AMOUNT</td><td class="value">PKR ${pkrNum(data.subtotal)}</td></tr>
-        <tr class="discount-row"><td class="label">DISCOUNT</td><td class="value">${Number(data.discount) > 0 ? '- PKR ' + pkrNum(Number(data.discount)) : '—'}</td></tr>
-        <tr class="grand-row"><td class="label">GRAND TOTAL</td><td class="value">PKR ${pkrNum(data.total)}</td></tr>
-        <tr><td class="label">PAID</td><td class="value">PKR ${pkrNum(paidAmt)}</td></tr>
-        ${balanceRow}
-      </table>
-    </div>
-  </div>
-
-  <!-- Footer -->
-  <div class="footer">
-    <div>
-      <div style="font-size:8pt;color:#888;margin-bottom:2px">Authorized Signature</div>
-      <div class="sign-line"></div>
-    </div>
-    <div class="contact">
-      ${data.settings.store_name || ''}<br/>
-      ${data.settings.store_address ? data.settings.store_address + '<br/>' : ''}
-      ${data.settings.store_phone ? 'Tel: ' + data.settings.store_phone : ''}
-    </div>
-  </div>
-</div>
-</body>
-</html>`;
-  };
-
-  const buildInvoiceHtml = (data: ReceiptData) => {
-    if (data.settings.invoice_style === 'formal') {
-      return buildFormalInvoiceHtml(data);
-    }
-    return buildReceiptHtml(data);
-  };
-  const CATEGORY_COLORS: Record<string, { bg: string, border: string, badge: string }> = {
-    'chicken': { bg: 'from-orange-600 to-amber-500', border: 'border-orange-700', badge: 'bg-white/20 text-orange-100' },
-    'bottle': { bg: 'from-green-600 to-emerald-500', border: 'border-green-700', badge: 'bg-white/20 text-green-100' },
-    'rice': { bg: 'from-yellow-700 to-amber-600', border: 'border-yellow-800', badge: 'bg-white/20 text-yellow-100' },
-    'chawal': { bg: 'from-yellow-700 to-amber-600', border: 'border-yellow-800', badge: 'bg-white/20 text-yellow-100' },
-    'chargha': { bg: 'from-red-700 to-rose-600', border: 'border-red-800', badge: 'bg-white/20 text-red-100' },
-    'channy': { bg: 'from-amber-800 to-orange-700', border: 'border-amber-900', badge: 'bg-white/20 text-amber-100' },
-    'glass': { bg: 'from-cyan-600 to-sky-500', border: 'border-cyan-700', badge: 'bg-white/20 text-cyan-100' },
-    'drinks': { bg: 'from-blue-600 to-indigo-500', border: 'border-blue-700', badge: 'bg-white/20 text-blue-100' },
-  };
-
-  const CARD_COLORS = [
-    { bg: 'from-violet-600 to-purple-500', border: 'border-violet-700', badge: 'bg-white/20 text-purple-100' },
-    { bg: 'from-teal-600 to-teal-400', border: 'border-teal-700', badge: 'bg-white/20 text-teal-100' },
-    { bg: 'from-pink-600 to-pink-400', border: 'border-pink-700', badge: 'bg-white/20 text-pink-100' },
-    { bg: 'from-blue-700 to-blue-500', border: 'border-blue-800', badge: 'bg-white/20 text-blue-100' },
-    { bg: 'from-emerald-600 to-emerald-400', border: 'border-emerald-700', badge: 'bg-white/20 text-emerald-100' },
-  ];
-
-  const colorForProduct = (product: Product) => {
-    const category = product.category?.toLowerCase().trim();
-    if (category && CATEGORY_COLORS[category]) {
-      return CATEGORY_COLORS[category];
-    }
-    return CARD_COLORS[product.id % CARD_COLORS.length];
-  };
-
   const handleAddCustomerInline = async () => {
-    if (!newCustomerName.trim()) {
-      addNotification("Error", "Customer name is required", "error");
-      return;
-    }
+    if (!newCustomerName.trim()) { addNotification("Error", "Customer name is required", "error"); return; }
     try {
       setIsProcessing(true);
       const res = await window.api.addCustomer({ name: newCustomerName, phone: newCustomerPhone });
       if (res.success) {
-        await loadCustomers();
-        setSelectedCustomerId(res.data.id);
-        setShowAddCustomer(false);
-        setNewCustomerName('');
-        setNewCustomerPhone('');
+        await loadCustomers(); setSelectedCustomerId(res.data.id); setShowAddCustomer(false);
+        setNewCustomerName(''); setNewCustomerPhone('');
         addNotification("Success", "Customer added successfully", "success");
-      } else {
-        addNotification("Error", res.error || "Failed to add customer", "error");
-      }
-    } catch (e: any) {
-      addNotification("Error", "Network or database error", "error");
-    } finally {
-      setIsProcessing(false);
-    }
+      } else { addNotification("Error", res.error || "Failed to add customer", "error"); }
+    } catch { addNotification("Error", "Network or database error", "error"); }
+    finally { setIsProcessing(false); }
   };
 
   const processPayment = async () => {
     if (cart.length === 0 || isProcessing) return;
-
     setIsProcessing(true);
-
-    // Udhaar = full credit, 0 paid. Otherwise use entered amount or fallback.
     const parsedAmountPaid = Number(amountPaid);
     const fallbackAmountPaid = selectedCustomerId ? 0 : total;
-    const amtPaid = paymentMethod === 'udhaar'
-      ? 0
+    const amtPaid = paymentMethod === 'udhaar' ? 0
       : (amountPaid === "" || !Number.isFinite(parsedAmountPaid) ? fallbackAmountPaid : parsedAmountPaid);
-
     if (amtPaid > total) {
       addNotification("Invalid Payment", "Amount paid cannot exceed the sale total.", "error");
-      setIsProcessing(false);
-      return;
+      setIsProcessing(false); return;
     }
-
     let paymentStatus = 'Paid';
-    if (paymentMethod === 'udhaar') {
-      paymentStatus = 'Pending';
-    } else if (!isNaN(amtPaid) && amtPaid < total) {
-      paymentStatus = 'Partial';
-    } else if (!isNaN(amtPaid) && amtPaid <= 0 && total > 0) {
-      paymentStatus = 'Pending';
-    }
-
-    // Map 'udhaar' to 'credit' for storage so isCreditMethod() detects it
+    if (paymentMethod === 'udhaar') paymentStatus = 'Pending';
+    else if (!isNaN(amtPaid) && amtPaid < total) paymentStatus = 'Partial';
+    else if (!isNaN(amtPaid) && amtPaid <= 0 && total > 0) paymentStatus = 'Pending';
     const storedMethod = paymentMethod === 'udhaar' ? 'credit' : paymentMethod;
-
     try {
       const result = await window.api.createSale({
         customer_id: selectedCustomerId ? Number(selectedCustomerId) : undefined,
-        subtotal,
-        discount: discountAmount,
-        total,
-        payment_method: storedMethod,
+        subtotal, discount: discountAmount, total, payment_method: storedMethod,
         payment_status: paymentStatus,
         amount_paid: isNaN(amtPaid) ? (selectedCustomerId ? 0 : total) : amtPaid,
         register_id: currentRegister?.id || null,
-        items: cart.map((c) => ({
-          product_id: c.product_id || undefined,
-          product_name: c.name || 'Unknown Item',
-          quantity: c.quantity,
-          price: c.price,
-          is_custom: c.is_custom,
-        })),
+        items: cart.map((c) => ({ product_id: c.product_id || undefined, product_name: c.name || 'Unknown Item', quantity: c.quantity, price: c.price, is_custom: c.is_custom })),
       });
       if (result.success) {
         addNotification("Sale Processed", `Transaction completed via ${paymentMethod} payment.`, "success");
         const cust = customers.find(c => c.id === Number(selectedCustomerId));
         const finalAmtPaid = isNaN(amtPaid) ? (selectedCustomerId ? 0 : total) : amtPaid;
-        const balance = finalAmtPaid - total; // negative = credit owed, positive = change due
         setReceiptData({
-          saleId: result.data?.saleId || Date.now(),
-          items: [...cart],
-          subtotal,
-          discount: discountAmount,
-          total,
-          paymentMethod,
-          settings: { ...settings },
-          date: new Date().toLocaleString('en-PK', { timeZoneName: 'short' }),
-          customerPhone: cust?.phone,
-          amountPaid: finalAmtPaid,
-          balance,
+          saleId: result.data?.saleId || Date.now(), items: [...cart], subtotal, discount: discountAmount, total,
+          paymentMethod, settings: { ...settings }, date: new Date().toLocaleString('en-PK', { timeZoneName: 'short' }),
+          customerPhone: cust?.phone, amountPaid: finalAmtPaid, balance: finalAmtPaid - total,
         });
-        loadProducts();
-        setDiscountValue('');
-        setAmountPaid('');
-        setSelectedCustomerId('');
-        setPaymentMethod('cash');
-
-        setTimeout(() => {
-          setShowCheckoutModal(false);
-          setIsProcessing(false);
-        }, 800);
-      } else {
-        addNotification("Transaction Failed", result.error || "A processing error occurred.", "error");
-        setIsProcessing(false);
-      }
-    } catch {
-      addNotification("Error", "Critical error processing sale.", "error");
-      setIsProcessing(false);
-    }
+        loadProducts(); setDiscountValue(''); setAmountPaid(''); setSelectedCustomerId(''); setPaymentMethod('cash');
+        setTimeout(() => { setShowCheckoutModal(false); setIsProcessing(false); }, 800);
+      } else { addNotification("Transaction Failed", result.error || "A processing error occurred.", "error"); setIsProcessing(false); }
+    } catch { addNotification("Error", "Critical error processing sale.", "error"); setIsProcessing(false); }
   };
 
   const handlePrintReceipt = async () => {
     if (!receiptData) return;
-    // Always fetch fresh settings so invoice_style changes are reflected immediately
     let freshSettings = receiptData.settings;
-    try {
-      const res = await window.api.getSettings();
-      if (res?.success && res.data) freshSettings = res.data;
-    } catch { }
+    try { const res = await window.api.getSettings(); if (res?.success && res.data) freshSettings = res.data; } catch { }
     await window.api.printInvoice(buildInvoiceHtml({ ...receiptData, settings: freshSettings }));
   };
 
   const handleSavePdf = async () => {
     if (!receiptData) return;
-    // Always fetch fresh settings so invoice_style changes are reflected immediately
     let freshSettings = receiptData.settings;
-    try {
-      const res = await window.api.getSettings();
-      if (res?.success && res.data) freshSettings = res.data;
-    } catch { }
+    try { const res = await window.api.getSettings(); if (res?.success && res.data) freshSettings = res.data; } catch { }
     await window.api.saveInvoicePdf(buildInvoiceHtml({ ...receiptData, settings: freshSettings }));
   };
 
-  const handleCloseReceipt = () => {
-    setReceiptData(null);
-    setCart([]);
-  };
+  const handleCloseReceipt = () => { setReceiptData(null); setCart([]); };
 
   const hasAmountPaidValue = amountPaid.trim() !== '';
   const enteredAmountPaid = hasAmountPaidValue ? Number(amountPaid) : NaN;
   const normalizedAmountPaid = Number.isFinite(enteredAmountPaid) ? enteredAmountPaid : 0;
-  // Udhaar = full credit, amount paid is always 0; otherwise use entered or fallback
-  const effectiveAmountPaid = paymentMethod === 'udhaar'
-    ? 0
+  const effectiveAmountPaid = paymentMethod === 'udhaar' ? 0
     : hasAmountPaidValue ? normalizedAmountPaid : (selectedCustomerId ? 0 : total);
   const isOverPayment = effectiveAmountPaid > total;
-  // Block walk-in partial ONLY for cash/online — udhaar requires a customer (handled separately)
   const isWalkInPartial = paymentMethod !== 'udhaar' && !selectedCustomerId && effectiveAmountPaid < total;
-  // Udhaar requires a customer to be selected so debt is tracked
   const isUdhaarWithoutCustomer = paymentMethod === 'udhaar' && !selectedCustomerId;
+  const cartItemCount = cart.reduce((s, i) => s + i.quantity, 0);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)] animate-in fade-in">
-      <header className="mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <CreditCard className="text-primary" size={28} /> Point of Sale
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">Select products to ring up a new order</p>
-        </div>
-        <Button onClick={() => setShowCustom(true)} variant="secondary" className="gap-2 shadow-sm font-semibold">
-          <PenLine size={16} /> Custom Sale
-        </Button>
-      </header>
+    <div className="flex flex-col h-[calc(100vh-4rem)] animate-in fade-in">
 
-      <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
-        <Card className="flex-1 flex flex-col overflow-hidden max-h-full border-border/50 bg-card/50 min-w-0 min-h-0">
-          <CardHeader className="p-4 border-b bg-muted/20 pb-4 shrink-0">
+      {/* ── Page Header ── */}
+      <div className="flex items-center justify-between px-1 pb-4 shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center shadow-lg shadow-primary/20">
+            <CreditCard size={20} className="text-primary-foreground" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-foreground tracking-tight">Point of Sale</h1>
+            <p className="text-xs text-muted-foreground">
+              {products.length} products · {cart.length > 0 ? `${cartItemCount} item${cartItemCount !== 1 ? 's' : ''} in cart` : 'Cart empty'}
+            </p>
+          </div>
+        </div>
+        <Button
+          onClick={() => setShowCustom(true)}
+          variant="outline"
+          size="sm"
+          className="gap-2 font-semibold border-dashed border-2 hover:border-primary/50 hover:bg-primary/5"
+        >
+          <Sparkles size={14} className="text-primary" /> Custom Item
+        </Button>
+      </div>
+
+      <div className="flex gap-4 flex-1 min-h-0">
+
+        {/* ── Left: Product Catalog ── */}
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 bg-card rounded-2xl border border-border/60 shadow-sm overflow-hidden">
+
+          {/* Search bar */}
+          <div className="p-3 border-b border-border/40 bg-muted/20 shrink-0">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={17} />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
+              {isSearching
+                ? <Loader2 size={14} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-primary/60" />
+                : searchTerm && <button onClick={() => handleSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"><X size={14} /></button>
+              }
               <Input
-                type="text"
-                placeholder="Search by name, category or barcode..."
+                placeholder="Search by name, category or barcode…"
                 value={searchTerm}
                 onChange={(e) => handleSearch(e.target.value)}
-                className="w-full pl-9 pr-9 h-11 text-base bg-background shadow-sm"
+                className="pl-9 pr-9 h-10 bg-background shadow-none border-border/50"
               />
-              {isSearching && (
-                <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                  <Loader2 size={15} className="animate-spin text-primary opacity-70" />
-                </div>
-              )}
             </div>
-          </CardHeader>
-          <div className="bg-muted/10 border-b p-2 overflow-x-auto no-scrollbar flex items-center gap-2">
-            <Button
-              size="sm"
-              variant={searchTerm === '' ? "default" : "ghost"}
-              onClick={() => handleSearch('')}
-              className="h-8 rounded-full text-xs"
+          </div>
+
+          {/* Category pills */}
+          <div className="px-3 py-2 border-b border-border/30 overflow-x-auto no-scrollbar flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => { setActiveCategory(''); setSearchTerm(''); }}
+              className={cn(
+                'px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-all',
+                !activeCategory && !searchTerm
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80'
+              )}
             >
-              All Items
-            </Button>
-            {Array.from(new Set(products.map(p => p.category).filter(Boolean))).map(cat => (
-              <Button
+              All
+            </button>
+            {categories.map(cat => (
+              <button
                 key={cat}
-                size="sm"
-                variant={searchTerm.toLowerCase() === cat.toLowerCase() ? "default" : "ghost"}
-                onClick={() => handleSearch(cat)}
-                className="h-8 rounded-full text-xs whitespace-nowrap"
+                onClick={() => handleCategoryFilter(cat)}
+                className={cn(
+                  'px-3 py-1 rounded-full text-xs font-semibold whitespace-nowrap transition-all capitalize',
+                  activeCategory === cat
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80'
+                )}
               >
                 {cat}
-              </Button>
+              </button>
             ))}
           </div>
-          <CardContent className="flex-1 p-0 flex flex-col min-h-0">
-            <div className="bg-muted/30 border-b px-4 py-2 flex text-[10px] font-black uppercase tracking-widest text-muted-foreground/70">
-              <span className="flex-1">Product Details</span>
-              <span className="w-24 text-center">Category</span>
-              <span className="w-20 text-center">Stock</span>
-              <span className="w-24 text-right">Price</span>
-              <span className="w-10"></span>
-            </div>
 
-            <AnimatedList
-              items={visibleProducts}
-              className="flex-1"
-              maxHeight="none"
-              renderItem={(product: any) => {
-                const isOutOfStock = (product.stock ?? 999) <= 0;
-                const lowStock = !isOutOfStock && (product.stock ?? 999) < 10;
+          {/* Column headers */}
+          <div className="grid grid-cols-[1fr_80px_68px_90px_36px] px-4 py-2 bg-muted/30 border-b border-border/30 shrink-0">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">Product</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70 text-center">Category</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70 text-center">Stock</span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70 text-right">Price</span>
+            <span />
+          </div>
 
-                return (
-                  <div
-                    className={cn(
-                      "flex items-center p-3 rounded-xl border border-border/40 bg-card hover:border-primary/30 hover:shadow-md transition-all h-20",
-                      isOutOfStock && "opacity-60 bg-muted/20 grayscale"
-                    )}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-col">
-                        <span className="font-black text-sm text-foreground truncate group-hover:text-primary transition-colors">
-                          {product.name}
-                        </span>
-                        <div className="flex items-center gap-1.5 mt-1 overflow-hidden">
-                          {product.barcode && (
-                            <span className="text-[9px] text-muted-foreground font-mono bg-muted px-1.5 py-0.5 rounded border border-border/50 shrink-0">
-                              {product.barcode}
-                            </span>
-                          )}
-                          {product.unit && (
-                            <span className="text-[9px] text-primary/80 bg-primary/5 px-1.5 py-0.5 rounded font-bold border border-primary/10 shrink-0">
-                              {product.unit}
-                            </span>
-                          )}
-                          {(() => {
-                            const specEntries = product.metadata ? Object.entries(product.metadata).filter(([k, v]) => k !== 'tags' && v).map(([k, v]) => `${k.replace('_', ' ')}: ${v}`) : [];
-                            const specTags = product.metadata?.tags && Array.isArray(product.metadata.tags) ? product.metadata.tags : [];
-                            const specStr = [...specEntries, ...specTags].join(' • ');
-                            if (!specStr) return null;
-                            return (
-                              <span className="text-[9px] text-muted-foreground truncate capitalize" title={specStr}>
-                                {specStr}
-                              </span>
-                            );
-                          })()}
-                        </div>
-                      </div>
+          {/* Product list */}
+          <AnimatedList
+            items={visibleProducts}
+            className="flex-1"
+            maxHeight="none"
+            renderItem={(product: any) => {
+              const isOutOfStock = (product.stock ?? 999) <= 0;
+              const lowStock = !isOutOfStock && (product.stock ?? 999) < 10;
+              const colors = colorForProduct(product);
+              const inCart = cart.find(i => i.id === String(product.id));
+
+              return (
+                <div className={cn(
+                  'grid grid-cols-[1fr_80px_68px_90px_36px] items-center px-4 py-3 border-b border-border/20 transition-all duration-150',
+                  isOutOfStock
+                    ? 'opacity-50 bg-muted/5'
+                    : 'hover:bg-primary/[0.03] cursor-pointer',
+                  inCart && !isOutOfStock && 'bg-primary/[0.05] border-primary/10',
+                )}>
+                  {/* Product info */}
+                  <div className="min-w-0 flex items-center gap-2.5">
+                    {/* Color dot / initial */}
+                    <div
+                      className="w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black flex-shrink-0 shadow-sm"
+                      style={{ background: `linear-gradient(135deg, ${colors.from}, ${colors.to})`, color: colors.text }}
+                    >
+                      {product.name[0]?.toUpperCase()}
                     </div>
-
-                    <div className="w-24 px-2 flex justify-center">
-                      <Badge variant="secondary" className="text-[9px] h-5 font-bold px-2 rounded-lg bg-slate-100 text-slate-600 border-none">
-                        {product.category || 'General'}
-                      </Badge>
-                    </div>
-
-                    <div className="w-20 flex justify-center">
-                      <div className={cn(
-                        "inline-flex flex-col items-center justify-center min-w-[50px] p-1.5 rounded-xl border-2 shadow-sm",
-                        isOutOfStock ? "bg-red-50 text-red-600 border-red-100" :
-                          lowStock ? "bg-amber-50 text-amber-600 border-amber-100 animate-pulse" :
-                            "bg-emerald-50 text-emerald-600 border-emerald-100"
-                      )}>
-                        <span className="text-[11px] font-black leading-none">
-                          {isOutOfStock ? 'OUT' : product.stock}
-                        </span>
-                        <span className="text-[8px] uppercase font-bold tracking-tighter mt-1 opacity-70 leading-none">
-                          Units
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="w-24 text-right px-2 font-black text-sm text-slate-800">
-                      {fmtPKR(product.price)}
-                    </div>
-
-                    <div className="w-10 flex justify-end">
-                      <div className="h-8 w-8 rounded-full flex items-center justify-center bg-primary text-white shadow-lg shadow-primary/20">
-                        <Plus size={16} />
+                    <div className="min-w-0">
+                      <p className={cn('text-sm font-semibold truncate', inCart ? 'text-primary' : 'text-foreground')}>
+                        {product.name}
+                        {inCart && <span className="ml-1.5 text-[10px] font-bold bg-primary/15 text-primary px-1.5 py-0.5 rounded-full">×{inCart.quantity}</span>}
+                      </p>
+                      <div className="flex items-center gap-1.5 mt-0.5 overflow-hidden">
+                        {product.barcode && (
+                          <span className="text-[9px] text-muted-foreground font-mono bg-muted/60 px-1 rounded shrink-0">{product.barcode}</span>
+                        )}
+                        {product.unit && (
+                          <span className="text-[9px] text-primary/70 font-bold shrink-0">{product.unit}</span>
+                        )}
+                        {(() => {
+                          const entries = product.metadata ? Object.entries(product.metadata).filter(([k, v]: any) => k !== 'tags' && v).map(([k, v]: any) => `${k.replace('_',' ')}: ${v}`) : [];
+                          const tags = product.metadata?.tags && Array.isArray(product.metadata.tags) ? product.metadata.tags : [];
+                          const str = [...entries, ...tags].join(' • ');
+                          if (!str) return null;
+                          return <span className="text-[9px] text-muted-foreground truncate capitalize">{str}</span>;
+                        })()}
                       </div>
                     </div>
                   </div>
-                );
-              }}
-              onItemSelect={(product) => {
-                const isOutOfStock = (product.stock ?? 999) <= 0;
-                if (!isOutOfStock) addProductToCart(product);
-                else addNotification("Out of Stock", "This item is currently unavailable.", "error");
-              }}
-            />
 
-            {visibleProducts.length === 0 && (
-              <div className="py-20 flex flex-col items-center justify-center text-muted-foreground bg-muted/5">
-                <Package size={48} className="opacity-10 mb-4" />
-                <p className="text-sm font-medium">No products found</p>
-                <p className="text-xs">Try adjusting your search or category filter</p>
-              </div>
-            )}
+                  {/* Category */}
+                  <div className="flex justify-center">
+                    <span className="text-[10px] font-semibold text-muted-foreground bg-muted/60 px-2 py-0.5 rounded-md truncate max-w-[70px]">
+                      {product.category || 'General'}
+                    </span>
+                  </div>
 
-            <div className="p-4 bg-muted/10 border-t flex items-center justify-between">
-              <div className="text-xs text-muted-foreground font-medium">
-                Showing <span className="text-foreground font-bold">{prodShowing}</span> of <span className="text-foreground font-bold">{prodTotal}</span> products
-              </div>
-              {hasMore && (
-                <Button
-                  size="sm"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    loadMore();
-                  }}
-                  className="gap-2 shadow-[0_4px_14px_0_rgba(0,118,255,0.39)] hover:shadow-[0_6px_20px_rgba(0,118,255,0.23)] hover:bg-[#0070f3] transition-all px-8 font-black bg-[#0070f3] text-white border-none h-10"
-                >
-                  <RefreshCw size={16} className="animate-spin-slow" />
-                  LOAD 10 MORE PRODUCTS
-                </Button>
-              )}
+                  {/* Stock */}
+                  <div className="flex justify-center">
+                    <div className={cn(
+                      'w-12 h-8 rounded-lg flex flex-col items-center justify-center border',
+                      isOutOfStock ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-600 dark:text-red-400'
+                        : lowStock ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400'
+                          : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400'
+                    )}>
+                      <span className="text-[11px] font-black leading-none">{isOutOfStock ? 'OUT' : product.stock}</span>
+                      {!isOutOfStock && <span className="text-[7px] uppercase font-semibold opacity-60 leading-none mt-0.5">units</span>}
+                    </div>
+                  </div>
+
+                  {/* Price */}
+                  <div className="text-right pr-1">
+                    <span className="text-sm font-black text-foreground">{fmtPKR(product.price)}</span>
+                  </div>
+
+                  {/* Add button */}
+                  <div className="flex justify-end">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); if (!isOutOfStock) addProductToCart(product); }}
+                      disabled={isOutOfStock}
+                      className={cn(
+                        'w-7 h-7 rounded-full flex items-center justify-center transition-all',
+                        isOutOfStock
+                          ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                          : 'bg-primary text-primary-foreground hover:scale-110 shadow-sm hover:shadow-md hover:shadow-primary/25'
+                      )}
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
+                </div>
+              );
+            }}
+            onItemSelect={(product) => {
+              if ((product.stock ?? 999) > 0) addProductToCart(product);
+              else addNotification("Out of Stock", "This item is currently unavailable.", "error");
+            }}
+          />
+
+          {visibleProducts.length === 0 && (
+            <div className="flex-1 flex flex-col items-center justify-center py-16 text-muted-foreground">
+              <Package size={40} className="opacity-10 mb-3" />
+              <p className="text-sm font-medium">No products found</p>
+              <p className="text-xs opacity-60 mt-1">Try adjusting your search or category</p>
             </div>
-          </CardContent>
-        </Card>
+          )}
 
-        <Card className="flex flex-col lg:w-[380px] min-w-[340px] shrink-0 border-border/60 shadow-lg bg-card max-h-full overflow-hidden">
-          <CardHeader className="p-4 py-3 border-b bg-muted/30 flex-row flex justify-between items-center shrink-0">
+          {/* Footer */}
+          <div className="px-4 py-2.5 border-t border-border/30 bg-muted/10 flex items-center justify-between shrink-0">
+            <span className="text-xs text-muted-foreground">
+              Showing <strong className="text-foreground">{prodShowing}</strong> of <strong className="text-foreground">{prodTotal}</strong>
+            </span>
+            {hasMore && (
+              <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); loadMore(); }}
+                className="h-7 text-xs gap-1.5 font-semibold">
+                <RefreshCw size={12} /> Load more
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* ── Right: Cart Panel ── */}
+        <div className="w-[360px] shrink-0 flex flex-col bg-card rounded-2xl border border-border/60 shadow-sm overflow-hidden">
+
+          {/* Cart header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border/40 bg-muted/20 shrink-0">
             <div className="flex items-center gap-2">
               <div className="relative">
-                <CartIcon size={20} className="text-foreground" />
-                {cart.length > 0 && (
-                  <span className="absolute -top-1.5 -right-1.5 bg-primary text-primary-foreground text-[10px] rounded-full w-4 h-4 flex items-center justify-center font-bold shadow-sm ring-1 ring-background animate-in zoom-in duration-300">
-                    {cart.reduce((s, i) => s + i.quantity, 0)}
+                <CartIcon size={18} className="text-foreground" />
+                {cartItemCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 bg-primary text-primary-foreground text-[9px] rounded-full w-4 h-4 flex items-center justify-center font-bold ring-2 ring-background">
+                    {cartItemCount}
                   </span>
                 )}
               </div>
-              <CardTitle className="text-base font-bold tracking-tight">Current Order</CardTitle>
+              <span className="font-bold text-sm text-foreground">Current Order</span>
+              {cart.length > 0 && (
+                <span className="text-xs text-muted-foreground">({cart.length} line{cart.length !== 1 ? 's' : ''})</span>
+              )}
             </div>
             {cart.length > 0 && (
-              <Button variant="ghost" size="sm" onClick={() => setCart([])} className="h-6 text-xs text-destructive hover:text-destructive hover:bg-destructive/10 px-2">Clear All</Button>
+              <button
+                onClick={() => setCart([])}
+                className="text-xs text-destructive/70 hover:text-destructive font-medium transition-colors"
+              >
+                Clear all
+              </button>
             )}
-          </CardHeader>
+          </div>
 
-          <CardContent className="flex-1 overflow-y-auto p-4 content-start space-y-2">
+          {/* Cart items */}
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
             {cart.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-muted-foreground text-center py-12">
-                <CartIcon size={48} className="opacity-10 mb-4" />
-                <p className="text-sm">Your cart is empty.</p>
-                <p className="text-xs opacity-70 mt-1">Tap a product to begin.</p>
+              <div className="h-full flex flex-col items-center justify-center text-center py-12">
+                <div className="w-16 h-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-3">
+                  <CartIcon size={28} className="text-muted-foreground/30" />
+                </div>
+                <p className="text-sm font-medium text-muted-foreground">Cart is empty</p>
+                <p className="text-xs text-muted-foreground/60 mt-1">Tap a product to add it</p>
               </div>
             ) : cart.map((item) => (
-              <div key={item.id} className={cn(
-                "flex items-center gap-3 p-3 rounded-xl border bg-card transition-all group",
-                item.is_custom ? "border-purple-200 dark:border-purple-900 bg-purple-50/50 dark:bg-purple-900/10" : ""
-              )}>
+              <div
+                key={item.id}
+                className={cn(
+                  'flex items-start gap-2.5 p-2.5 rounded-xl border transition-all',
+                  item.is_custom
+                    ? 'border-purple-200 dark:border-purple-900/60 bg-purple-50/60 dark:bg-purple-900/10'
+                    : 'border-border/50 bg-background hover:border-primary/20'
+                )}
+              >
+                {/* Color indicator */}
+                <div
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-black flex-shrink-0 mt-0.5"
+                  style={item.is_custom
+                    ? { background: 'linear-gradient(135deg,#7c3aed,#a855f7)', color: '#fff' }
+                    : (() => { const c = colorForProduct({ id: item.product_id ?? 0, name: item.name, price: item.price, category: '', ...item } as any); return { background: `linear-gradient(135deg,${c.from},${c.to})`, color: c.text }; })()
+                  }
+                >
+                  {item.is_custom ? <Sparkles size={12} /> : item.name[0]?.toUpperCase()}
+                </div>
+
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    <p className="text-sm font-semibold truncate leading-tight">{item.name}</p>
-                    {item.is_custom && <Badge variant="secondary" className="text-[9px] px-1 h-4 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300">Custom</Badge>}
+                  <div className="flex items-start justify-between gap-1 mb-1.5">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-foreground truncate leading-tight">{item.name}</p>
+                      {item.is_custom && <span className="text-[9px] text-purple-600 dark:text-purple-400 font-medium">Custom item</span>}
+                    </div>
+                    <button onClick={() => setCart(cart.filter((i) => i.id !== item.id))}
+                      className="text-muted-foreground/50 hover:text-destructive transition-colors shrink-0 mt-0.5">
+                      <X size={13} />
+                    </button>
                   </div>
-                  {(() => {
-                    const specEntries = item.metadata ? Object.entries(item.metadata).filter(([k, v]) => k !== 'tags' && v).map(([k, v]) => `${k.replace('_', ' ')}: ${v}`) : [];
-                    const specTags = item.metadata?.tags && Array.isArray(item.metadata.tags) ? item.metadata.tags : [];
-                    const specStr = [...specEntries, ...specTags].join(' • ');
-                    if (!specStr) return null;
-                    return (
-                      <div className="text-[9px] text-muted-foreground truncate mb-1 capitalize" title={specStr}>
-                        {specStr}
-                      </div>
-                    );
-                  })()}
-                </div>
 
-                <div className="flex flex-col items-end gap-2">
-                  <div className="flex items-center bg-background border rounded-lg overflow-hidden shadow-sm">
-                    <button type="button" onClick={() => updateQty(item.id, String(item.quantity - 1))} className="p-1.5 px-2 hover:bg-muted active:bg-accent transition-colors"><Minus size={12} className="text-foreground/70" /></button>
-                    <input
-                      type="text"
-                      value={item.quantity || ''}
-                      onChange={(e) => updateQty(item.id, e.target.value)}
-                      className="w-10 text-center text-xs font-bold leading-none bg-transparent outline-none p-0 hide-arrows"
-                      onFocus={(e) => e.target.select()}
-                    />
-                    <button type="button" onClick={() => updateQty(item.id, String(item.quantity + 1))} className="p-1.5 px-2 hover:bg-muted active:bg-accent transition-colors"><Plus size={12} className="text-foreground/70" /></button>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-[10px] font-bold text-muted-foreground">Rs.</span>
-                    <input
-                      type="text"
-                      value={item.price || ''}
-                      onChange={(e) => updatePrice(item.id, e.target.value)}
-                      className="w-16 h-5 text-xs font-black text-primary bg-transparent border-b border-primary/20 focus:border-primary outline-none px-0.5"
-                      onFocus={(e) => e.target.select()}
-                    />
+                  <div className="flex items-center justify-between gap-2">
+                    {/* Qty control */}
+                    <div className="flex items-center bg-muted/60 rounded-lg overflow-hidden border border-border/40">
+                      <button onClick={() => updateQty(item.id, String(item.quantity - 1))}
+                        className="w-6 h-6 flex items-center justify-center hover:bg-muted transition-colors">
+                        <Minus size={10} className="text-muted-foreground" />
+                      </button>
+                      <input
+                        type="text"
+                        value={item.quantity || ''}
+                        onChange={(e) => updateQty(item.id, e.target.value)}
+                        onFocus={(e) => e.target.select()}
+                        className="w-8 text-center text-xs font-bold bg-transparent outline-none"
+                      />
+                      <button onClick={() => updateQty(item.id, String(item.quantity + 1))}
+                        className="w-6 h-6 flex items-center justify-center hover:bg-muted transition-colors">
+                        <Plus size={10} className="text-muted-foreground" />
+                      </button>
+                    </div>
+
+                    {/* Price input */}
+                    <div className="flex items-center gap-1 flex-1 justify-end">
+                      <span className="text-[9px] text-muted-foreground font-bold">Rs</span>
+                      <input
+                        type="text"
+                        value={item.price || ''}
+                        onChange={(e) => updatePrice(item.id, e.target.value)}
+                        onFocus={(e) => e.target.select()}
+                        className="w-16 text-xs font-black text-primary text-right bg-transparent border-b border-primary/20 focus:border-primary outline-none"
+                      />
+                    </div>
+
+                    {/* Line total */}
+                    <span className="text-xs font-black text-foreground tabular-nums shrink-0">
+                      {fmtPKR(item.price * item.quantity)}
+                    </span>
                   </div>
                 </div>
-
-                <button onClick={() => setCart(cart.filter((i) => i.id !== item.id))} className="text-muted-foreground hover:text-destructive transition-colors shrink-0 ml-1">
-                  <X size={14} />
-                </button>
               </div>
             ))}
-          </CardContent>
+          </div>
 
-          <CardFooter className="p-4 border-t flex flex-col bg-muted/20 shrink-0 gap-3">
+          {/* Cart footer */}
+          <div className="border-t border-border/40 bg-muted/10 p-3 space-y-3 shrink-0">
+
+            {/* Discount */}
             {cart.length > 0 && (
-              <div className="w-full bg-background border rounded-xl p-3 shadow-sm focus-within:ring-1 focus-within:ring-primary/50 transition-all">
+              <div className="bg-background rounded-xl border border-border/50 p-3">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Apply Discount</span>
-                  <div className="flex bg-muted rounded-md p-0.5">
-                    <button
-                      onClick={() => setDiscountType('percentage')}
-                      className={cn("px-2.5 py-0.5 text-[10px] font-bold rounded transition-colors", discountType === 'percentage' ? "bg-background shadow-sm text-primary" : "text-muted-foreground")}
-                    >%</button>
-                    <button
-                      onClick={() => setDiscountType('fixed')}
-                      className={cn("px-2.5 py-0.5 text-[10px] font-bold rounded transition-colors", discountType === 'fixed' ? "bg-background shadow-sm text-primary" : "text-muted-foreground")}
-                    >Amt</button>
+                  <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                    <Tag size={10} /> Discount
+                  </span>
+                  <div className="flex bg-muted rounded-md p-0.5 gap-0.5">
+                    {(['percentage', 'fixed'] as const).map(t => (
+                      <button key={t} onClick={() => setDiscountType(t)}
+                        className={cn('px-2 py-0.5 text-[10px] font-bold rounded transition-colors',
+                          discountType === t ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground')}>
+                        {t === 'percentage' ? '%' : 'Rs'}
+                      </button>
+                    ))}
                   </div>
                 </div>
                 <Input
-                  type="number"
-                  min="0"
-                  max={discountType === 'percentage' ? "100" : subtotal}
-                  placeholder={discountType === 'percentage' ? "0%" : "0.00"}
+                  type="number" min="0"
+                  max={discountType === 'percentage' ? '100' : subtotal}
+                  placeholder={discountType === 'percentage' ? '0%' : '0.00'}
                   value={discountValue}
                   onChange={(e) => {
                     const val = Number(e.target.value);
@@ -1170,158 +931,151 @@ export default function Sales() {
               </div>
             )}
 
-            <div className="flex gap-2 w-full">
+            {/* Payment method */}
+            <div className="grid grid-cols-3 gap-1.5">
               {(['cash', 'online'] as const).map((m) => (
-                <Button
+                <button
                   key={m}
-                  variant={paymentMethod === m ? 'default' : 'outline'}
                   onClick={() => setPaymentMethod(m)}
-                  className="flex-1 capitalize shadow-none transition-all"
+                  className={cn(
+                    'py-2 rounded-xl text-xs font-bold border transition-all',
+                    paymentMethod === m
+                      ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                      : 'bg-background text-muted-foreground border-border/60 hover:border-primary/40 hover:text-foreground'
+                  )}
                 >
                   {m === 'online' ? 'Online' : 'Cash'}
-                </Button>
+                </button>
               ))}
-              <Button
-                variant={paymentMethod === 'udhaar' ? 'default' : 'outline'}
-                onClick={() => {
-                  setPaymentMethod('udhaar');
-                  setAmountPaid('0');
-                }}
+              <button
+                onClick={() => { setPaymentMethod('udhaar'); setAmountPaid('0'); }}
                 className={cn(
-                  'flex-1 shadow-none transition-all',
+                  'py-2 rounded-xl text-xs font-bold border transition-all',
                   paymentMethod === 'udhaar'
-                    ? 'bg-rose-600 hover:bg-rose-700 text-white border-transparent'
-                    : 'border-rose-500/40 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30'
+                    ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
+                    : 'bg-background border-rose-400/40 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20'
                 )}
               >
                 Udhaar
-              </Button>
+              </button>
             </div>
 
-            <div className="w-full space-y-1.5 mb-1 mt-1">
-              <div className="flex justify-between items-center text-sm">
-                <span className="text-muted-foreground font-medium">Subtotal</span>
-                <span className="font-semibold">{fmtPKR(subtotal)}</span>
+            {/* Totals */}
+            <div className="space-y-1">
+              <div className="flex justify-between text-sm text-muted-foreground">
+                <span>Subtotal</span>
+                <span className="tabular-nums">{fmtPKR(subtotal)}</span>
               </div>
               {discountAmount > 0 && (
-                <div className="flex justify-between items-center text-sm animate-in fade-in slide-in-from-top-1">
-                  <span className="text-destructive font-medium">Discount</span>
-                  <span className="text-destructive font-bold">-{fmtPKR(discountAmount)}</span>
+                <div className="flex justify-between text-sm text-destructive">
+                  <span>Discount {discountType === 'percentage' && `(${discountValue}%)`}</span>
+                  <span className="tabular-nums font-semibold">−{fmtPKR(discountAmount)}</span>
                 </div>
               )}
-              <div className="flex justify-between items-center pt-2 border-t mt-1">
+              <div className="flex justify-between items-center pt-2 border-t border-border/30 mt-1">
                 <span className="font-bold text-foreground">Total</span>
-                <span className="text-2xl font-bold tracking-tight text-primary drop-shadow-sm">{fmtPKR(total)}</span>
+                <span className="text-2xl font-black text-primary tabular-nums">{fmtPKR(total)}</span>
               </div>
             </div>
 
+            {/* Checkout button */}
             <Button
-              onClick={() => {
-                setAmountPaid(String(total));
-                setShowCheckoutModal(true);
-              }}
+              onClick={() => { setAmountPaid(String(total)); setShowCheckoutModal(true); }}
               disabled={cart.length === 0 || isProcessing}
               size="lg"
-              className="w-full h-12 text-base font-bold gap-2 shadow-md hover:shadow-lg transition-all border-none"
+              className="w-full h-11 font-bold gap-2 shadow-lg shadow-primary/20 hover:shadow-primary/30 transition-all"
             >
-              <CreditCard size={18} /> Checkout
+              <CreditCard size={17} />
+              {cart.length === 0 ? 'Add items to checkout' : `Checkout · ${fmtPKR(total)}`}
             </Button>
-          </CardFooter>
-        </Card>
+          </div>
+        </div>
       </div>
 
+      {/* ── Custom Item Modal ── */}
       {showCustom && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in">
           <Card className="w-full max-w-sm shadow-2xl animate-in zoom-in-95 duration-200">
-            <CardHeader className="flex flex-row items-center justify-between pb-2 border-b">
-              <div className="flex items-center gap-2">
-                <div className="bg-purple-100 dark:bg-purple-900/30 p-1.5 rounded-lg">
-                  <PenLine size={18} className="text-purple-600 dark:text-purple-400" />
+            <CardHeader className="flex flex-row items-center justify-between pb-3 border-b">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-purple-500/15 flex items-center justify-center">
+                  <Sparkles size={16} className="text-purple-600 dark:text-purple-400" />
                 </div>
-                <CardTitle className="text-lg">Custom Item</CardTitle>
+                <div>
+                  <CardTitle className="text-base">Custom Item</CardTitle>
+                  <CardDescription className="text-xs">Add an unlisted product</CardDescription>
+                </div>
               </div>
-              <Button variant="ghost" size="icon" onClick={() => setShowCustom(false)} className="h-8 w-8 -mr-2 text-muted-foreground">
-                <X size={18} />
+              <Button variant="ghost" size="icon" onClick={() => setShowCustom(false)} className="h-8 w-8 -mr-2">
+                <X size={16} />
               </Button>
             </CardHeader>
             <form onSubmit={addCustomToCart}>
               <CardContent className="space-y-4 pt-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-semibold">Item Name <span className="text-destructive">*</span></label>
-                  <Input
-                    ref={customNameRef} required value={customName}
-                    onChange={(e) => setCustomName(e.target.value)}
-                    placeholder="e.g. Special Platter"
-                  />
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Item Name *</label>
+                  <Input ref={customNameRef} required value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="e.g. Special Platter" />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-sm font-semibold">Price (PKR) <span className="text-destructive">*</span></label>
-                    <Input
-                      type="text" required value={customPrice}
-                      onChange={(e) => setCustomPrice(e.target.value.replace(/[^0-9]/g, ''))}
-                      placeholder="0"
-                    />
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Price (PKR) *</label>
+                    <Input type="text" required value={customPrice} onChange={(e) => setCustomPrice(e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" />
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-semibold">Quantity <span className="text-destructive">*</span></label>
-                    <Input
-                      type="text" required value={customQty}
-                      onChange={(e) => setCustomQty(e.target.value.replace(/[^0-9]/g, ''))}
-                    />
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Quantity *</label>
+                    <Input type="text" required value={customQty} onChange={(e) => setCustomQty(e.target.value.replace(/[^0-9]/g, ''))} />
                   </div>
                 </div>
                 {customName && customPrice && (
-                  <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-800 rounded-lg p-3 text-sm animate-in fade-in slide-in-from-bottom-2">
-                    <span className="text-purple-700 dark:text-purple-300 font-medium truncate inline-block max-w-[60%] align-middle">{customName} <span className="opacity-70">x{customQty || 1}</span></span>
-                    <span className="float-right font-bold text-purple-700 dark:text-purple-300 align-middle">{fmtPKR((parseFloat(customPrice) || 0) * (parseInt(customQty) || 1))}</span>
+                  <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200/60 dark:border-purple-800/40 rounded-xl p-3 text-sm">
+                    <span className="text-purple-700 dark:text-purple-300 font-medium">{customName} <span className="opacity-60">×{customQty || 1}</span></span>
+                    <span className="float-right font-bold text-purple-700 dark:text-purple-300">{fmtPKR((parseFloat(customPrice) || 0) * (parseInt(customQty) || 1))}</span>
                   </div>
                 )}
               </CardContent>
-              <CardFooter className="flex gap-3 pt-0">
-                <Button type="button" variant="outline" className="w-full" onClick={() => setShowCustom(false)}>Cancel</Button>
-                <Button type="submit" className="w-full bg-purple-600 hover:bg-purple-700 text-white border-transparent">Add to Cart</Button>
+              <CardFooter className="gap-3 pt-0">
+                <Button type="button" variant="outline" className="flex-1" onClick={() => setShowCustom(false)}>Cancel</Button>
+                <Button type="submit" className="flex-1 bg-purple-600 hover:bg-purple-700 text-white border-transparent">Add to Cart</Button>
               </CardFooter>
             </form>
           </Card>
         </div>
       )}
 
+      {/* ── Checkout Modal ── */}
       {showCheckoutModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-in fade-in">
           <Card className="w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
-            <CardHeader className="flex flex-row items-center justify-between pb-2 border-b">
-              <CardTitle className="text-xl">Checkout</CardTitle>
+            <CardHeader className="flex flex-row items-center justify-between pb-3 border-b">
+              <div>
+                <CardTitle className="text-lg">Checkout</CardTitle>
+                <CardDescription className="text-xs">{cart.length} item(s) · {fmtPKR(total)}</CardDescription>
+              </div>
               <Button variant="ghost" size="icon" onClick={() => { setShowCheckoutModal(false); setPaymentMethod('cash'); }} className="-mr-2">
                 <X size={18} />
               </Button>
             </CardHeader>
             <CardContent className="space-y-4 pt-4">
+
+              {/* Customer selector */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-sm font-semibold">Select Customer (Optional)</label>
+                  <label className="text-sm font-semibold flex items-center gap-1.5">
+                    <Users size={14} className="text-muted-foreground" /> Customer
+                    <span className="text-xs font-normal text-muted-foreground">(optional)</span>
+                  </label>
                   {!showAddCustomer && (
                     <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setShowAddCustomer(true)}>
-                      + New Customer
+                      + New
                     </Button>
                   )}
                 </div>
 
                 {showAddCustomer ? (
-                  <div className="bg-muted/50 p-3 rounded-md border border-border space-y-2 animate-in fade-in">
-                    <Input
-                      placeholder="Customer Name *"
-                      value={newCustomerName}
-                      onChange={(e) => setNewCustomerName(e.target.value)}
-                      className="h-8 text-sm"
-                    />
-                    <Input
-                      placeholder="Phone Number"
-                      value={newCustomerPhone}
-                      onChange={(e) => setNewCustomerPhone(e.target.value)}
-                      className="h-8 text-sm"
-                    />
-                    <div className="flex gap-2 pt-1">
+                  <div className="bg-muted/40 p-3 rounded-xl border border-border/50 space-y-2 animate-in fade-in">
+                    <Input placeholder="Customer Name *" value={newCustomerName} onChange={(e) => setNewCustomerName(e.target.value)} className="h-8 text-sm" />
+                    <Input placeholder="Phone Number" value={newCustomerPhone} onChange={(e) => setNewCustomerPhone(e.target.value)} className="h-8 text-sm" />
+                    <div className="flex gap-2">
                       <Button size="sm" className="flex-1 h-8 text-xs" onClick={handleAddCustomerInline} disabled={isProcessing}>Add & Select</Button>
                       <Button size="sm" variant="outline" className="flex-1 h-8 text-xs" onClick={() => setShowAddCustomer(false)}>Cancel</Button>
                     </div>
@@ -1331,95 +1085,63 @@ export default function Sales() {
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={14} />
                       <Input
-                        placeholder="Type customer name or phone..."
+                        placeholder="Type customer name or phone…"
                         value={customerSearch}
-                        onChange={(e) => {
-                          setCustomerSearch(e.target.value);
-                          if (!e.target.value) setSelectedCustomerId('');
-                        }}
-                        onFocus={() => {
-                          if (!customerSearch) setCustomerSearch('');
-                        }}
-                        className="pl-9 h-10 text-sm bg-background border-border/50 shadow-sm"
+                        onChange={(e) => { setCustomerSearch(e.target.value); if (!e.target.value) setSelectedCustomerId(''); }}
+                        className="pl-9 h-10 text-sm"
                       />
                       {selectedCustomerId && (
-                        <Button
-                          variant="ghost" size="icon"
-                          className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 text-muted-foreground hover:text-foreground"
-                          onClick={() => {
-                            setSelectedCustomerId('');
-                            setCustomerSearch('');
-                          }}
-                        >
+                        <Button variant="ghost" size="icon" className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                          onClick={() => { setSelectedCustomerId(''); setCustomerSearch(''); }}>
                           <X size={14} />
                         </Button>
                       )}
                     </div>
 
                     {customerSearch && !selectedCustomerId && (
-                      <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-md shadow-xl max-h-[200px] overflow-y-auto animate-in fade-in zoom-in-95 duration-100">
-                        <div
-                          className="p-2 text-xs hover:bg-accent cursor-pointer flex items-center justify-between border-b border-border/50"
-                          onClick={() => {
-                            setSelectedCustomerId('');
-                            setCustomerSearch('Walk-in Customer');
-                          }}
-                        >
-                          <span className="font-bold">Walk-in Customer</span>
+                      <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-xl shadow-xl max-h-[200px] overflow-y-auto">
+                        <div className="p-2.5 text-xs hover:bg-accent cursor-pointer flex items-center justify-between border-b border-border/50"
+                          onClick={() => { setSelectedCustomerId(''); setCustomerSearch('Walk-in Customer'); }}>
+                          <span className="font-semibold">Walk-in Customer</span>
                           <Badge variant="outline" className="text-[10px]">Guest</Badge>
                         </div>
                         {filteredCustomers.length === 0 ? (
                           <div className="p-4 text-center text-xs text-muted-foreground italic">No customers found.</div>
-                        ) : (
-                          filteredCustomers.map(c => (
-                            <div
-                              key={c.id}
-                              className="p-2.5 hover:bg-accent cursor-pointer border-b border-border/40 last:border-0 transition-colors"
-                              onClick={() => {
-                                setSelectedCustomerId(c.id);
-                                setCustomerSearch(c.name);
-                              }}
-                            >
-                              <div className="font-semibold text-sm">{c.name}</div>
-                              {c.phone && <div className="text-[10px] text-muted-foreground">{c.phone}</div>}
-                            </div>
-                          ))
-                        )}
+                        ) : filteredCustomers.map(c => (
+                          <div key={c.id} className="p-2.5 hover:bg-accent cursor-pointer border-b border-border/30 last:border-0 transition-colors"
+                            onClick={() => { setSelectedCustomerId(c.id); setCustomerSearch(c.name); }}>
+                            <div className="font-semibold text-sm">{c.name}</div>
+                            {c.phone && <div className="text-[10px] text-muted-foreground">{c.phone}</div>}
+                          </div>
+                        ))}
                       </div>
                     )}
 
-                    {!customerSearch && !selectedCustomerId && (
-                      <p className="text-[10px] text-muted-foreground ml-1 italic">Type to find or add a customer above.</p>
-                    )}
-
                     {selectedCustomerId && (
-                      <div className="flex items-center gap-2 p-2 bg-primary/5 rounded-lg border border-primary/10 animate-in slide-in-from-top-2">
-                        <div className="bg-primary/20 p-1.5 rounded-full">
-                          <Users size={14} className="text-primary" />
+                      <div className="flex items-center gap-2 p-2.5 bg-primary/5 rounded-xl border border-primary/15">
+                        <div className="w-7 h-7 rounded-full bg-primary/15 flex items-center justify-center">
+                          <Users size={13} className="text-primary" />
                         </div>
                         <div>
-                          <p className="text-xs font-bold leading-none">{customers.find(c => c.id === selectedCustomerId)?.name}</p>
+                          <p className="text-xs font-bold">{customers.find(c => c.id === selectedCustomerId)?.name}</p>
                           <p className="text-[10px] text-muted-foreground">Linked to this sale</p>
                         </div>
                       </div>
                     )}
                   </div>
                 )}
-                <p className="text-[10px] text-muted-foreground">Selecting a customer will link this sale to their account history.</p>
               </div>
 
-              <div className="bg-muted/30 p-4 rounded-xl border border-border">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-sm font-medium">Total Amount</span>
+              {/* Payment summary */}
+              <div className="bg-muted/30 rounded-xl border border-border/50 p-4 space-y-3">
+                <div className="flex justify-between text-sm font-medium">
+                  <span className="text-muted-foreground">Total Amount</span>
                   <span className="font-bold text-lg">{fmtPKR(total)}</span>
                 </div>
-
-                <div className="space-y-2 mt-4">
-                  <label className="text-sm font-semibold">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                     Amount Paid (PKR)
-                    {paymentMethod === 'udhaar' && (
-                      <span className="ml-2 text-xs font-normal text-rose-500">— Udhaar: PKR 0</span>
-                    )}
+                    {paymentMethod === 'udhaar' && <span className="ml-2 text-rose-500 normal-case font-normal">— Full credit (PKR 0)</span>}
                   </label>
                   <Input
                     type="text"
@@ -1430,50 +1152,26 @@ export default function Sales() {
                       if (!digitsOnly) { setAmountPaid(''); return; }
                       const numericValue = Number(digitsOnly);
                       if (!Number.isFinite(numericValue)) { setAmountPaid(''); return; }
-                      const clampedValue = Math.min(numericValue, Math.max(0, total));
-                      setAmountPaid(String(clampedValue));
+                      setAmountPaid(String(Math.min(numericValue, Math.max(0, total))));
                     }}
-                    className={cn(
-                      'text-lg font-bold bg-background',
-                      paymentMethod === 'udhaar' && 'opacity-50 cursor-not-allowed'
-                    )}
+                    className={cn('text-lg font-bold', paymentMethod === 'udhaar' && 'opacity-50 cursor-not-allowed')}
                   />
-                  {isOverPayment && (
-                    <p className="text-xs text-destructive font-medium">
-                      Amount paid cannot be greater than total amount.
-                    </p>
-                  )}
-                  {isUdhaarWithoutCustomer && (
-                    <p className="text-xs text-destructive font-medium">
-                      ⚠ Udhaar requires a customer — select one above to track this debt.
-                    </p>
-                  )}
+                  {isOverPayment && <p className="text-xs text-destructive font-medium">Amount paid cannot exceed total.</p>}
+                  {isUdhaarWithoutCustomer && <p className="text-xs text-destructive font-medium">⚠ Udhaar requires a customer — select one above.</p>}
                   {!isUdhaarWithoutCustomer && selectedCustomerId && paymentMethod === 'udhaar' && (
-                    <p className="text-xs text-rose-500 font-medium">
-                      Full amount of {fmtPKR(total)} will be added to customer's Qaraz.
-                    </p>
+                    <p className="text-xs text-rose-500">{fmtPKR(total)} will be added to customer's Qaraz.</p>
                   )}
                   {!isUdhaarWithoutCustomer && selectedCustomerId && paymentMethod !== 'udhaar' && effectiveAmountPaid < total && (
-                    <p className="text-xs text-muted-foreground">
-                      Remaining {fmtPKR(total - effectiveAmountPaid)} will be added to customer's Qaraz.
-                    </p>
+                    <p className="text-xs text-muted-foreground">Remaining {fmtPKR(total - effectiveAmountPaid)} → customer's Qaraz.</p>
                   )}
-                  {isWalkInPartial && (
-                    <p className="text-xs text-destructive font-medium">
-                      Walk-in customers cannot have partial payments. Select a customer or use Udhaar.
-                    </p>
-                  )}
+                  {isWalkInPartial && <p className="text-xs text-destructive font-medium">Walk-in customers can't have partial payments. Select a customer or use Udhaar.</p>}
                 </div>
               </div>
             </CardContent>
-            <CardFooter className="flex gap-3 pt-0">
-              <Button variant="outline" className="w-full" onClick={() => { setShowCheckoutModal(false); setPaymentMethod('cash'); }}>Cancel</Button>
-              <Button
-                onClick={processPayment}
-                disabled={isProcessing || isWalkInPartial || isOverPayment || isUdhaarWithoutCustomer}
-                className="w-full"
-              >
-                {isProcessing ? <RefreshCw size={18} className="animate-spin mr-2" /> : <CheckCircle size={18} className="mr-2" />}
+            <CardFooter className="gap-3 pt-0">
+              <Button variant="outline" className="flex-1" onClick={() => { setShowCheckoutModal(false); setPaymentMethod('cash'); }}>Cancel</Button>
+              <Button onClick={processPayment} disabled={isProcessing || isWalkInPartial || isOverPayment || isUdhaarWithoutCustomer} className="flex-1 gap-2">
+                {isProcessing ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle size={16} />}
                 Complete Sale
               </Button>
             </CardFooter>
@@ -1481,14 +1179,11 @@ export default function Sales() {
         </div>
       )}
 
+      {/* ── Receipt Modal ── */}
       {receiptData && (
-        <ReceiptModal
-          data={receiptData}
-          onPrint={handlePrintReceipt}
-          onSavePdf={handleSavePdf}
-          onClose={handleCloseReceipt}
-        />
+        <ReceiptModal data={receiptData} onPrint={handlePrintReceipt} onSavePdf={handleSavePdf} onClose={handleCloseReceipt} />
       )}
+
       <RegisterManager
         isOpen={isRegisterModalOpen}
         onClose={() => setIsRegisterModalOpen(false)}

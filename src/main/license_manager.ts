@@ -116,6 +116,11 @@ export class LicenseManager {
     const cpuCores = String(os.cpus().length);
     const systemUuid = this.getSystemUuid();
 
+    // Include the current UTC date so the fingerprint changes every 24 hours.
+    // This prevents a screenshot of today's fingerprint being used tomorrow
+    // to generate an offline license key.
+    const todayUtc = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+
     const data = [
       os.hostname(),
       os.platform(),
@@ -123,16 +128,29 @@ export class LicenseManager {
       cpuModel,
       cpuCores,
       macHash,
-      systemUuid
+      systemUuid,
+      todayUtc,  // daily rotation
     ].join('::');
 
     const finalHash = crypto.createHash('sha256').update(data).digest('hex');
-    console.log('Generated fingerprint:', finalHash, 'based on MAC:', firstMac, 'UUID:', systemUuid);
+    console.log('Generated fingerprint:', finalHash, 'based on MAC:', firstMac, 'UUID:', systemUuid, 'date:', todayUtc);
     return finalHash;
   }
 
   public getDeviceName(): string {
     return os.hostname();
+  }
+
+  /**
+   * Wipes the local license from SQLite (called when admin revokes via cloud).
+   */
+  public clearLicense(): void {
+    try {
+      this.db.prepare('DELETE FROM app_license').run();
+      this.db.prepare('DELETE FROM app_license_activations').run();
+    } catch (e) {
+      console.error('clearLicense failed:', e);
+    }
   }
 
   /**
@@ -222,10 +240,12 @@ export class LicenseManager {
     const expiry = new Date(data.expiresAt);
     if (now > expiry) return { valid: false, reason: 'License expired', data };
 
-    // 2. Check Fingerprint
-    const currentFingerprint = await this.getDeviceFingerprint();
-    if (data.issuedForFingerprint !== currentFingerprint) {
-      return { valid: false, reason: 'Hardware mismatch', data };
+    // 2. Check Fingerprint — empty string means "any device" (used for cloud-approved licenses)
+    if (data.issuedForFingerprint) {
+      const currentFingerprint = await this.getDeviceFingerprint();
+      if (data.issuedForFingerprint !== currentFingerprint) {
+        return { valid: false, reason: 'Hardware mismatch', data };
+      }
     }
 
     return { valid: true, data };
@@ -238,8 +258,11 @@ export class LicenseManager {
     const data = this.decryptLicense(licenseKey);
     if (!data) return { success: false, error: 'Invalid license key' };
 
+    // Always resolve the current fingerprint (used for activation records below)
     const currentFingerprint = await this.getDeviceFingerprint();
-    if (data.issuedForFingerprint !== currentFingerprint) {
+
+    // Empty issuedForFingerprint = cloud-approved license; skip device check
+    if (data.issuedForFingerprint && data.issuedForFingerprint !== currentFingerprint) {
       return { success: false, error: 'This license is not for this device' };
     }
 

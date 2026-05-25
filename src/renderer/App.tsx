@@ -6,7 +6,6 @@ import { NotificationProvider } from './components/NotificationProvider';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { subService } from './services/subscription';
-import { initPosSync, stopPosSync } from './services/api/posSync';
 import Layout from './components/Layout';
 import Login from './components/Login';
 import Dashboard from './pages/Dashboard';
@@ -28,10 +27,14 @@ import RegisterHistory from './pages/RegisterHistory';
 import RegisterStatus from './pages/RegisterStatus';
 import Activation from './pages/Activation';
 import Setup from './pages/Setup';
+import PendingApproval from './components/PendingApproval';
+import BlockedScreen from './components/BlockedScreen';
 import Returns from './pages/Returns';
 import Payments from './pages/Payments';
 import { LanguageProvider } from './components/LanguageProvider';
 import { Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { initPosSync, checkInstanceStatus } from './services/api/posSync';
 
 export default function App() {
   const [isUnlocked, setIsUnlocked] = useState<boolean>(
@@ -39,23 +42,71 @@ export default function App() {
   );
   const [isSystemLocked, setIsSystemLocked] = useState(false);
 
-  const [isActivated, setIsActivated] = useState<boolean | null>(null);
+  const [isActivated, setIsActivated]     = useState<boolean | null>(null);
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
+  const [approvalStatus, setApprovalStatus] = useState<string>('approved');
+  const [licenseMode, setLicenseMode]     = useState<string>('offline');
+  const [blockReason, setBlockReason]     = useState<string>('');
   const [isSubscriptionActive, setIsSubscriptionActive] = useState<boolean>(true);
 
   React.useEffect(() => {
     checkActivation();
-    // Start the cloud sync worker (no-op if cloud_backend_url is not configured)
+
+    // Start the cloud sync worker — safe to call even while blocked/pending.
+    // This starts the 5-minute status poll that detects admin unblock/approve actions.
     initPosSync().catch(() => {});
-    return () => stopPosSync();
+
+    // When posSync detects a block (403 or status poll), update the UI immediately
+    const onBlocked = () => checkActivation();
+    window.addEventListener('pos-blocked', onBlocked);
+
+    // When posSync detects the block has been lifted, re-run activation check
+    const onApproved = () => checkActivation();
+    window.addEventListener('pos-approved', onApproved);
+
+    // Show admin-sent notifications as persistent toasts
+    const onNotification = (e: Event) => {
+      const { title, body } = (e as CustomEvent<{ title: string; body: string }>).detail;
+      toast(title, {
+        description: body,
+        duration: 12000,
+        icon: '🔔',
+      });
+    };
+    window.addEventListener('pos-notification', onNotification);
+
+    return () => {
+      window.removeEventListener('pos-blocked', onBlocked);
+      window.removeEventListener('pos-approved', onApproved);
+      window.removeEventListener('pos-notification', onNotification);
+    };
   }, []);
 
   const checkActivation = async () => {
     try {
       const setupRes = await (window as any).api.isSetupComplete?.();
-      setSetupComplete(!!setupRes?.complete || !!setupRes?.data?.complete);
+      const complete = !!setupRes?.complete || !!setupRes?.data?.complete;
+      setSetupComplete(complete);
+
+      if (complete) {
+        const settingsRes = await window.api.getSettings();
+        const s = settingsRes?.data as any;
+        const mode = s?.license_mode || 'offline';
+        const status = s?.approval_status || 'approved';
+        setLicenseMode(mode);
+        setBlockReason(s?.block_reason || '');
+        // 'blocked' is always honoured regardless of mode (covers license revocation).
+        // 'pending' only gates users who opted into online mode.
+        if (status === 'blocked') {
+          setApprovalStatus('blocked');
+        } else if (mode === 'online') {
+          setApprovalStatus(status);
+        } else {
+          setApprovalStatus('approved');
+        }
+      }
+
       const state = await subService.initialize();
-      // License activation is optional; offline setup still allows local POS use.
       const res = await (window as any).api.isActivated();
       setIsActivated(res.success && res.activated);
       setIsSubscriptionActive(state.isActive || state.isGracePeriod || state.plan === 'lifetime');
@@ -64,6 +115,24 @@ export default function App() {
       setSetupComplete(false);
       setIsSubscriptionActive(false);
     }
+  };
+
+  /**
+   * Called by BlockedScreen's "Check Again" button and its 60-second auto-timer.
+   * First polls the backend directly (so we detect an admin unblock immediately
+   * without waiting for the 5-minute posSync interval), then re-reads local settings.
+   */
+  const handleBlockedRetry = async () => {
+    try {
+      // This polls /api/instances/status and updates local settings + fires pos-approved
+      // if the backend says we're no longer blocked.
+      await checkInstanceStatus();
+    } catch {
+      // Network offline or still blocked — ignore, checkActivation will show the correct state
+    }
+    // Re-read local settings regardless; if posSync just wrote 'approved' above,
+    // this will pick it up and exit the blocked screen.
+    await checkActivation();
   };
 
   const handleAuthenticated = () => {
@@ -94,12 +163,57 @@ export default function App() {
           <LanguageProvider>
             <NotificationProvider>
               <Setup onComplete={() => {
-                setSetupComplete(true);
-                setIsActivated(false);
-                subService.initialize().then((state) => {
-                  setIsSubscriptionActive(state.isActive || state.isGracePeriod || state.plan === 'lifetime');
-                });
+                // Re-run full check so approvalStatus is set correctly
+                checkActivation();
               }} />
+              <Toaster position="top-right" richColors closeButton />
+            </NotificationProvider>
+          </LanguageProvider>
+        </ThemeProvider>
+      </ErrorBoundary>
+    );
+  }
+
+  // Online mode: waiting for admin approval
+  if (setupComplete && licenseMode === 'online' && approvalStatus === 'pending') {
+    return (
+      <ErrorBoundary>
+        <ThemeProvider defaultTheme="system" storageKey="pos-ui-theme">
+          <PendingApproval
+            onApproved={() => {
+              setApprovalStatus('approved');
+              checkActivation();
+            }}
+            onRejected={() => {
+              setApprovalStatus('rejected');
+            }}
+          />
+          <Toaster position="top-right" richColors closeButton />
+        </ThemeProvider>
+      </ErrorBoundary>
+    );
+  }
+
+  // Blocked — applies to all modes (license revocation works offline too after next sync)
+  if (setupComplete && approvalStatus === 'blocked') {
+    return (
+      <ErrorBoundary>
+        <ThemeProvider defaultTheme="system" storageKey="pos-ui-theme">
+          <BlockedScreen reason={blockReason} onRetry={handleBlockedRetry} />
+          <Toaster position="top-right" richColors closeButton />
+        </ThemeProvider>
+      </ErrorBoundary>
+    );
+  }
+
+  // Offline mode: require local license activation
+  if (setupComplete && licenseMode === 'offline' && !isActivated) {
+    return (
+      <ErrorBoundary>
+        <ThemeProvider defaultTheme="system" storageKey="pos-ui-theme">
+          <LanguageProvider>
+            <NotificationProvider>
+              <Activation onActivated={() => checkActivation()} />
               <Toaster position="top-right" richColors closeButton />
             </NotificationProvider>
           </LanguageProvider>
@@ -114,7 +228,6 @@ export default function App() {
         <LanguageProvider>
           <NotificationProvider>
             <Router>
-              {/* System lock — portals to document.body, covers everything */}
               {isSystemLocked && (
                 <Login mode="system" onAuthenticated={handleSystemUnlock} />
               )}

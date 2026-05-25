@@ -1,5 +1,4 @@
-// Use Node 24's built-in SQLite — zero native compilation needed.
-import { DatabaseSync } from 'node:sqlite';
+import Database from 'better-sqlite3';
 import path from 'path';
 import dotenv from 'dotenv';
 
@@ -8,16 +7,12 @@ dotenv.config();
 const DB_PATH = process.env.DB_PATH || './pos_cloud.db';
 const dbPath = path.resolve(process.cwd(), DB_PATH);
 
-const db = new DatabaseSync(dbPath);
+const db = new Database(dbPath);
 
-// Enable WAL mode for better concurrent read performance
-db.exec('PRAGMA journal_mode = WAL');
-db.exec('PRAGMA foreign_keys = ON');
-
-// ─── Schema ──────────────────────────────────────────────────────────────────
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 
 db.exec(`
-  -- Each retailer POS installation
   CREATE TABLE IF NOT EXISTS instances (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     instance_id       TEXT UNIQUE NOT NULL,
@@ -43,7 +38,6 @@ db.exec(`
     updated_at        TEXT DEFAULT (datetime('now'))
   );
 
-  -- Raw log of every sync event received from POS instances
   CREATE TABLE IF NOT EXISTS sync_events (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     instance_id   TEXT NOT NULL,
@@ -53,7 +47,6 @@ db.exec(`
     received_at   TEXT DEFAULT (datetime('now'))
   );
 
-  -- Flattened sales table for fast per-instance querying
   CREATE TABLE IF NOT EXISTS instance_sales (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     instance_id     TEXT NOT NULL,
@@ -70,7 +63,6 @@ db.exec(`
     UNIQUE(instance_id, pos_sale_id)
   );
 
-  -- Admin users who can log into the dashboard
   CREATE TABLE IF NOT EXISTS admin_users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT UNIQUE NOT NULL,
@@ -79,7 +71,6 @@ db.exec(`
     created_at    TEXT DEFAULT (datetime('now'))
   );
 
-  -- License keys managed by admin; can be pre-generated and assigned
   CREATE TABLE IF NOT EXISTS license_keys (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     license_key   TEXT UNIQUE NOT NULL,
@@ -92,13 +83,45 @@ db.exec(`
     notes         TEXT DEFAULT ''
   );
 
-  -- Indexes for common queries
+  CREATE TABLE IF NOT EXISTS notifications (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    title              TEXT NOT NULL,
+    body               TEXT NOT NULL,
+    target_instance_id TEXT DEFAULT NULL,
+    sent_at            TEXT DEFAULT (datetime('now')),
+    is_active          INTEGER DEFAULT 1
+  );
+
+  CREATE TABLE IF NOT EXISTS notification_reads (
+    notification_id INTEGER NOT NULL,
+    instance_id     TEXT NOT NULL,
+    read_at         TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY (notification_id, instance_id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_sync_events_instance ON sync_events(instance_id);
   CREATE INDEX IF NOT EXISTS idx_sync_events_type     ON sync_events(entity_type, operation);
   CREATE INDEX IF NOT EXISTS idx_sales_instance       ON instance_sales(instance_id);
   CREATE INDEX IF NOT EXISTS idx_instances_status     ON instances(approval_status);
   CREATE INDEX IF NOT EXISTS idx_instances_last_seen  ON instances(last_seen);
+  CREATE INDEX IF NOT EXISTS idx_notifications_target ON notifications(target_instance_id);
 `);
+
+// ── Migrations (safe — catch "duplicate column" errors) ──────────────────────
+try {
+  db.exec(`ALTER TABLE instances ADD COLUMN device_fingerprint TEXT DEFAULT ''`);
+  console.log('[DB] Migration: added device_fingerprint column');
+} catch { /* column already exists */ }
+
+try {
+  db.exec(`ALTER TABLE instances ADD COLUMN license_revoked INTEGER DEFAULT 0`);
+  console.log('[DB] Migration: added license_revoked column');
+} catch { /* column already exists */ }
+
+try {
+  db.exec(`ALTER TABLE instances ADD COLUMN branch_name TEXT DEFAULT 'Main Branch'`);
+  console.log('[DB] Migration: added branch_name column');
+} catch { /* column already exists */ }
 
 console.log(`[DB] Connected to SQLite at ${dbPath}`);
 

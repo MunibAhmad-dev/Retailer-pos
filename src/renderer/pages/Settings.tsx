@@ -4,7 +4,7 @@ import {
   Database, Download, Eye, EyeOff, FileText, Globe, Image as ImageIcon,
   KeyRound, Loader2, Lock, Mail, MapPin, Phone, Printer,
   RefreshCw, Save, ShieldCheck, Store, Trash2, Upload, User,
-  Zap, Upload as UploadIcon, Languages, HardDrive, Settings2
+  Zap, Upload as UploadIcon, Languages, HardDrive, Settings2, GitBranch,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -17,6 +17,13 @@ import { useLanguage } from '../components/LanguageProvider';
 import { cn } from '../lib/utils';
 import * as XLSX from 'xlsx';
 import { subService } from '../services/subscription';
+import {
+  registerInstance,
+  processSyncQueue,
+  sendHeartbeat,
+  checkInstanceStatus,
+  fetchNotifications,
+} from '../services/api/posSync';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -147,6 +154,12 @@ export default function Settings() {
   const [isFetchingBackups, setIsFetchingBackups] = useState(false);
   const [restoreProgress, setRestoreProgress] = useState<{ status: string; progress: number } | null>(null);
   const [syncStatus, setSyncStatus] = useState({ pending: 0, failed: 0, cloudConnected: false, lastSync: null as string | null });
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncResult, setLastSyncResult] = useState<{ synced: number; failed: number } | null>(null);
+  const [fullResyncing, setFullResyncing] = useState(false);
+  const [fullResyncResult, setFullResyncResult] = useState<{ enqueued: number } | null>(null);
+  const [showFetchModal, setShowFetchModal] = useState(false);
+  const [fetchingCloud, setFetchingCloud]   = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addNotification } = useNotifications();
@@ -399,10 +412,90 @@ export default function Settings() {
     try {
       const res = await window.api.activateAppV2(settings.activation_key.trim());
       if (res.success) {
-        addNotification('License Validated', 'License key activated.', 'success');
-        update('license_mode', 'online');
-      } else { addNotification('Validation Failed', res.error || 'Could not validate.', 'error'); }
+        addNotification('License Activated', 'Your license key has been activated successfully.', 'success');
+        // Reload subscription info so plan / expiry / days-remaining update immediately
+        const newState = await subService.initialize();
+        setSubscriptionInfo(newState);
+        // Persist the key and push this device to the admin backend
+        await window.api.updateSettings({ activation_key: settings.activation_key.trim() } as any).catch(() => {});
+        registerInstance().catch(() => {});
+      } else {
+        addNotification('Activation Failed', res.error || 'Invalid or expired license key.', 'error');
+      }
     } finally { setValidating(false); }
+  };
+
+  const handleSyncNow = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setLastSyncResult(null);
+    try {
+      // Run all four sync operations in parallel
+      const [queueResult] = await Promise.all([
+        processSyncQueue(),
+        sendHeartbeat(),
+        checkInstanceStatus(),
+        fetchNotifications(),
+      ]);
+      setLastSyncResult(queueResult);
+      // Refresh the displayed sync stats
+      await loadSyncStatus();
+      addNotification('Sync Complete', `Synced ${queueResult.synced} item(s). Failed: ${queueResult.failed}.`, queueResult.failed > 0 ? 'warning' : 'success');
+    } catch (err: any) {
+      addNotification('Sync Failed', err?.message || 'Could not connect to cloud.', 'error');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleFullResync = async () => {
+    if (fullResyncing) return;
+    setFullResyncing(true);
+    setFullResyncResult(null);
+    try {
+      const res = await window.api.fullResync?.();
+      if (res?.success) {
+        setFullResyncResult({ enqueued: res.data?.enqueued ?? 0 });
+        addNotification('Full Sync Queued', `${res.data?.enqueued ?? 0} records added to sync queue. They will upload automatically.`, 'success');
+        // Kick off the queue processor immediately
+        processSyncQueue().catch(() => {});
+        await loadSyncStatus();
+      } else {
+        addNotification('Full Sync Failed', res?.error || 'Unknown error', 'error');
+      }
+    } catch (err: any) {
+      addNotification('Full Sync Failed', err?.message || 'Could not run full sync.', 'error');
+    } finally {
+      setFullResyncing(false);
+    }
+  };
+
+  const handleFetchFromCloud = async () => {
+    setShowFetchModal(false);
+    setFetchingCloud(true);
+    try {
+      const backendUrl = settings.cloud_backend_url.replace(/\/$/, '');
+      const apiKey     = settings.cloud_backend_token;
+      const res        = await fetch(`${backendUrl}/api/instances/export`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as any).error || `Server error ${res.status}`);
+      }
+      const data = await res.json();
+      const importRes = await window.api.importData(data);
+      if (importRes?.success) {
+        addNotification('Data Restored', 'Your data has been fetched from the cloud successfully.', 'success');
+        setTimeout(() => window.location.reload(), 1500);
+      } else {
+        addNotification('Restore Failed', importRes?.error || 'Import validation failed.', 'error');
+      }
+    } catch (err: any) {
+      addNotification('Fetch Failed', err.message || 'Could not fetch data from cloud.', 'error');
+    } finally {
+      setFetchingCloud(false);
+    }
   };
 
   // ── Pagination ─────────────────────────────────────────────────────────────
@@ -903,60 +996,273 @@ export default function Settings() {
             {/* ══ LICENSE ════════════════════════════════════════════════════ */}
             {activeTab === 'license' && (
               <>
-                <SectionCard title="License Information" desc="License is optional for offline POS use" icon={KeyRound}>
-                  <div className="space-y-5">
-                    <div className="grid grid-cols-1 md:grid-cols-[180px_1fr_auto] gap-3">
-                      <div className="space-y-1.5">
-                        <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Mode</Label>
-                        <Select value={settings.license_mode} onValueChange={(v: 'offline'|'online') => update('license_mode', v)}>
-                          <SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="offline">Offline</SelectItem>
-                            <SelectItem value="online">Online License</SelectItem>
-                          </SelectContent>
-                        </Select>
+                {/* ── License Status ─────────────────────────────────────── */}
+                <SectionCard title="License Status" desc="Your current plan, expiry and activation details" icon={ShieldCheck} accent="linear-gradient(90deg,#10b981,#3b82f6)">
+                  {subscriptionInfo ? (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <StatusPill
+                          label="Status"
+                          value={
+                            subscriptionInfo.plan === 'lifetime' ? 'Lifetime' :
+                            subscriptionInfo.isActive ? 'Active' :
+                            subscriptionInfo.isGracePeriod ? 'Grace Period' : 'Expired'
+                          }
+                          tone={
+                            subscriptionInfo.isActive || subscriptionInfo.plan === 'lifetime' ? 'success' :
+                            subscriptionInfo.isGracePeriod ? 'warning' : 'danger'
+                          }
+                        />
+                        <StatusPill
+                          label="Plan"
+                          value={
+                            subscriptionInfo.plan && subscriptionInfo.plan !== 'none' && subscriptionInfo.plan !== 'free'
+                              ? subscriptionInfo.plan.charAt(0).toUpperCase() + subscriptionInfo.plan.slice(1)
+                              : 'No License'
+                          }
+                          tone={subscriptionInfo.plan && subscriptionInfo.plan !== 'none' && subscriptionInfo.plan !== 'free' ? 'success' : 'neutral'}
+                        />
+                        <StatusPill
+                          label="Expires"
+                          value={
+                            subscriptionInfo.plan === 'lifetime' ? 'Never' :
+                            subscriptionInfo.expiryDate
+                              ? new Date(subscriptionInfo.expiryDate).toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' })
+                              : '—'
+                          }
+                          tone="neutral"
+                        />
+                        <StatusPill
+                          label="Days Left"
+                          value={
+                            subscriptionInfo.plan === 'lifetime' ? '∞' :
+                            subscriptionInfo.daysRemaining != null
+                              ? String(Math.max(0, subscriptionInfo.daysRemaining))
+                              : '—'
+                          }
+                          tone={
+                            subscriptionInfo.plan === 'lifetime' ? 'success' :
+                            (subscriptionInfo.daysRemaining ?? 0) > 30 ? 'success' :
+                            (subscriptionInfo.daysRemaining ?? 0) > 7 ? 'warning' : 'danger'
+                          }
+                        />
                       </div>
-                      <div className="space-y-1.5">
-                        <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">License Key</Label>
-                        <div className="relative">
-                          <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/60" size={14} />
-                          <Input className="pl-8 h-9 text-sm font-mono" value={settings.activation_key} onChange={e => update('activation_key', e.target.value)} placeholder="Optional" />
-                        </div>
-                      </div>
-                      <div className="flex items-end">
-                        <Button type="button" variant="outline" onClick={handleValidateLicense} disabled={validating} className="h-9 text-xs whitespace-nowrap gap-1.5">
-                          {validating ? <><Loader2 size={12} className="animate-spin" />Checking...</> : <><CheckCircle2 size={12} />Validate</>}
-                        </Button>
+
+                      <div className="flex flex-wrap gap-2">
+                        <span className={cn('text-[10px] font-black px-2.5 py-1 rounded-full border',
+                          settings.license_mode === 'online'
+                            ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20'
+                            : 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
+                        )}>
+                          {settings.license_mode === 'online' ? '🌐 Online Mode' : '💾 Offline Mode'}
+                        </span>
+                        <span className={cn('text-[10px] font-black px-2.5 py-1 rounded-full border',
+                          settings.approval_status === 'blocked' ? 'bg-red-500/10 text-red-600 border-red-500/20' :
+                          settings.approval_status === 'pending' ? 'bg-amber-500/10 text-amber-600 border-amber-500/20' :
+                          'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                        )}>
+                          {settings.approval_status === 'approved' ? '✓ Approved' :
+                           settings.approval_status === 'pending' ? '⏳ Pending Approval' : '🚫 Blocked'}
+                        </span>
+                        <span className="text-[10px] font-black px-2.5 py-1 rounded-full border bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 flex items-center gap-1">
+                          <CheckCircle2 size={10} /> Local DB Active
+                        </span>
                       </div>
                     </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-muted-foreground py-2">
+                      <Loader2 size={14} className="animate-spin" />
+                      <span className="text-xs">Loading license info…</span>
+                    </div>
+                  )}
+                </SectionCard>
 
-                    <div className="flex flex-wrap gap-2 pt-2">
-                      <span className={cn('text-[10px] font-black px-2.5 py-1 rounded-full border', settings.license_mode === 'offline' ? 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20' : 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20')}>
-                        {settings.license_mode === 'offline' ? 'Offline-first' : 'Online license'}
-                      </span>
-                      <span className={cn('text-[10px] font-black px-2.5 py-1 rounded-full border', settings.approval_status === 'blocked' ? 'bg-red-500/10 text-red-600 border-red-500/20' : settings.approval_status === 'pending' ? 'bg-amber-500/10 text-amber-600 border-amber-500/20' : 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20')}>
-                        {settings.approval_status}
-                      </span>
-                      <span className="text-[10px] font-black px-2.5 py-1 rounded-full border bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 flex items-center gap-1">
-                        <CheckCircle2 size={10} /> Local SQLite active
-                      </span>
+                {/* ── Activate License Key ────────────────────────────────── */}
+                <SectionCard title="Activate License Key" desc="Enter or renew your OsaTech license" icon={KeyRound}>
+                  <div className="space-y-4">
+                    <div className="flex gap-3">
+                      <div className="relative flex-1">
+                        <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground/60" size={14} />
+                        <Input
+                          className="pl-8 h-9 text-sm font-mono"
+                          value={settings.activation_key}
+                          onChange={e => update('activation_key', e.target.value)}
+                          placeholder="Paste your AES license key here"
+                        />
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={handleValidateLicense}
+                        disabled={validating}
+                        className="h-9 text-xs whitespace-nowrap gap-1.5 shrink-0"
+                      >
+                        {validating
+                          ? <><Loader2 size={12} className="animate-spin" />Activating…</>
+                          : <><Zap size={12} />Activate</>}
+                      </Button>
+                    </div>
+                    <div className="flex items-start gap-2.5 p-3 rounded-xl bg-primary/5 border border-primary/10">
+                      <Phone size={13} className="text-primary shrink-0 mt-0.5" />
+                      <p className="text-[11px] text-muted-foreground leading-relaxed">
+                        Need a license or renewal? Contact <span className="font-semibold text-foreground">OsaTech</span> on WhatsApp:{' '}
+                        <span className="font-bold text-primary">+92 329 8748232</span>
+                      </p>
                     </div>
                   </div>
                 </SectionCard>
 
-                {/* Cloud / API */}
-                <SectionCard title="Cloud / API Configuration" desc="Optional sync endpoint — SQLite remains primary" icon={cloudReady ? Cloud : CloudOff}>
+                {/* ── Cloud Connection (read-only) ────────────────────────── */}
+                <SectionCard title="Cloud Connection" desc="Auto-configured during setup — managed by OsaTech" icon={cloudReady ? Cloud : CloudOff}>
                   <div className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <Field icon={<Cloud />} label="API Base URL" value={settings.cloud_backend_url} onChange={v => update('cloud_backend_url', v)} placeholder="https://api.example.com" />
-                      <Field icon={<ShieldCheck />} label="Auth Token" value={settings.cloud_backend_token} onChange={v => update('cloud_backend_token', v)} placeholder="Bearer token" />
+
+                    {/* Status + Sync Now */}
+                    <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-muted/30 border border-border/50">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className={cn('w-2.5 h-2.5 rounded-full shrink-0', cloudReady ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]' : 'bg-muted-foreground/30')} />
+                        <span className={cn('text-sm font-semibold', cloudReady ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')}>
+                          {cloudReady ? 'Connected to OsaTech Cloud' : 'Not connected — complete online setup to enable'}
+                        </span>
+                      </div>
+                      {cloudReady && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleSyncNow}
+                          disabled={syncing}
+                          className="h-8 text-xs gap-1.5 shrink-0"
+                        >
+                          {syncing
+                            ? <><Loader2 size={12} className="animate-spin" />Syncing…</>
+                            : <><RefreshCw size={12} />Sync Now</>}
+                        </Button>
+                      )}
                     </div>
+
+                    {/* Branch name indicator */}
+                    {cloudReady && (settings as any).branch_name && (
+                      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/8 border border-blue-500/20">
+                        <GitBranch size={13} className="text-blue-500 dark:text-blue-400 flex-shrink-0" />
+                        <span className="text-xs text-slate-700 dark:text-gray-300">
+                          Branch: <strong className="text-blue-600 dark:text-blue-400">{(settings as any).branch_name}</strong>
+                          <span className="ml-2 text-slate-400 dark:text-gray-600 text-[10px]">· same owner mobile links all branches in admin</span>
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Auto-sync schedule info */}
+                    {cloudReady && (
+                      <div className="flex flex-wrap gap-2 text-[10px]">
+                        <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-muted/40 border border-border/50 text-muted-foreground">
+                          <Activity size={10} className="text-primary" />
+                          Queue auto-sync: <span className="font-bold text-foreground ml-1">every 30 sec</span>
+                        </span>
+                        <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-muted/40 border border-border/50 text-muted-foreground">
+                          <Zap size={10} className="text-amber-500" />
+                          Heartbeat: <span className="font-bold text-foreground ml-1">every 5 min</span>
+                        </span>
+                        <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-muted/40 border border-border/50 text-muted-foreground">
+                          <Globe size={10} className="text-blue-500" />
+                          Status + Notifications: <span className="font-bold text-foreground ml-1">every 5 min</span>
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Last sync result */}
+                    {lastSyncResult && (
+                      <div className={cn(
+                        'flex items-center gap-2 p-2.5 rounded-lg border text-[11px] font-medium',
+                        lastSyncResult.failed > 0
+                          ? 'bg-amber-500/8 border-amber-500/20 text-amber-600 dark:text-amber-400'
+                          : 'bg-emerald-500/8 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                      )}>
+                        <CheckCircle2 size={13} />
+                        Last manual sync: {lastSyncResult.synced} synced, {lastSyncResult.failed} failed
+                      </div>
+                    )}
+
+                    {/* Full Re-sync All Data */}
+                    {cloudReady && (
+                      <div className="p-3 rounded-lg bg-muted/20 border border-border/60 space-y-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-foreground">Re-sync All Data</p>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              Push ALL records (products, customers, vendors, purchases, loans, expenses) to the cloud queue. Use this for disaster recovery or if the admin is missing your data.
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleFullResync}
+                            disabled={fullResyncing || syncing}
+                            className="h-8 text-xs gap-1.5 shrink-0 border-primary/30 text-primary hover:bg-primary/5"
+                          >
+                            {fullResyncing
+                              ? <><Loader2 size={12} className="animate-spin" />Syncing…</>
+                              : <><RefreshCw size={12} />Full Sync</>}
+                          </Button>
+                        </div>
+                        {fullResyncResult && (
+                          <div className="flex items-center gap-1.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                            <CheckCircle2 size={11} />
+                            {fullResyncResult.enqueued} records queued for upload
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Fetch from Cloud */}
+                    {cloudReady && (
+                      <div className="p-3 rounded-lg border border-amber-500/25 bg-amber-500/5 space-y-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                              <Download size={12} className="text-amber-500 shrink-0" />
+                              Fetch Data from Cloud
+                            </p>
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              Restore all your data from the cloud. Use only when switching to a new PC or recovering lost data.
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setShowFetchModal(true)}
+                            disabled={fetchingCloud || syncing}
+                            className="h-8 text-xs gap-1.5 shrink-0 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                          >
+                            {fetchingCloud
+                              ? <><Loader2 size={12} className="animate-spin" />Fetching…</>
+                              : <><Download size={12} />Fetch from Cloud</>}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <StatusPill label="Cloud" value={cloudReady ? 'Configured' : 'Offline'} tone={cloudReady ? 'success' : 'neutral'} />
-                      <StatusPill label="Pending" value={`${syncStatus.pending}`} tone={syncStatus.pending > 0 ? 'warning' : 'success'} />
-                      <StatusPill label="Failed" value={`${syncStatus.failed}`} tone={syncStatus.failed > 0 ? 'danger' : 'success'} />
-                      <StatusPill label="Last Sync" value={syncStatus.lastSync ? new Date(syncStatus.lastSync).toLocaleString('en-PK',{hour:'2-digit',minute:'2-digit',hour12:true}) : 'Never'} tone="neutral" />
+                      <StatusPill label="Cloud" value={cloudReady ? 'Connected' : 'Offline'} tone={cloudReady ? 'success' : 'neutral'} />
+                      <StatusPill
+                        label="Approval"
+                        value={settings.approval_status === 'approved' ? 'Approved' : settings.approval_status === 'pending' ? 'Pending' : 'Blocked'}
+                        tone={settings.approval_status === 'blocked' ? 'danger' : settings.approval_status === 'pending' ? 'warning' : 'success'}
+                      />
+                      <StatusPill label="Pending Sync" value={`${syncStatus.pending}`} tone={syncStatus.pending > 0 ? 'warning' : 'success'} />
+                      <StatusPill label="Last Sync" value={syncStatus.lastSync ? new Date(syncStatus.lastSync).toLocaleString('en-PK', { hour: '2-digit', minute: '2-digit', hour12: true }) : 'Never'} tone="neutral" />
                     </div>
+
+                    {cloudReady && settings.cloud_backend_url && (
+                      <div className="flex items-center gap-2 p-2.5 rounded-lg bg-muted/30 border border-border/50">
+                        <Globe size={12} className="text-muted-foreground/60 shrink-0" />
+                        <p className="text-[10px] font-mono text-muted-foreground truncate">{settings.cloud_backend_url}</p>
+                      </div>
+                    )}
+
+                    <p className="text-[11px] text-muted-foreground">
+                      Your cloud endpoint and API key are managed automatically. Contact OsaTech support to change server configuration.
+                    </p>
                   </div>
                 </SectionCard>
               </>
@@ -971,6 +1277,67 @@ export default function Settings() {
           </form>
         </div>
       </div>
+
+      {/* ── Fetch from Cloud — confirmation modal ────────────────────────────── */}
+      {showFetchModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-card border border-border/60 rounded-2xl shadow-2xl p-6">
+            {/* Header */}
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/25 flex items-center justify-center shrink-0">
+                <AlertCircle size={20} className="text-amber-500" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-foreground">Fetch Data from Cloud</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">This action will overwrite local data</p>
+              </div>
+            </div>
+
+            {/* Warning body */}
+            <div className="bg-amber-500/8 border border-amber-500/20 rounded-xl px-4 py-3 mb-5 space-y-1.5">
+              <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">
+                ⚠️ Are you sure?
+              </p>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Only do this when you are <strong className="text-foreground">changing to a new computer</strong> or you have <strong className="text-foreground">lost your data</strong>.
+              </p>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                This will <strong className="text-rose-600 dark:text-rose-400">overwrite all existing local data</strong> (products, customers, sales, etc.) with whatever is stored in the cloud. There is no undo.
+              </p>
+            </div>
+
+            <div className="flex gap-3 justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowFetchModal(false)}
+                className="h-9 text-xs"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleFetchFromCloud}
+                className="h-9 text-xs gap-1.5 bg-amber-500 hover:bg-amber-600 text-white border-0"
+              >
+                <Download size={13} />
+                Yes, Fetch &amp; Restore
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fetch progress overlay */}
+      {fetchingCloud && (
+        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="w-full max-w-sm bg-card border border-border/60 rounded-2xl shadow-2xl p-8 text-center">
+            <Loader2 className="animate-spin text-amber-500 mx-auto mb-3" size={28} />
+            <h3 className="font-bold text-sm text-foreground">Fetching from Cloud…</h3>
+            <p className="text-[11px] text-muted-foreground mt-1">Downloading your data. Do not close the app.</p>
+          </div>
+        </div>
+      )}
 
       {/* Restore progress overlay */}
       {restoreProgress && (

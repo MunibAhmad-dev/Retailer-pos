@@ -31,7 +31,7 @@ export default function Login() {
   };
 
   return (
-    <div className="h-full flex items-center justify-center bg-gray-950 p-4">
+    <div className="h-full flex items-center justify-center bg-slate-50 dark:bg-[#0a0f1e] p-4">
       {/* Glow bg */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full bg-blue-600/5 blur-3xl" />
@@ -41,20 +41,20 @@ export default function Login() {
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-blue-600/15 border border-blue-500/30 mb-4">
-            <Zap className="w-7 h-7 text-blue-400" />
+            <Zap className="w-7 h-7 text-blue-500 dark:text-blue-400" />
           </div>
-          <h1 className="text-2xl font-bold text-white">OsaTech Admin</h1>
-          <p className="text-sm text-gray-500 mt-1">Sign in to your admin panel</p>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">OsaTech Admin</h1>
+          <p className="text-sm text-slate-500 dark:text-gray-500 mt-1">Sign in to your admin panel</p>
         </div>
 
         {/* Card */}
-        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-2xl">
+        <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-6 shadow-2xl">
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             {/* Username */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1.5">Username</label>
+              <label className="block text-xs font-medium text-slate-500 dark:text-gray-400 mb-1.5">Username</label>
               <div className="relative">
-                <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+                <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 dark:text-gray-500" />
                 <input
                   type="text"
                   value={username}
@@ -69,9 +69,9 @@ export default function Login() {
 
             {/* Password */}
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1.5">Password</label>
+              <label className="block text-xs font-medium text-slate-500 dark:text-gray-400 mb-1.5">Password</label>
               <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 dark:text-gray-500" />
                 <input
                   type={showPw ? 'text' : 'password'}
                   value={password}
@@ -84,7 +84,7 @@ export default function Login() {
                 <button
                   type="button"
                   onClick={() => setShowPw((v) => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-gray-500 hover:text-slate-700 dark:hover:text-gray-300 transition-colors"
                 >
                   {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
@@ -93,7 +93,7 @@ export default function Login() {
 
             {/* Error */}
             {error && (
-              <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2">
+              <p className="text-xs text-rose-600 dark:text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg px-3 py-2">
                 {error}
               </p>
             )}
@@ -109,7 +109,7 @@ export default function Login() {
           </form>
         </div>
 
-        <p className="text-center text-xs text-gray-600 mt-6">
+        <p className="text-center text-xs text-slate-400 dark:text-gray-600 mt-6">
           OsaTech POS Cloud — Admin v1.0
         </p>
       </div>

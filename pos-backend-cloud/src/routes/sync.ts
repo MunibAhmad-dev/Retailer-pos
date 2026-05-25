@@ -38,6 +38,8 @@ router.post('/', requireInstance, (req: Request, res: Response) => {
   let synced = 0;
   let newSalesRevenue = 0;
   let newSalesCount = 0;
+  let hasCustomerEvents = false;
+  let hasProductEvents = false;
 
   const processAll = db.transaction(() => {
     for (const item of items) {
@@ -80,6 +82,9 @@ router.post('/', requireInstance, (req: Request, res: Response) => {
           }
         }
 
+        if (item.entity_type === 'customer') hasCustomerEvents = true;
+        if (item.entity_type === 'product')  hasProductEvents  = true;
+
         results.push({ local_id: item.local_id, success: true });
         synced++;
       } catch (err: any) {
@@ -87,21 +92,45 @@ router.post('/', requireInstance, (req: Request, res: Response) => {
       }
     }
 
+    // Recount distinct customer / product IDs from all sync_events for accurate totals.
+    // This handles both incremental and full-resync correctly (no double-counting).
+    const customerCount = hasCustomerEvents
+      ? (db.prepare(`
+          SELECT COUNT(DISTINCT json_extract(payload, '$.id')) as cnt
+          FROM sync_events
+          WHERE instance_id = ? AND entity_type = 'customer' AND operation = 'create'
+        `).get(inst.instance_id) as any)?.cnt ?? 0
+      : null;
+
+    const productCount = hasProductEvents
+      ? (db.prepare(`
+          SELECT COUNT(DISTINCT json_extract(payload, '$.id')) as cnt
+          FROM sync_events
+          WHERE instance_id = ? AND entity_type = 'product' AND operation = 'create'
+        `).get(inst.instance_id) as any)?.cnt ?? 0
+      : null;
+
     // Update instance aggregates
     if (newSalesCount > 0) {
       db.prepare(`
         UPDATE instances SET
-          total_sales   = total_sales + ?,
-          total_revenue = total_revenue + ?,
-          last_seen     = datetime('now'),
-          updated_at    = datetime('now')
+          total_sales      = total_sales + ?,
+          total_revenue    = total_revenue + ?,
+          total_customers  = COALESCE(?, total_customers),
+          total_products   = COALESCE(?, total_products),
+          last_seen        = datetime('now'),
+          updated_at       = datetime('now')
         WHERE instance_id = ?
-      `).run(newSalesCount, newSalesRevenue, inst.instance_id);
+      `).run(newSalesCount, newSalesRevenue, customerCount, productCount, inst.instance_id);
     } else {
       db.prepare(`
-        UPDATE instances SET last_seen = datetime('now'), updated_at = datetime('now')
+        UPDATE instances SET
+          total_customers = COALESCE(?, total_customers),
+          total_products  = COALESCE(?, total_products),
+          last_seen       = datetime('now'),
+          updated_at      = datetime('now')
         WHERE instance_id = ?
-      `).run(inst.instance_id);
+      `).run(customerCount, productCount, inst.instance_id);
     }
   });
 

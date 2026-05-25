@@ -66,19 +66,25 @@ export async function registerInstance(): Promise<boolean> {
     const backendUrl: string = s.cloud_backend_url || '';
     if (!backendUrl) return false;
 
-    // Use owner_mobile as the unique ID; fall back to generated ID stored in settings
     const mobile: string = (s.owner_mobile || '').trim();
-    const instanceId = mobile || `instance_${Date.now()}`;
+    // Use UUID stored during Setup (multi-branch safe); fall back to mobile for older installs
+    const instanceId: string = (s as any).cloud_instance_id || mobile || `instance_${Date.now()}`;
+
+    // Fetch current fingerprint (daily-rotating) so admin can see it in dashboard
+    const fpRes = await (window as any).api.getFingerprint?.().catch(() => null);
+    const fingerprint: string = fpRes?.success ? (fpRes.data || '') : '';
 
     const payload = {
       instance_id:   instanceId,
-      store_name:    s.store_name    || '',
-      owner_name:    s.owner_full_name || '',
+      store_name:    s.store_name       || '',
+      owner_name:    s.owner_full_name  || '',
       owner_mobile:  mobile,
-      owner_email:   s.owner_email   || '',
-      store_address: s.store_address || '',
-      business_name: s.business_name || '',
-      license_key:   s.activation_key || '',
+      owner_email:   s.owner_email      || '',
+      store_address: s.store_address    || '',
+      business_name: s.business_name    || '',
+      branch_name:   (s as any).branch_name || 'Main Branch',
+      license_key:   (s as any).activation_key || '',
+      fingerprint,
       app_version:   '1.0',
     };
 
@@ -229,8 +235,8 @@ export async function sendHeartbeat(): Promise<void> {
 
 /**
  * Polls /api/instances/status and updates local settings when the cloud status changes.
- * If the admin has blocked this instance, the local approval_status is updated
- * so SubscriptionService picks it up on next check.
+ * Also activates any newly-issued cloud license key so the Subscription page reflects it.
+ * If the admin has blocked this instance, the UI is notified immediately via a custom event.
  */
 export async function checkInstanceStatus(): Promise<void> {
   if (!isOnline()) return;
@@ -248,29 +254,95 @@ export async function checkInstanceStatus(): Promise<void> {
     const res = await client.get('/api/instances/status');
 
     if (res.data?.success) {
-      const { approval_status, license_plan, license_expiry } = res.data;
+      const { approval_status, license_key, license_plan, license_expiry, license_revoked } = res.data;
 
-      // Only update if something changed (avoid unnecessary DB writes)
+      // ── License revocation — admin wiped this instance's license ──────────────
+      if (license_revoked) {
+        await (window as any).api.clearLocalLicense?.().catch(() => {});
+        await window.api.updateSettings({ approval_status: 'blocked' } as any);
+        console.warn('[PosSync] License revoked by admin — local license cleared');
+        window.dispatchEvent(new CustomEvent('pos-blocked'));
+        return;
+      }
+
+      // ── Activate cloud-issued license key when new or renewed ─────────────────
+      if (license_key && approval_status === 'approved' && license_key !== (s as any).activation_key) {
+        const act = await (window as any).api.activateAppV2?.(license_key).catch(() => null);
+        if (act?.success) {
+          await window.api.updateSettings({ activation_key: license_key } as any);
+          console.log('[PosSync] Cloud license key activated locally');
+        }
+      }
+
+      // Only write settings when something changed (avoid unnecessary DB writes)
       if (
         approval_status !== s.approval_status ||
-        license_plan    !== s.license_plan    ||
-        license_expiry  !== s.license_expiry
+        license_plan    !== (s as any).license_plan ||
+        license_expiry  !== (s as any).license_expiry
       ) {
+        const previousStatus = s.approval_status;
         await window.api.updateSettings({
           approval_status,
           cloud_connected: 1,
           cloud_last_sync: new Date().toISOString(),
-        });
+        } as any);
         console.log('[PosSync] Status updated from cloud:', approval_status);
+
+        // Tell App.tsx immediately when status changes
+        if (approval_status === 'blocked') {
+          window.dispatchEvent(new CustomEvent('pos-blocked'));
+        } else if (previousStatus === 'blocked' && approval_status !== 'blocked') {
+          // Was blocked, now unblocked — trigger re-activation check
+          console.log('[PosSync] Instance unblocked — notifying UI');
+          window.dispatchEvent(new CustomEvent('pos-approved'));
+        }
       }
     }
   } catch (err: any) {
-    // 403 = blocked
+    // 403 = blocked by admin
     if (axios.isAxiosError(err) && err.response?.status === 403) {
-      await window.api.updateSettings({ approval_status: 'blocked' });
+      await window.api.updateSettings({ approval_status: 'blocked' } as any);
       console.warn('[PosSync] Instance blocked by admin');
+      window.dispatchEvent(new CustomEvent('pos-blocked'));
     } else {
       console.warn('[PosSync] Status poll failed:', err.message);
+    }
+  }
+}
+
+// ─── Notification poll ────────────────────────────────────────────────────────
+
+/**
+ * Fetches unread notifications from the cloud backend.
+ * Each notification is delivered once (backend marks it read on retrieval).
+ * Fires a 'pos-notification' CustomEvent for each message so App.tsx can toast it.
+ */
+export async function fetchNotifications(): Promise<void> {
+  if (!isOnline()) return;
+
+  const settingsRes = await window.api.getSettings();
+  if (!settingsRes?.success || !settingsRes.data) return;
+
+  const s = settingsRes.data;
+  const backendUrl: string = s.cloud_backend_url   || '';
+  const apiKey: string     = s.cloud_backend_token || '';
+  if (!backendUrl || !apiKey) return;
+
+  try {
+    const client = buildClient(backendUrl, apiKey);
+    const res = await client.get('/api/instances/notifications');
+
+    if (res.data?.success && Array.isArray(res.data.data)) {
+      for (const notif of res.data.data as Array<{ title: string; body: string }>) {
+        window.dispatchEvent(
+          new CustomEvent('pos-notification', { detail: { title: notif.title, body: notif.body } })
+        );
+      }
+    }
+  } catch (err: any) {
+    // 403 means blocked — don't warn here, checkInstanceStatus already handles it
+    if (!axios.isAxiosError(err) || err.response?.status !== 403) {
+      console.warn('[PosSync] Notification fetch failed:', err.message);
     }
   }
 }
@@ -292,16 +364,33 @@ export async function initPosSync(): Promise<void> {
 
   if (s?.cloud_backend_url) {
     if (!s.cloud_backend_token) {
-      // No API key stored → register now
+      // No API key stored → register now (works for both online and offline-mode users)
       await registerInstance();
     } else {
       isRegistered = true;
     }
 
-    // Run an immediate sync + status check
+    // Run an immediate sync + status check + notification fetch
     processSyncQueue().catch(() => {});
     checkInstanceStatus().catch(() => {});
+    fetchNotifications().catch(() => {});
   }
+
+  // ── Auto-register when internet comes back (for offline-mode users) ──────────
+  // Offline users complete setup without internet; when they first go online we
+  // register them so they appear in the admin dashboard and can receive notifications.
+  window.addEventListener('online', async () => {
+    if (isRegistered) return;
+    const sr = await window.api.getSettings().catch(() => null);
+    const cfg = sr?.data;
+    if (!cfg?.cloud_backend_url || cfg.cloud_backend_token || !cfg.setup_completed) return;
+    console.log('[PosSync] Internet restored — attempting registration for offline instance…');
+    const ok = await registerInstance();
+    if (ok) {
+      checkInstanceStatus().catch(() => {});
+      fetchNotifications().catch(() => {});
+    }
+  });
 
   // Set up recurring intervals
   syncIntervalId = setInterval(async () => {
@@ -317,9 +406,10 @@ export async function initPosSync(): Promise<void> {
   statusIntervalId = setInterval(async () => {
     if (!isOnline()) return;
     checkInstanceStatus().catch(e => console.warn('[PosSync] Status error:', e.message));
+    fetchNotifications().catch(e => console.warn('[PosSync] Notification error:', e.message));
   }, STATUS_POLL_MS);
 
-  console.log('[PosSync] Sync worker running. Queue interval: 30s | Heartbeat: 5m | Status poll: 5m');
+  console.log('[PosSync] Sync worker running. Queue: 30s | Heartbeat: 5m | Status+Notifications: 5m');
 }
 
 /**

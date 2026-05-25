@@ -83,6 +83,7 @@ const api = {
   // New Licensing System V2
   getFingerprint: () => ipcRenderer.invoke('get-fingerprint'),
   activateAppV2: (licenseKey: string) => ipcRenderer.invoke('activate-app-v2', licenseKey),
+  clearLocalLicense: () => ipcRenderer.invoke('clear-local-license'),
   generateLicenseKey: (data: any) => ipcRenderer.invoke('generate-license-key', data),
   onToggleLicenseIssuer: (callback: () => void) => {
     const subscription = () => callback();
@@ -143,6 +144,7 @@ const api = {
   markSyncItemsDone: (ids: number[]) => ipcRenderer.invoke('mark-sync-items-done', ids),
   markSyncItemFailed: (id: number, error: string) => ipcRenderer.invoke('mark-sync-item-failed', id, error),
   enqueueSaleSync: (saleId: number) => ipcRenderer.invoke('enqueue-sale-sync', saleId),
+  fullResync: () => ipcRenderer.invoke('full-resync'),
 };
 
 contextBridge.exposeInMainWorld('api', api);
