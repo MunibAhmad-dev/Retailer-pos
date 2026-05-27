@@ -567,22 +567,29 @@ export default function InstanceDetail() {
             </button>
           )}
 
-          {/* Export dropdown */}
+          {/* Pull All Data — full JSON dump for admin review or sending to user */}
+          <button
+            onClick={() => handleExport()}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors shadow-sm"
+          >
+            <Download size={15} /> Pull All Data (JSON)
+          </button>
+
+          {/* Per-entity export dropdown */}
           <div className="relative" ref={exportMenuRef}>
             <button onClick={() => setExportMenu(v => !v)} className="btn-ghost">
-              <Download size={15} /> Export
+              <FileDown size={15} /> Export…
               <ChevronDown size={13} className={clsx('transition-transform', showExportMenu && 'rotate-180')} />
             </button>
             {showExportMenu && (
               <div className="absolute right-0 top-full mt-1.5 z-40 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl shadow-2xl py-1.5 min-w-[190px]">
                 {[
-                  { label: 'Export All (JSON)',       entity: undefined },
-                  { label: 'Export Products',          entity: 'products' },
-                  { label: 'Export Sales',             entity: 'sales' },
-                  { label: 'Export Customers',         entity: 'customers' },
-                  { label: 'Export Vendors',           entity: 'vendors' },
-                  { label: 'Export Purchases',         entity: 'purchases' },
-                  { label: 'Export Expenses',          entity: 'expenses' },
+                  { label: 'Export Products',   entity: 'products' },
+                  { label: 'Export Sales',       entity: 'sales' },
+                  { label: 'Export Customers',   entity: 'customers' },
+                  { label: 'Export Vendors',     entity: 'vendors' },
+                  { label: 'Export Purchases',   entity: 'purchases' },
+                  { label: 'Export Expenses',    entity: 'expenses' },
                 ].map(({ label, entity }) => (
                   <button key={label} type="button" onClick={() => handleExport(entity)}
                     className="w-full text-left px-4 py-2 text-sm text-slate-600 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 hover:text-slate-900 dark:hover:text-white transition-colors flex items-center gap-2">

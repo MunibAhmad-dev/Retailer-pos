@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, useLocation, Link } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, ShoppingCart, Package, Boxes, Users,
   CreditCard, BarChart3, Settings, Moon, Sun, Receipt,
   Bell, Menu, X, CheckCircle2, AlertCircle, Info, ChevronLeft, ChevronRight,
   Truck, Key, TrendingUp, Lock, ShieldAlert, History, Wallet, Undo2,
-  CircleDollarSign, Zap
+  CircleDollarSign, Zap, ChevronDown, Banknote, ClipboardCheck
 } from 'lucide-react';
 import Logo from '../components/img/yasir_logo_transparent.png';
 import { useTheme } from './ThemeProvider';
@@ -26,21 +27,24 @@ import {
 } from './ui/dropdown-menu';
 import { ThemeToggle } from "./ThemeToggle";
 import { NotificationCenter } from "./NotificationCenter";
+import { useModules } from '../contexts/ModulesContext';
 
 interface LayoutProps {
   children: React.ReactNode;
 }
 
-const navGroups = [
+const BASE_NAV_GROUPS = [
   {
     label: 'Core',
+    emoji: '🏠',
     items: [
       { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
       { path: '/sales', icon: ShoppingCart, label: 'Sales' },
     ],
   },
   {
-    label: 'Stock',
+    label: 'Inventory',
+    emoji: '📦',
     items: [
       { path: '/products', icon: Package, label: 'Products' },
       { path: '/inventory', icon: Boxes, label: 'Inventory' },
@@ -51,23 +55,28 @@ const navGroups = [
   },
   {
     label: 'People',
+    emoji: '👥',
     items: [
       { path: '/customers', icon: Users, label: 'Customers' },
-      { path: '/loans', icon: Wallet, label: 'Accounts (AP/AR)' },
+      { path: '/loans', icon: Wallet, label: 'Loans (AP/AR)' },
     ],
   },
   {
     label: 'Finance',
+    emoji: '💰',
     items: [
+      { path: '/accounts', icon: Banknote, label: 'Accounts & Cash' },
+      { path: '/daily-close', icon: ClipboardCheck, label: 'Daily Close' },
+      { path: '/expenses', icon: Receipt, label: 'Expenses' },
       { path: '/transactions', icon: CreditCard, label: 'Transactions' },
       { path: '/payments', icon: CircleDollarSign, label: 'Payment Ledger' },
-      { path: '/expenses', icon: Receipt, label: 'Expenses' },
       { path: '/register', icon: Wallet, label: 'Cash Register' },
       { path: '/register-history', icon: History, label: 'Register History' },
     ],
   },
   {
     label: 'Reports',
+    emoji: '📊',
     items: [
       { path: '/reports', icon: BarChart3, label: 'Reports' },
       { path: '/balance-sheet', icon: TrendingUp, label: 'Balance Sheet' },
@@ -75,6 +84,7 @@ const navGroups = [
   },
   {
     label: 'System',
+    emoji: '⚙️',
     items: [
       { path: '/settings', icon: Settings, label: 'Settings' },
       { path: '/subscription', icon: Key, label: 'Subscription' },
@@ -88,10 +98,59 @@ export default function Layout({ children }: LayoutProps) {
   const { theme, setTheme } = useTheme();
   const { addNotification, notifications, unreadCount, markAsRead, markAllAsRead, clearAll } = useNotifications();
   const { t, language } = useLanguage();
+  const { modules } = useModules();
+
+  const navGroups = React.useMemo(() => {
+    if (!modules.bakery) return BASE_NAV_GROUPS;
+    const groups = [...BASE_NAV_GROUPS];
+    const bakeryGroup = {
+      label: 'Bakery',
+      emoji: '🧁',
+      items: [
+        { path: '/', icon: LayoutDashboard, label: 'Bakery Dashboard' },
+        { path: '/products', icon: Package, label: 'Bakery Products' },
+      ],
+    };
+    groups.splice(2, 0, bakeryGroup);
+    return groups;
+  }, [modules.bakery]);
 
   const [logoData, setLogoData] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+
+  // Collapsible group state — persisted in localStorage
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem('pos_nav_open_groups');
+      if (stored) return new Set(JSON.parse(stored));
+    } catch { /* ignore */ }
+    // Default: all open
+    return new Set(BASE_NAV_GROUPS.map(g => g.label));
+  });
+
+  const toggleGroup = (label: string) => {
+    setOpenGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      try { localStorage.setItem('pos_nav_open_groups', JSON.stringify([...next])); } catch { }
+      return next;
+    });
+  };
+
+  // Auto-expand group containing active route
+  useEffect(() => {
+    const activeGroup = navGroups.find(g => g.items.some(i => i.path === location.pathname));
+    if (activeGroup && !openGroups.has(activeGroup.label)) {
+      setOpenGroups(prev => {
+        const next = new Set(prev);
+        next.add(activeGroup.label);
+        try { localStorage.setItem('pos_nav_open_groups', JSON.stringify([...next])); } catch { }
+        return next;
+      });
+    }
+  }, [location.pathname]);
 
   useEffect(() => {
     async function fetchLogo() {
@@ -188,70 +247,103 @@ export default function Layout({ children }: LayoutProps) {
         {/* Navigation */}
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5 scrollbar-thin scrollbar-thumb-border">
           {navGroups.map((group) => {
-            const hasAccessibleItem = group.items.some(
-              item => subService.canAccess(item.path.replace('/', '')) || item.path === '/'
-            );
+            const isGroupOpen = openGroups.has(group.label);
+            const hasActiveItem = group.items.some(item => location.pathname === item.path);
 
             return (
-              <div key={group.label} className="mb-1">
-                {/* Group label */}
+              <div key={group.label} className="mb-0.5">
+                {/* Group header — clickable when expanded sidebar */}
                 {!isSidebarCollapsed ? (
-                  <p className="px-3 pt-3 pb-1 text-[9px] font-black uppercase tracking-[0.12em] text-muted-foreground/50 select-none">
-                    {group.label}
-                  </p>
+                  <button
+                    onClick={() => toggleGroup(group.label)}
+                    className={cn(
+                      "w-full flex items-center justify-between px-3 pt-3 pb-1.5 rounded-lg transition-colors",
+                      "hover:bg-muted/40 group/ghdr",
+                    )}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px]">{group.emoji}</span>
+                      <span className={cn(
+                        "text-[9px] font-black uppercase tracking-[0.12em] transition-colors select-none",
+                        hasActiveItem ? "text-primary/80" : "text-muted-foreground/50 group-hover/ghdr:text-muted-foreground/80",
+                      )}>
+                        {group.label}
+                      </span>
+                    </div>
+                    <ChevronDown
+                      size={10}
+                      className={cn(
+                        "text-muted-foreground/40 transition-transform duration-200 select-none",
+                        isGroupOpen ? "rotate-0" : "-rotate-90",
+                      )}
+                    />
+                  </button>
                 ) : (
                   <div className="mx-2 my-2 h-px bg-border/40" />
                 )}
 
-                {group.items.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = location.pathname === item.path;
-                  const isAllowed = subService.canAccess(item.path.replace('/', '')) || item.path === '/';
-
-                  if (!isAllowed) {
-                    return (
-                      <div
-                        key={item.path}
-                        title={isSidebarCollapsed ? item.label : "Access restricted — subscription expired"}
-                        className={cn(
-                          "relative flex items-center rounded-lg text-[11px] font-medium cursor-not-allowed select-none",
-                          isSidebarCollapsed ? "justify-center py-2.5 px-2" : "px-3 py-2 gap-2.5",
-                          "text-muted-foreground/30"
-                        )}
-                      >
-                        <div className="relative shrink-0">
-                          <Icon size={16} className="opacity-40" />
-                          <Lock size={8} className="absolute -top-1 -right-1 text-destructive/70" />
-                        </div>
-                        {!isSidebarCollapsed && <span className="truncate">{item.label}</span>}
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <NavLink
-                      key={item.path}
-                      to={item.path}
-                      title={isSidebarCollapsed ? item.label : undefined}
-                      className={cn(
-                        "relative flex items-center rounded-lg text-[11px] font-medium transition-all duration-150 group",
-                        isSidebarCollapsed ? "justify-center py-2.5 px-2" : "px-3 py-2 gap-2.5",
-                        isActive
-                          ? "bg-primary/10 text-primary"
-                          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                      )}
+                {/* Group items with collapse animation */}
+                <AnimatePresence initial={false}>
+                  {(isSidebarCollapsed || isGroupOpen) && (
+                    <motion.div
+                      key={`group-${group.label}`}
+                      initial={!isSidebarCollapsed ? { height: 0, opacity: 0 } : false}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={!isSidebarCollapsed ? { height: 0, opacity: 0 } : undefined}
+                      transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                      className="overflow-hidden"
                     >
-                      {/* Left pill indicator */}
-                      {isActive && (
-                        <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-primary" />
-                      )}
-                      <Icon size={16} className={cn("shrink-0 transition-transform", isActive && "scale-110")} />
-                      {!isSidebarCollapsed && (
-                        <span className={cn("truncate", isActive && "font-semibold")}>{item.label}</span>
-                      )}
-                    </NavLink>
-                  );
-                })}
+                      {group.items.map((item) => {
+                        const Icon = item.icon;
+                        const isActive = location.pathname === item.path;
+                        const isAllowed = subService.canAccess(item.path.replace('/', '')) || item.path === '/';
+
+                        if (!isAllowed) {
+                          return (
+                            <div
+                              key={item.path}
+                              title={isSidebarCollapsed ? item.label : "Access restricted — subscription expired"}
+                              className={cn(
+                                "relative flex items-center rounded-lg text-[11px] font-medium cursor-not-allowed select-none",
+                                isSidebarCollapsed ? "justify-center py-2.5 px-2" : "px-3 py-2 gap-2.5",
+                                "text-muted-foreground/30"
+                              )}
+                            >
+                              <div className="relative shrink-0">
+                                <Icon size={16} className="opacity-40" />
+                                <Lock size={8} className="absolute -top-1 -right-1 text-destructive/70" />
+                              </div>
+                              {!isSidebarCollapsed && <span className="truncate">{item.label}</span>}
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <NavLink
+                            key={item.path}
+                            to={item.path}
+                            title={isSidebarCollapsed ? item.label : undefined}
+                            className={cn(
+                              "relative flex items-center rounded-lg text-[11px] font-medium transition-all duration-150 group",
+                              isSidebarCollapsed ? "justify-center py-2.5 px-2" : "px-3 py-2 gap-2.5",
+                              isActive
+                                ? "bg-primary/10 text-primary"
+                                : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                            )}
+                          >
+                            {isActive && (
+                              <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-primary" />
+                            )}
+                            <Icon size={16} className={cn("shrink-0 transition-transform", isActive && "scale-110")} />
+                            {!isSidebarCollapsed && (
+                              <span className={cn("truncate", isActive && "font-semibold")}>{item.label}</span>
+                            )}
+                          </NavLink>
+                        );
+                      })}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             );
           })}
@@ -318,7 +410,9 @@ export default function Layout({ children }: LayoutProps) {
                 {navGroups.flatMap(g => g.items).find(item => item.path === location.pathname)?.label || 'Dashboard'}
               </h1>
               <p className="text-[10px] text-muted-foreground/60 mt-0.5 hidden sm:block">
-                {navGroups.find(g => g.items.some(i => i.path === location.pathname))?.label || 'Core'}
+                {navGroups.find(g => g.items.some(i => i.path === location.pathname))?.label
+                  ? `${navGroups.find(g => g.items.some(i => i.path === location.pathname))!.emoji} ${navGroups.find(g => g.items.some(i => i.path === location.pathname))!.label}`
+                  : '🏠 Core'}
               </p>
             </div>
           </div>

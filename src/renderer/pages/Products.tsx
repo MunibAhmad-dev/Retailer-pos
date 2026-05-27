@@ -15,6 +15,7 @@ import { Badge } from '../components/ui/badge';
 import { cn } from '../lib/utils';
 import { useNotifications } from '../components/NotificationProvider';
 import { PRODUCT_TYPES, PRODUCT_SCHEMAS } from '../lib/productSchemas';
+import { useModules } from '../contexts/ModulesContext';
 
 interface Product {
   id?: number;
@@ -28,6 +29,13 @@ interface Product {
   product_type?: string;
   vendor_id?: number;
   metadata?: any;
+  is_bakery?: number;
+  production_date?: string;
+  expiry_date?: string;
+  weight_value?: number;
+  unit_type?: string;
+  price_per_kg?: number;
+  auto_price_by_weight?: number;
 }
 
 interface ImportRow {
@@ -45,7 +53,9 @@ interface ImportRow {
 
 const empty: Product = {
   name: '', price: 0, purchase_price: 0, stock: 0,
-  category: '', barcode: '', unit: '', product_type: 'general', metadata: {}
+  category: '', barcode: '', unit: '', product_type: 'general', metadata: {},
+  is_bakery: 0, production_date: '', expiry_date: '',
+  weight_value: undefined, unit_type: 'piece', price_per_kg: undefined, auto_price_by_weight: 0,
 };
 
 const fmtPKR = (n: number) => 'PKR ' + Math.round(n ?? 0).toLocaleString('en-PK');
@@ -74,6 +84,7 @@ export default function Products() {
   const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [displayCount, setDisplayCount] = useState(20);
   const { addNotification } = useNotifications();
+  const { modules } = useModules();
 
   // Excel Import State
   const [showImportDialog, setShowImportDialog] = useState(false);
@@ -152,6 +163,14 @@ export default function Products() {
         unit: (current.unit || '').trim(),
         product_type: current.product_type || 'general',
         metadata: current.metadata || {},
+        // Bakery fields
+        is_bakery: current.is_bakery || 0,
+        production_date: current.production_date || null,
+        expiry_date: current.expiry_date || null,
+        weight_value: current.weight_value ?? null,
+        unit_type: current.unit_type || 'piece',
+        price_per_kg: current.price_per_kg ?? null,
+        auto_price_by_weight: current.auto_price_by_weight || 0,
       };
       const res = isEditing && current.id
         ? await window.api.updateProduct(current.id, productData)
@@ -1156,6 +1175,148 @@ export default function Products() {
                     )}
                   </div>
                 ))}
+
+                {/* ── Bakery Module Section ── */}
+                {modules.bakery && (
+                  <div className="space-y-3 pt-2 border-t border-orange-500/20">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-semibold text-orange-600 uppercase tracking-wider flex items-center gap-1.5">
+                        🧁 Bakery Details
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCurrent(p => ({ ...p, is_bakery: p.is_bakery ? 0 : 1 }))}
+                        className={cn(
+                          'flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border transition-all',
+                          current.is_bakery
+                            ? 'bg-orange-500/10 border-orange-500/40 text-orange-600'
+                            : 'bg-muted/30 border-border/40 text-muted-foreground hover:bg-muted'
+                        )}
+                      >
+                        <span className={cn('w-8 h-4 rounded-full relative transition-colors inline-block', current.is_bakery ? 'bg-orange-500' : 'bg-muted-foreground/30')}>
+                          <span className={cn('absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all', current.is_bakery ? 'right-0.5' : 'left-0.5')} />
+                        </span>
+                        Bakery Product
+                      </button>
+                    </div>
+
+                    {current.is_bakery ? (
+                      <div className="space-y-3 bg-orange-500/5 border border-orange-500/15 rounded-xl p-3">
+                        {/* Production & Expiry Dates */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-muted-foreground">Production Date</label>
+                            <Input
+                              type="date"
+                              value={current.production_date || ''}
+                              onChange={e => setCurrent(p => ({ ...p, production_date: e.target.value }))}
+                              disabled={isSaving}
+                              className="h-9 text-sm"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-muted-foreground">Expiry Date</label>
+                            <Input
+                              type="date"
+                              value={current.expiry_date || ''}
+                              onChange={e => setCurrent(p => ({ ...p, expiry_date: e.target.value }))}
+                              disabled={isSaving}
+                              className="h-9 text-sm"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Weight & Unit Type */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-muted-foreground">Weight Value</label>
+                            <Input
+                              type="number" min="0" step="0.001"
+                              value={current.weight_value ?? ''}
+                              onChange={e => {
+                                const w = parseFloat(e.target.value) || undefined;
+                                setCurrent(p => ({
+                                  ...p,
+                                  weight_value: w,
+                                  price: (p.auto_price_by_weight && p.price_per_kg && w)
+                                    ? Math.round(p.price_per_kg * w)
+                                    : p.price,
+                                }));
+                              }}
+                              placeholder="e.g. 0.5"
+                              disabled={isSaving}
+                              className="h-9 text-sm"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-muted-foreground">Unit Type</label>
+                            <select
+                              className="w-full h-9 px-3 py-2 text-sm rounded-md border bg-background"
+                              value={current.unit_type || 'piece'}
+                              onChange={e => setCurrent(p => ({ ...p, unit_type: e.target.value }))}
+                              disabled={isSaving}
+                            >
+                              <option value="kg">kg</option>
+                              <option value="gram">gram</option>
+                              <option value="piece">piece</option>
+                              <option value="tray">tray</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Auto-Price by Weight toggle */}
+                        <div className="flex items-center justify-between bg-card rounded-lg border border-border/50 p-2.5">
+                          <div>
+                            <p className="text-xs font-semibold">Auto-Price by Weight</p>
+                            <p className="text-[10px] text-muted-foreground">Calculate price = weight × price per kg</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setCurrent(p => ({ ...p, auto_price_by_weight: p.auto_price_by_weight ? 0 : 1 }))}
+                            className={cn('w-10 h-5 rounded-full relative transition-colors shrink-0', current.auto_price_by_weight ? 'bg-orange-500' : 'bg-muted-foreground/30')}
+                          >
+                            <span className={cn('absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-all', current.auto_price_by_weight ? 'right-0.5' : 'left-0.5')} />
+                          </button>
+                        </div>
+
+                        {/* Price per kg (conditional) */}
+                        {!!current.auto_price_by_weight && (
+                          <div className="space-y-1.5">
+                            <label className="text-xs font-semibold text-muted-foreground">Price per kg (PKR)</label>
+                            <div className="relative">
+                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-semibold">PKR</span>
+                              <Input
+                                type="number" min="0" step="1"
+                                value={current.price_per_kg ?? ''}
+                                onChange={e => {
+                                  const ppk = parseFloat(e.target.value) || 0;
+                                  const w = current.weight_value || 0;
+                                  setCurrent(p => ({
+                                    ...p,
+                                    price_per_kg: ppk,
+                                    price: (w > 0) ? Math.round(ppk * w) : p.price,
+                                  }));
+                                }}
+                                placeholder="0"
+                                className="pl-11 h-9 text-sm"
+                                disabled={isSaving}
+                              />
+                            </div>
+                            {(current.price_per_kg ?? 0) > 0 && (current.weight_value ?? 0) > 0 && (
+                              <p className="text-[11px] text-orange-600 font-medium">
+                                Calculated price: PKR {Math.round((current.price_per_kg ?? 0) * (current.weight_value ?? 0)).toLocaleString('en-PK')}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-muted-foreground/60 italic">
+                        Enable to add expiry dates, production date, weight info & auto-pricing.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="p-5 border-t bg-muted/10 flex gap-3">

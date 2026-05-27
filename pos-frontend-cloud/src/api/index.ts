@@ -234,6 +234,15 @@ export interface AnalyticsData {
     total_revenue: number;
     total_vendors: number;
   };
+  // New chart data
+  profitLossData: Array<{ month: string; revenue: number; expenses: number; profit: number }>;
+  registrationsTrend: Array<{ month: string; newStores: number; total: number }>;
+  accountStats: {
+    typeDist: Array<{ account_type: string; count: number; total_balance: number }>;
+    txnVolume: Array<{ txn_type: string; count: number; total_amount: number }>;
+    totalBalance: number;
+    totalTxns: number;
+  };
 }
 
 export const analyticsApi = {

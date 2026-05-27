@@ -656,6 +656,65 @@ function migrate(database: Database.Database) {
       database.exec('PRAGMA user_version = 26');
     }
 
+    // Migration 27: Accounts module (cash in hand, bank accounts, cash flow tracking)
+    if (ver < 27) {
+      logger.info('Running migration 27 - Adding accounts module...');
+      try {
+        database.exec(`
+          CREATE TABLE IF NOT EXISTS accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            type TEXT DEFAULT 'cash',
+            opening_balance REAL DEFAULT 0,
+            current_balance REAL DEFAULT 0,
+            bank_name TEXT DEFAULT '',
+            account_number TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            is_default INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+          )
+        `);
+        database.exec(`
+          CREATE TABLE IF NOT EXISTS account_txns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            amount REAL NOT NULL,
+            category TEXT DEFAULT '',
+            note TEXT DEFAULT '',
+            date_created DATETIME DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+          )
+        `);
+        // Create default Cash in Hand account (idempotent)
+        database.prepare(`
+          INSERT OR IGNORE INTO accounts (id, name, type, opening_balance, current_balance, is_default)
+          VALUES (1, 'Cash in Hand', 'cash', 0, 0, 1)
+        `).run();
+      } catch (e: any) { logger.error('Migration 27 error:', e.message); }
+      database.exec('PRAGMA user_version = 27');
+    }
+
+    // Migration 28: Bakery module + module feature flags
+    if (ver < 28) {
+      logger.info('Running migration 28 - Adding bakery module support...');
+      const m28 = [
+        `ALTER TABLE settings ADD COLUMN bakery_module_enabled INTEGER DEFAULT 0`,
+        `ALTER TABLE settings ADD COLUMN accounting_module_enabled INTEGER DEFAULT 0`,
+        `ALTER TABLE products ADD COLUMN is_bakery INTEGER DEFAULT 0`,
+        `ALTER TABLE products ADD COLUMN production_date TEXT DEFAULT NULL`,
+        `ALTER TABLE products ADD COLUMN expiry_date TEXT DEFAULT NULL`,
+        `ALTER TABLE products ADD COLUMN weight_value REAL DEFAULT NULL`,
+        `ALTER TABLE products ADD COLUMN unit_type TEXT DEFAULT 'piece'`,
+        `ALTER TABLE products ADD COLUMN price_per_kg REAL DEFAULT NULL`,
+        `ALTER TABLE products ADD COLUMN auto_price_by_weight INTEGER DEFAULT 0`,
+      ];
+      for (const sql of m28) {
+        try { database.exec(sql); } catch (e) { logger.warn(`Migration 28: ${e}`); }
+      }
+      database.exec('PRAGMA user_version = 28');
+    }
+
     logger.info(`Database migration completed. Current version: ${database.pragma('user_version', { simple: true })}`);
   } catch (error) {
     logger.error('Migration system failed:', error);
@@ -1083,6 +1142,33 @@ function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_purchase_returns_date ON purchase_returns(date_created);
       CREATE INDEX IF NOT EXISTS idx_sale_returns_date ON sale_returns(date_created);
       CREATE INDEX IF NOT EXISTS idx_purchases_date ON purchases(date_created);
+
+      CREATE TABLE IF NOT EXISTS accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        type TEXT DEFAULT 'cash',
+        opening_balance REAL DEFAULT 0,
+        current_balance REAL DEFAULT 0,
+        bank_name TEXT DEFAULT '',
+        account_number TEXT DEFAULT '',
+        notes TEXT DEFAULT '',
+        is_default INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+      );
+
+      CREATE TABLE IF NOT EXISTS account_txns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        account_id INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        amount REAL NOT NULL,
+        category TEXT DEFAULT '',
+        note TEXT DEFAULT '',
+        date_created DATETIME DEFAULT (datetime('now', 'localtime')),
+        FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_account_txns_account ON account_txns(account_id, date_created);
+      CREATE INDEX IF NOT EXISTS idx_account_txns_date ON account_txns(date_created);
     `);
 
     // Run migrations
@@ -1478,8 +1564,10 @@ ipcMain.handle('add-product', async (_, product: { name: string; price: number; 
     if (existing) throw new Error(`Product "${product.name}" already exists`);
 
     const stmt = db.prepare(`
-      INSERT INTO products (name, price, category, purchase_price, stock, barcode, unit, product_type, metadata, created_at, updated_at) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, (datetime('now', 'localtime')), (datetime('now', 'localtime')))
+      INSERT INTO products (name, price, category, purchase_price, stock, barcode, unit, product_type, metadata,
+        is_bakery, production_date, expiry_date, weight_value, unit_type, price_per_kg, auto_price_by_weight,
+        created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (datetime('now', 'localtime')), (datetime('now', 'localtime')))
     `);
     const info = stmt.run(
       product.name.trim(),
@@ -1490,7 +1578,14 @@ ipcMain.handle('add-product', async (_, product: { name: string; price: number; 
       product.barcode?.trim() || '',
       product.unit?.trim() || '',
       (product as any).product_type || 'general',
-      typeof (product as any).metadata === 'object' ? JSON.stringify((product as any).metadata) : ((product as any).metadata || '{}')
+      typeof (product as any).metadata === 'object' ? JSON.stringify((product as any).metadata) : ((product as any).metadata || '{}'),
+      (product as any).is_bakery ? 1 : 0,
+      (product as any).production_date || null,
+      (product as any).expiry_date || null,
+      (product as any).weight_value != null ? Number((product as any).weight_value) : null,
+      (product as any).unit_type || 'piece',
+      (product as any).price_per_kg != null ? Number((product as any).price_per_kg) : null,
+      (product as any).auto_price_by_weight ? 1 : 0,
     );
 
     const newProduct = db.prepare('SELECT * FROM products WHERE id = ?').get(info.lastInsertRowid);
@@ -1524,8 +1619,10 @@ ipcMain.handle('update-product', async (_, id: number, product: { name: string; 
     if (duplicate) throw new Error(`Product "${product.name}" already exists`);
 
     const stmt = db.prepare(`
-      UPDATE products 
-      SET name = ?, price = ?, category = ?, purchase_price = ?, stock = ?, barcode = ?, unit = ?, product_type = ?, metadata = ?, updated_at = (datetime('now', 'localtime')) 
+      UPDATE products
+      SET name = ?, price = ?, category = ?, purchase_price = ?, stock = ?, barcode = ?, unit = ?, product_type = ?, metadata = ?,
+          is_bakery = ?, production_date = ?, expiry_date = ?, weight_value = ?, unit_type = ?, price_per_kg = ?, auto_price_by_weight = ?,
+          updated_at = (datetime('now', 'localtime'))
       WHERE id = ?
     `);
     stmt.run(
@@ -1538,6 +1635,13 @@ ipcMain.handle('update-product', async (_, id: number, product: { name: string; 
       product.unit?.trim() || '',
       (product as any).product_type || 'general',
       typeof (product as any).metadata === 'object' ? JSON.stringify((product as any).metadata) : ((product as any).metadata || '{}'),
+      (product as any).is_bakery ? 1 : 0,
+      (product as any).production_date || null,
+      (product as any).expiry_date || null,
+      (product as any).weight_value != null ? Number((product as any).weight_value) : null,
+      (product as any).unit_type || 'piece',
+      (product as any).price_per_kg != null ? Number((product as any).price_per_kg) : null,
+      (product as any).auto_price_by_weight ? 1 : 0,
       id
     );
 
@@ -1611,7 +1715,9 @@ ipcMain.handle('get-settings', async () => {
           store_phone = COALESCE(store_phone, ''),
           store_address = COALESCE(store_address, ''),
           invoice_style = COALESCE(NULLIF(invoice_style, ''), 'thermal'),
-          invoice_notes = COALESCE(invoice_notes, '')
+          invoice_notes = COALESCE(invoice_notes, ''),
+          bakery_module_enabled    = COALESCE(bakery_module_enabled, 0),
+          accounting_module_enabled = COALESCE(accounting_module_enabled, 0)
       WHERE id = 1
     `).run();
     const settings = db.prepare('SELECT * FROM settings WHERE id = 1').get();
@@ -1687,6 +1793,19 @@ ipcMain.handle('update-settings', async (_, settings: any) => {
       settings.invoice_style ?? existing?.invoice_style ?? 'thermal',
       settings.invoice_notes ?? existing?.invoice_notes ?? ''
     );
+
+    // Save module flags separately (optional booleans, not in the main settings form)
+    if (settings.bakery_module_enabled !== undefined || settings.accounting_module_enabled !== undefined) {
+      db.prepare(`
+        UPDATE settings
+        SET bakery_module_enabled    = COALESCE(?, bakery_module_enabled),
+            accounting_module_enabled = COALESCE(?, accounting_module_enabled)
+        WHERE id = 1
+      `).run(
+        settings.bakery_module_enabled !== undefined ? (settings.bakery_module_enabled ? 1 : 0) : null,
+        settings.accounting_module_enabled !== undefined ? (settings.accounting_module_enabled ? 1 : 0) : null,
+      );
+    }
 
     // Username is intentionally immutable from settings screen.
     if (!existing?.owner_username) {
@@ -1884,6 +2003,14 @@ ipcMain.handle('full-resync', async () => {
     const expenses = db.prepare('SELECT * FROM expenses').all();
     for (const row of expenses) enqueue('expense', 'create', row);
 
+    // Accounts
+    const accountsList = db.prepare('SELECT * FROM accounts').all();
+    for (const row of accountsList) enqueue('account', 'create', row);
+
+    // Account transactions
+    const accountTxnsList = db.prepare('SELECT * FROM account_txns').all();
+    for (const row of accountTxnsList) enqueue('account_txn', 'create', row);
+
     // Sales with sale_items
     const sales = db.prepare(`
       SELECT s.*, GROUP_CONCAT(si.product_name || ' (x' || si.quantity || ')') AS items_summary,
@@ -1921,6 +2048,7 @@ ipcMain.handle('create-sale', async (_, data: {
   amount_paid?: number;
   notes?: string;
   register_id?: number;
+  account_id?: number;
 }) => {
   try {
     if (!db) throw new Error('Database not initialized');
@@ -1973,6 +2101,19 @@ ipcMain.handle('create-sale', async (_, data: {
           db!.prepare("INSERT INTO customer_payments (customer_id, amount, notes, sale_id, date_added) VALUES (?, ?, ?, ?, datetime('now', 'localtime'))").run(
             data.customer_id, data.amount_paid, `Payment for Sale #${saleId}`, saleId
           );
+        }
+
+        // ── Account cash-flow recording ──
+        if (data.account_id && data.amount_paid && data.amount_paid > 0 && data.payment_method !== 'credit') {
+          db!.prepare(`
+            INSERT INTO account_txns (account_id, type, amount, category, note, date_created)
+            VALUES (?, 'in', ?, 'sale', ?, datetime('now', 'localtime'))
+          `).run(
+            data.account_id,
+            data.amount_paid,
+            `Sale payment received — Sale #${saleId}`
+          );
+          recomputeAccountBalance(db!, data.account_id);
         }
 
         // Insert sale items
@@ -2438,12 +2579,133 @@ ipcMain.handle('get-dashboard-stats', async (_, args?: { startDate?: string; end
         GROUP BY date(date_created)
         ORDER BY date ASC
       `).all(),
+      // ── Multi-level P&L trend (last 30 days) ─────────────────────────────
+      plTrend: (() => {
+        const revCogs = (db!.prepare(`
+          SELECT
+            date(s.date_created) as day,
+            COALESCE(SUM(CAST(s.total AS REAL)), 0) as revenue,
+            COALESCE(SUM(
+              si.quantity * COALESCE(
+                NULLIF(CAST(si.purchase_price AS REAL), 0),
+                NULLIF(CAST(p.purchase_price  AS REAL), 0), 0)
+            ), 0) as cogs
+          FROM sales s
+          LEFT JOIN sale_items si ON si.sale_id = s.id
+          LEFT JOIN products p ON (
+            p.id = si.product_id OR
+            (si.product_id IS NULL AND p.name = si.product_name)
+          )
+          WHERE LOWER(COALESCE(s.status, '')) IN ('completed', 'paid', 'partial')
+            AND s.date_created >= date('now', '-30 days')
+          GROUP BY day ORDER BY day
+        `).all()) as Array<{ day: string; revenue: number; cogs: number }>;
+
+        const expRows = (db!.prepare(`
+          SELECT date(date_added) as day,
+                 COALESCE(SUM(CAST(amount AS REAL)), 0) as expenses
+          FROM expenses
+          WHERE date_added >= date('now', '-30 days')
+          GROUP BY day ORDER BY day
+        `).all()) as Array<{ day: string; expenses: number }>;
+
+        const expMap = new Map(expRows.map(e => [e.day, Number(e.expenses)]));
+
+        return revCogs.map(d => {
+          const expenses    = expMap.get(d.day) ?? 0;
+          const revenue     = Math.round(Number(d.revenue));
+          const cogs        = Math.round(Number(d.cogs));
+          const grossProfit = revenue - cogs;
+          const netProfit   = grossProfit - Math.round(expenses);
+          return { day: d.day, revenue, cogs, expenses: Math.round(expenses), grossProfit, netProfit };
+        });
+      })(),
     };
 
     logger.debug('Dashboard stats retrieved');
     return { success: true, data: stats };
   } catch (error: any) {
     logger.error('Failed to get dashboard stats:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-bakery-dashboard', async () => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+
+    const today     = new Date().toISOString().slice(0, 10);
+    const in7Days   = new Date(Date.now() +  7 * 86_400_000).toISOString().slice(0, 10);
+    const in30Days  = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+
+    const expiredProducts = db.prepare(`
+      SELECT id, name, category, stock, unit_type, weight_value, expiry_date, production_date
+      FROM products WHERE is_bakery = 1 AND expiry_date IS NOT NULL AND expiry_date < ?
+      ORDER BY expiry_date ASC
+    `).all(today);
+
+    const expiringToday = db.prepare(`
+      SELECT id, name, category, stock, unit_type, weight_value, expiry_date, production_date
+      FROM products WHERE is_bakery = 1 AND expiry_date = ?
+      ORDER BY name ASC
+    `).all(today);
+
+    const expiringSoon = db.prepare(`
+      SELECT id, name, category, stock, unit_type, weight_value, expiry_date, production_date,
+             CAST(julianday(expiry_date) - julianday('now') AS INTEGER) as days_left
+      FROM products WHERE is_bakery = 1 AND expiry_date > ? AND expiry_date <= ?
+      ORDER BY expiry_date ASC
+    `).all(today, in7Days);
+
+    const expiringThisMonth = db.prepare(`
+      SELECT id, name, category, stock, unit_type, weight_value, expiry_date, production_date,
+             CAST(julianday(expiry_date) - julianday('now') AS INTEGER) as days_left
+      FROM products WHERE is_bakery = 1 AND expiry_date > ? AND expiry_date <= ?
+      ORDER BY expiry_date ASC
+    `).all(in7Days, in30Days);
+
+    const allBakeryProducts = db.prepare(`
+      SELECT id, name, category, price, purchase_price, stock, unit_type,
+             weight_value, price_per_kg, auto_price_by_weight, expiry_date, production_date
+      FROM products WHERE is_bakery = 1 ORDER BY name ASC
+    `).all();
+
+    const weightSalesSummary = db.prepare(`
+      SELECT
+        si.product_name as name, p.unit_type,
+        COALESCE(SUM(si.quantity), 0) as total_qty,
+        COALESCE(SUM(si.quantity * si.price), 0) as total_revenue,
+        COALESCE(SUM(si.quantity * (si.price - COALESCE(NULLIF(CAST(si.purchase_price AS REAL),0),
+          NULLIF(CAST(p.purchase_price AS REAL),0), 0))), 0) as total_profit
+      FROM sale_items si
+      JOIN products p ON (p.id = si.product_id OR (si.product_id IS NULL AND p.name = si.product_name))
+      JOIN sales s ON s.id = si.sale_id
+      WHERE p.is_bakery = 1
+        AND LOWER(COALESCE(s.status,'')) IN ('completed','paid','partial')
+        AND date(s.date_created) >= date('now', '-30 days')
+      GROUP BY si.product_name, p.unit_type
+      ORDER BY total_revenue DESC
+    `).all();
+
+    return {
+      success: true,
+      data: {
+        expiredProducts,
+        expiringToday,
+        expiringSoon,
+        expiringThisMonth,
+        allBakeryProducts,
+        weightSalesSummary,
+        summary: {
+          totalBakeryProducts: allBakeryProducts.length,
+          totalExpired:        expiredProducts.length,
+          totalExpiringToday:  expiringToday.length,
+          totalExpiringSoon:   expiringSoon.length,
+        },
+      },
+    };
+  } catch (error: any) {
+    logger.error('Failed to get bakery dashboard:', error);
     return { success: false, error: error.message };
   }
 });
@@ -2732,12 +2994,21 @@ async function loadHtmlWindow(html: string, width: number): Promise<BrowserWindo
   const tmpFile = path.join(app.getPath('temp'), `receipt_${Date.now()}.html`);
   fs.writeFileSync(tmpFile, html, 'utf-8');
 
+  // Position the window off the visible area so it can be "shown" (required for
+  // the system print dialog to surface) without the user seeing the raw HTML.
   const win = new BrowserWindow({
     show: false,
+    x: -99999,
+    y: -99999,
     width,
-    height: 800,
+    height: 1200,
     useContentSize: true,
-    webPreferences: { nodeIntegration: false, contextIsolation: true },
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      backgroundThrottling: false,
+    },
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -2748,7 +3019,7 @@ async function loadHtmlWindow(html: string, width: number): Promise<BrowserWindo
     win.loadFile(tmpFile);
   });
 
-  await new Promise(resolve => setTimeout(resolve, 400));
+  await new Promise(resolve => setTimeout(resolve, 800));
   try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
   return win;
 }
@@ -2894,10 +3165,17 @@ ipcMain.handle('print-invoice', async (_, htmlContent: string) => {
       printOptions.margins = { marginType: 'default' };
     }
 
+    // Show the window briefly so the system print dialog surfaces on top of
+    // the main window — without this, on some machines the dialog appears
+    // behind the app or in the background taskbar entry.
+    printWindow.setAlwaysOnTop(true, 'screen-saver');
+    printWindow.show();
+
     return new Promise((resolve) => {
       printWindow.webContents.print(
         printOptions,
         (success, reason) => {
+          printWindow.setAlwaysOnTop(false);
           printWindow.close();
           if (success) {
             logger.info('Invoice printed successfully');
@@ -2925,7 +3203,11 @@ ipcMain.handle('save-invoice-pdf', async (_, htmlContent: string) => {
       throw new Error('PDF payload too large');
     }
     const isStatement = htmlContent.includes('ACCOUNT STATEMENT');
-    const { filePath, canceled } = await dialog.showSaveDialog({
+
+    // Always parent the dialog to mainWindow so it appears on top of the app
+    // and isn't hidden behind it (critical on secondary machines / multi-monitor).
+    const saveDialogTarget = mainWindow ?? undefined;
+    const { filePath, canceled } = await dialog.showSaveDialog(saveDialogTarget as any, {
       title: isStatement ? 'Save Statement as PDF' : 'Save Receipt as PDF',
       defaultPath: `${isStatement ? 'statement' : 'receipt'}-${Date.now()}.pdf`,
       filters: [{ name: 'PDF Files', extensions: ['pdf'] }],
@@ -2965,9 +3247,18 @@ ipcMain.handle('save-invoice-pdf', async (_, htmlContent: string) => {
     const printWindow = await loadHtmlWindow(buildReceiptPdfHtml(htmlContent), winWidth);
 
     let pdfPageSize: any = 'A4';
-    let pdfMargins: any = { marginType: 'none' };
-    if (targetSize === 'thermal') { pdfPageSize = { width: 80000, height: 220000 }; }
-    else if (targetSize === 'a5') { pdfPageSize = 'A5'; pdfMargins = { marginType: 'default' }; }
+    let pdfMargins: any = { marginType: 'default' };
+    if (targetSize === 'thermal') {
+      const contentHeightPx: number = await printWindow.webContents.executeJavaScript(
+        'Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)'
+      );
+      const heightMicrons = Math.max(50000, Math.ceil(contentHeightPx * PX_TO_MICRONS) + 6000);
+      pdfPageSize = { width: 80000, height: heightMicrons };
+      pdfMargins = { marginType: 'none' };
+    } else if (targetSize === 'a5') {
+      pdfPageSize = 'A5';
+      pdfMargins = { marginType: 'default' };
+    }
 
     const pdfBuffer = await printWindow.webContents.printToPDF({
       printBackground: true,
@@ -3217,10 +3508,12 @@ ipcMain.handle('import-data', async (_, data: any) => {
         'products',
         'customers',
         'vendors',
+        'accounts',
         'sales',
         'sale_items',
         'purchases',
         'inventory_batches',
+        'account_txns',
         'customer_payments',
         'vendor_payments',
         'sale_returns',
@@ -3524,7 +3817,7 @@ ipcMain.handle('add-vendor', async (_, vendor: { name: string; phone?: string; a
 });
 
 // ============= PURCHASES / INVENTORY BATCHES =============
-ipcMain.handle('create-purchase', async (_, data: { vendor_id: number; items: any[]; total: number; amount_paid?: number }) => {
+ipcMain.handle('create-purchase', async (_, data: { vendor_id: number; items: any[]; total: number; amount_paid?: number; account_id?: number }) => {
   try {
     if (!db) throw new Error('Database not initialized');
     const transaction = db.transaction(() => {
@@ -3567,6 +3860,19 @@ ipcMain.handle('create-purchase', async (_, data: { vendor_id: number; items: an
           INSERT INTO vendor_payments (vendor_id, amount, notes, purchase_id, date_created)
           VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
         `).run(data.vendor_id, data.amount_paid, `Initial Payment for PO #${purchaseId}`, purchaseId);
+      }
+
+      // ── Account cash-flow recording ──
+      if (data.account_id && data.amount_paid && data.amount_paid > 0) {
+        db!.prepare(`
+          INSERT INTO account_txns (account_id, type, amount, category, note, date_created)
+          VALUES (?, 'out', ?, 'purchase', ?, datetime('now', 'localtime'))
+        `).run(
+          data.account_id,
+          data.amount_paid,
+          `Purchase payment — PO #${purchaseId}`
+        );
+        recomputeAccountBalance(db!, data.account_id);
       }
 
       return purchaseId;
@@ -4059,11 +4365,22 @@ ipcMain.handle('get-expenses', async (_, opts: any = {}) => {
   }
 });
 
-ipcMain.handle('add-expense', async (_, data: { title: string; category?: string; amount: number; notes?: string }) => {
+ipcMain.handle('add-expense', async (_, data: { title: string; category?: string; amount: number; notes?: string; account_id?: number }) => {
   try {
     if (!db) throw new Error('Database not initialized');
     const stmt = db.prepare('INSERT INTO expenses (title, category, amount, date_added, notes) VALUES (?, ?, ?, datetime(\'now\', \'localtime\'), ?)');
     const info = stmt.run(data.title.trim(), data.category || '', data.amount, data.notes || '');
+
+    // If account_id provided, record outgoing transaction
+    if (data.account_id) {
+      const acc = db.prepare('SELECT id FROM accounts WHERE id = ?').get(data.account_id);
+      if (acc) {
+        db.prepare(`INSERT INTO account_txns (account_id, type, amount, category, note, date_created)
+          VALUES (?, 'out', ?, 'expense', ?, datetime('now', 'localtime'))`
+        ).run(data.account_id, data.amount, `Expense: ${data.title.trim()}`);
+        recomputeAccountBalance(db, data.account_id);
+      }
+    }
 
     // Enqueue for cloud sync
     try {
@@ -4087,6 +4404,226 @@ ipcMain.handle('delete-expense', async (_, id: number) => {
       db.prepare(`INSERT INTO cloud_sync_queue (entity_type, operation, payload, status) VALUES ('expense', 'delete', ?, 'pending')`).run(JSON.stringify({ id }));
     } catch (syncErr: any) { logger.warn('Sync enqueue (delete-expense) failed:', syncErr.message); }
 
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+// ============= ACCOUNTS MODULE HANDLERS =============
+
+/** Recompute and persist an account's current_balance from all its txns */
+function recomputeAccountBalance(database: Database.Database, accountId: number) {
+  const result = database.prepare(`
+    SELECT ROUND(a.opening_balance + COALESCE(SUM(
+      CASE WHEN t.type='in' THEN t.amount WHEN t.type='out' THEN -t.amount ELSE 0 END
+    ), 0), 2) as bal
+    FROM accounts a
+    LEFT JOIN account_txns t ON t.account_id = a.id
+    WHERE a.id = ?
+    GROUP BY a.id
+  `).get(accountId) as any;
+  database.prepare('UPDATE accounts SET current_balance = ? WHERE id = ?')
+    .run(result?.bal ?? 0, accountId);
+}
+
+ipcMain.handle('get-accounts', async () => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+
+    // Ensure default Cash in Hand account exists
+    const existing = db.prepare('SELECT id FROM accounts WHERE id = 1').get();
+    if (!existing) {
+      db.prepare(`INSERT OR IGNORE INTO accounts (id, name, type, opening_balance, current_balance, is_default)
+        VALUES (1, 'Cash in Hand', 'cash', 0, 0, 1)`).run();
+    }
+
+    const accounts = db.prepare(`
+      SELECT a.id, a.name, a.type, a.opening_balance, a.bank_name, a.account_number,
+             a.notes, a.is_default, a.created_at,
+             ROUND(a.opening_balance + COALESCE(SUM(
+               CASE WHEN t.type='in' THEN t.amount WHEN t.type='out' THEN -t.amount ELSE 0 END
+             ), 0), 2) as current_balance,
+             ROUND(COALESCE(SUM(CASE WHEN t.type='in' THEN t.amount ELSE 0 END), 0), 2) as total_in,
+             ROUND(COALESCE(SUM(CASE WHEN t.type='out' THEN t.amount ELSE 0 END), 0), 2) as total_out
+      FROM accounts a
+      LEFT JOIN account_txns t ON t.account_id = a.id
+      GROUP BY a.id
+      ORDER BY a.is_default DESC, a.type ASC, a.name ASC
+    `).all() as any[];
+
+    const chartData = db.prepare(`
+      SELECT
+        date(date_created, 'localtime') as day,
+        ROUND(SUM(CASE WHEN type='in' THEN amount ELSE 0 END), 2) as total_in,
+        ROUND(SUM(CASE WHEN type='out' THEN amount ELSE 0 END), 2) as total_out
+      FROM account_txns
+      WHERE date_created >= datetime('now', '-30 days', 'localtime')
+      GROUP BY date(date_created, 'localtime')
+      ORDER BY day ASC
+    `).all() as any[];
+
+    return { success: true, data: { accounts, chartData } };
+  } catch (error: any) {
+    logger.error('get-accounts failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('add-account', async (_, data: {
+  name: string; type?: string; opening_balance?: number;
+  bank_name?: string; account_number?: string; notes?: string;
+}) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    if (!data.name?.trim()) throw new Error('Account name is required');
+    const openBal = Number(data.opening_balance || 0);
+
+    const info = db.prepare(`
+      INSERT INTO accounts (name, type, opening_balance, current_balance, bank_name, account_number, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      data.name.trim(), data.type || 'cash', openBal, openBal,
+      data.bank_name || '', data.account_number || '', data.notes || ''
+    );
+
+    const accountId = info.lastInsertRowid as number;
+
+    if (openBal > 0) {
+      db.prepare(`INSERT INTO account_txns (account_id, type, amount, category, note, date_created)
+        VALUES (?, 'in', ?, 'opening', 'Opening Balance', datetime('now', 'localtime'))`).run(accountId, openBal);
+    }
+
+    const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(accountId);
+    return { success: true, data: account };
+  } catch (error: any) {
+    logger.error('add-account failed:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('update-account', async (_, id: number, data: {
+  name?: string; bank_name?: string; account_number?: string; notes?: string;
+}) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    db.prepare(`UPDATE accounts SET
+      name = CASE WHEN ? != '' THEN ? ELSE name END,
+      bank_name = COALESCE(?, bank_name),
+      account_number = COALESCE(?, account_number),
+      notes = COALESCE(?, notes)
+      WHERE id = ?
+    `).run(data.name || '', data.name || null, data.bank_name ?? null, data.account_number ?? null, data.notes ?? null, id);
+    const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(id);
+    return { success: true, data: account };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('delete-account', async (_, id: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const acc = db.prepare('SELECT * FROM accounts WHERE id = ?').get(id) as any;
+    if (!acc) throw new Error('Account not found');
+    if (acc.is_default) throw new Error('Cannot delete the default Cash in Hand account');
+    db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-account-txns', async (_, opts: {
+  account_id?: number; date_from?: string; date_to?: string;
+  limit?: number; offset?: number;
+} = {}) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const limit = opts.limit ?? 150;
+    const offset = opts.offset ?? 0;
+
+    let where = '1=1';
+    const params: any[] = [];
+
+    if (opts.account_id) { where += ' AND t.account_id = ?'; params.push(opts.account_id); }
+    if (opts.date_from)  { where += ' AND date(t.date_created) >= ?'; params.push(opts.date_from); }
+    if (opts.date_to)    { where += ' AND date(t.date_created) <= ?'; params.push(opts.date_to); }
+
+    const txns = db.prepare(`
+      SELECT t.*, a.name as account_name, a.type as account_type
+      FROM account_txns t
+      JOIN accounts a ON a.id = t.account_id
+      WHERE ${where}
+      ORDER BY t.date_created DESC, t.id DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset) as any[];
+
+    const countRow = db.prepare(
+      `SELECT COUNT(*) as total FROM account_txns t WHERE ${where}`
+    ).get(...params) as any;
+
+    return { success: true, data: txns, total: countRow?.total ?? 0 };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('add-account-txn', async (_, data: {
+  account_id: number; type: 'in' | 'out'; amount: number;
+  category?: string; note?: string; date_created?: string;
+}) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    if (!data.account_id) throw new Error('Account is required');
+    const amount = Number(data.amount);
+    if (isNaN(amount) || amount <= 0) throw new Error('Amount must be a positive number');
+    if (data.type !== 'in' && data.type !== 'out') throw new Error('Type must be "in" or "out"');
+
+    const acc = db.prepare('SELECT id FROM accounts WHERE id = ?').get(data.account_id);
+    if (!acc) throw new Error('Account not found');
+
+    db.prepare(`INSERT INTO account_txns (account_id, type, amount, category, note, date_created)
+      VALUES (?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), datetime('now', 'localtime')))`
+    ).run(data.account_id, data.type, amount, data.category || 'manual', data.note || '', data.date_created || '');
+
+    recomputeAccountBalance(db, data.account_id);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('delete-account-txn', async (_, id: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const txn = db.prepare('SELECT account_id FROM account_txns WHERE id = ?').get(id) as any;
+    if (!txn) throw new Error('Transaction not found');
+    db.prepare('DELETE FROM account_txns WHERE id = ?').run(id);
+    recomputeAccountBalance(db, txn.account_id);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('transfer-between-accounts', async (_, data: {
+  from_account_id: number; to_account_id: number; amount: number; note?: string;
+}) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const amount = Number(data.amount);
+    if (isNaN(amount) || amount <= 0) throw new Error('Amount must be positive');
+    if (data.from_account_id === data.to_account_id) throw new Error('Cannot transfer to the same account');
+
+    const tx = db.transaction(() => {
+      const note = data.note || 'Internal Transfer';
+      db!.prepare(`INSERT INTO account_txns (account_id, type, amount, category, note, date_created) VALUES (?, 'out', ?, 'transfer', ?, datetime('now', 'localtime'))`).run(data.from_account_id, amount, note);
+      db!.prepare(`INSERT INTO account_txns (account_id, type, amount, category, note, date_created) VALUES (?, 'in', ?, 'transfer', ?, datetime('now', 'localtime'))`).run(data.to_account_id, amount, note);
+      recomputeAccountBalance(db!, data.from_account_id);
+      recomputeAccountBalance(db!, data.to_account_id);
+    });
+    tx();
     return { success: true };
   } catch (error: any) {
     return { success: false, error: error.message };

@@ -57,6 +57,7 @@ const api = {
 
   // Dashboard
   getDashboardStats: (args?: any) => ipcRenderer.invoke('get-dashboard-stats', args),
+  getBakeryDashboard: () => ipcRenderer.invoke('get-bakery-dashboard'),
 
   // Reports
   getReport: (args: any) => ipcRenderer.invoke('get-report', args),
@@ -138,6 +139,16 @@ const api = {
   getStockAdjustments: (productId?: number) => ipcRenderer.invoke('get-stock-adjustments', productId),
   cancelSale: (id: number) => ipcRenderer.invoke('cancel-sale', id),
   cancelPurchase: (id: number) => ipcRenderer.invoke('cancel-purchase', id),
+
+  // Accounts module
+  getAccounts: () => ipcRenderer.invoke('get-accounts'),
+  addAccount: (data: any) => ipcRenderer.invoke('add-account', data),
+  updateAccount: (id: number, data: any) => ipcRenderer.invoke('update-account', id, data),
+  deleteAccount: (id: number) => ipcRenderer.invoke('delete-account', id),
+  getAccountTxns: (opts?: any) => ipcRenderer.invoke('get-account-txns', opts),
+  addAccountTxn: (data: any) => ipcRenderer.invoke('add-account-txn', data),
+  deleteAccountTxn: (id: number) => ipcRenderer.invoke('delete-account-txn', id),
+  transferBetweenAccounts: (data: any) => ipcRenderer.invoke('transfer-between-accounts', data),
 
   // Cloud sync queue
   getPendingSyncItems: (limit?: number) => ipcRenderer.invoke('get-pending-sync-items', limit ?? 20),

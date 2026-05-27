@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   DollarSign, Plus, Trash2, FileText, Activity,
-  X, TrendingDown, Layers, BarChart2, CalendarDays,
+  X, TrendingDown, Layers, BarChart2, CalendarDays, Banknote,
 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -10,6 +10,7 @@ import { useNotifications } from '../components/NotificationProvider';
 import { usePagination } from '../hooks/usePagination';
 import { LoadMoreButton } from '../components/Pagination';
 import { cn } from '../lib/utils';
+import { useModules } from '../contexts/ModulesContext';
 
 interface Expense {
   id: number;
@@ -77,11 +78,26 @@ export default function Expenses() {
   const [toDate, setToDate] = useState('');
 
   const { addNotification } = useNotifications();
+  const { modules } = useModules();
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<number | ''>('');
 
   useEffect(() => {
     load();
     checkRegister();
   }, [dateFilter, fromDate, toDate]);
+
+  // Reload (or clear) accounts whenever the accounting module is toggled
+  useEffect(() => {
+    if (modules.accounting) {
+      window.api.getAccounts?.().then((res: any) => {
+        if (res?.success && res.data?.accounts) setAccounts(res.data.accounts);
+      }).catch(() => {});
+    } else {
+      setAccounts([]);
+      setSelectedAccountId('');
+    }
+  }, [modules.accounting]);
 
   const checkRegister = async () => {
     try {
@@ -120,12 +136,20 @@ export default function Expenses() {
         amount: amt,
         notes,
         register_id: currentRegister?.id || null,
+        account_id: selectedAccountId ? Number(selectedAccountId) : undefined,
       });
       if (res.success) {
         addNotification('Expense Added', 'Expense record was saved.', 'success');
         setShowAdd(false);
         setTitle(''); setCategory(''); setAmount(''); setNotes('');
+        setSelectedAccountId('');
         load();
+        // Refresh account balances so the next expense shows current balance
+        if (modules.accounting) {
+          window.api.getAccounts?.().then((r: any) => {
+            if (r?.success && r.data?.accounts) setAccounts(r.data.accounts);
+          }).catch(() => {});
+        }
       }
     } catch {
       addNotification('Error', 'Failed to add expense.', 'error');
@@ -401,6 +425,77 @@ export default function Expenses() {
                       />
                     </div>
                   </div>
+
+                  {modules.accounting && accounts.length > 0 && (
+                    <div className="space-y-2">
+                      <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                        <Banknote size={12} className="text-rose-500" />
+                        Pay From Account
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {accounts.map((acc: any) => (
+                          <button
+                            key={acc.id}
+                            type="button"
+                            onClick={() => setSelectedAccountId(selectedAccountId === acc.id ? '' : acc.id)}
+                            className={cn(
+                              'flex items-center gap-2 px-3 py-2.5 rounded-xl border text-left transition-all',
+                              selectedAccountId === acc.id
+                                ? 'bg-rose-500/10 border-rose-500/40 text-rose-700 dark:text-rose-400'
+                                : 'bg-muted/30 border-border/50 text-muted-foreground hover:border-border hover:bg-muted/50'
+                            )}
+                          >
+                            <span className={cn('w-2.5 h-2.5 rounded-full flex-shrink-0', acc.type === 'cash' ? 'bg-emerald-500' : 'bg-blue-500')} />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-semibold truncate">{acc.name}</p>
+                              <p className="text-[10px] text-muted-foreground truncate">PKR {Math.round(Number(acc.current_balance) || 0).toLocaleString('en-PK')}</p>
+                            </div>
+                            {selectedAccountId === acc.id && <span className="text-rose-500 text-sm flex-shrink-0">✓</span>}
+                          </button>
+                        ))}
+                      </div>
+                      {!selectedAccountId && (
+                        <p className="text-[10px] text-muted-foreground/70 italic">No account selected — expense won't be deducted from balance</p>
+                      )}
+                      {(() => {
+                        if (!selectedAccountId) return null;
+                        const selAcc = accounts.find((a: any) => a.id === selectedAccountId);
+                        const amt = parseFloat(amount) || 0;
+                        if (!selAcc || amt <= 0) return null;
+                        const bal = Number(selAcc.current_balance) || 0;
+                        if (amt <= bal) return (
+                          <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                            Balance after deduction: {fmtPKR(bal - amt)}
+                          </p>
+                        );
+                        const deficit = amt - bal;
+                        return (
+                          <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-3 py-2.5 space-y-1">
+                            <p className="text-[11px] text-red-600 dark:text-red-400 font-semibold flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
+                              Insufficient funds in "{selAcc.name}"
+                            </p>
+                            <div className="grid grid-cols-3 gap-2 text-[10px]">
+                              <div>
+                                <p className="text-muted-foreground/60">Account Balance</p>
+                                <p className="font-bold text-foreground">{fmtPKR(bal)}</p>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground/60">Expense Amount</p>
+                                <p className="font-bold text-red-600">{fmtPKR(amt)}</p>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground/60">Deficit</p>
+                                <p className="font-bold text-red-600">-{fmtPKR(deficit)}</p>
+                              </div>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground/60 italic">Balance will go negative — top up this account first.</p>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
                 </div>
 
                 <div className="px-5 py-4 border-t border-border/60 bg-muted/20 flex justify-end gap-3">

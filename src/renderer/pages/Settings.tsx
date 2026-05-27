@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Activity, AlertCircle, Building2, CheckCircle2, Cloud, CloudOff,
   Database, Download, Eye, EyeOff, FileText, Globe, Image as ImageIcon,
-  KeyRound, Loader2, Lock, Mail, MapPin, Phone, Printer,
+  KeyRound, Loader2, Lock, Mail, MapPin, Phone, Printer, Puzzle,
   RefreshCw, Save, ShieldCheck, Store, Trash2, Upload, User,
   Zap, Upload as UploadIcon, Languages, HardDrive, Settings2, GitBranch,
 } from 'lucide-react';
@@ -14,6 +14,7 @@ import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { useNotifications } from '../components/NotificationProvider';
 import { useLanguage } from '../components/LanguageProvider';
+import { useModules } from '../contexts/ModulesContext';
 import { cn } from '../lib/utils';
 import * as XLSX from 'xlsx';
 import { subService } from '../services/subscription';
@@ -38,6 +39,8 @@ interface SettingsData {
   cloud_connected: boolean; cloud_last_sync: string | null;
   license_mode: 'offline' | 'online'; approval_status: 'approved' | 'pending' | 'blocked';
   activation_key: string; setup_completed: boolean;
+  bakery_module_enabled: boolean;
+  accounting_module_enabled: boolean;
 }
 
 const defaultSettings: SettingsData = {
@@ -52,6 +55,8 @@ const defaultSettings: SettingsData = {
   cloud_connected: false, cloud_last_sync: null,
   license_mode: 'offline', approval_status: 'approved',
   activation_key: '', setup_completed: true,
+  bakery_module_enabled: false,
+  accounting_module_enabled: false,
 };
 
 const BACKUPS_PAGE_SIZE = 15;
@@ -76,7 +81,7 @@ function formatSize(bytes: number) {
 
 // ─── Tabs config ──────────────────────────────────────────────────────────────
 
-type Tab = 'general' | 'receipt' | 'security' | 'backup' | 'license';
+type Tab = 'general' | 'receipt' | 'security' | 'backup' | 'license' | 'modules';
 
 const TABS: { id: Tab; label: string; icon: React.ElementType; desc: string }[] = [
   { id: 'general',  label: 'General',       icon: Building2,   desc: 'Business & branding'  },
@@ -84,6 +89,7 @@ const TABS: { id: Tab; label: string; icon: React.ElementType; desc: string }[] 
   { id: 'security', label: 'Security',       icon: ShieldCheck, desc: 'PIN & thresholds'     },
   { id: 'backup',   label: 'Backup & Data',  icon: Database,    desc: 'Cloud & exports'      },
   { id: 'license',  label: 'License',        icon: KeyRound,    desc: 'Activation & API'     },
+  { id: 'modules',  label: 'Modules',         icon: Puzzle,      desc: 'Optional features'   },
 ];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -164,6 +170,7 @@ export default function Settings() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addNotification } = useNotifications();
   const { language, setLanguage, t } = useLanguage();
+  const { reload: reloadModules } = useModules();
 
   // ── Effects ────────────────────────────────────────────────────────────────
 
@@ -206,6 +213,8 @@ export default function Settings() {
           auto_export_enabled: !!d.auto_export_enabled,
           owner_mobile: d.owner_mobile || d.store_phone || '',
           cloud_connected: !!d.cloud_connected,
+          bakery_module_enabled:    !!d.bakery_module_enabled,
+          accounting_module_enabled: !!d.accounting_module_enabled,
           license_mode: d.license_mode === 'online' ? 'online' : 'offline',
           approval_status: d.approval_status === 'blocked' ? 'blocked' : d.approval_status === 'pending' ? 'pending' : 'approved',
           setup_completed: !!d.setup_completed,
@@ -237,12 +246,15 @@ export default function Settings() {
         owner_mobile: settings.owner_mobile || settings.store_phone,
         setup_completed: true,
         cloud_connected: !!settings.cloud_backend_url && !!settings.cloud_backend_token,
+        bakery_module_enabled:    settings.bakery_module_enabled,
+        accounting_module_enabled: settings.accounting_module_enabled,
       };
       const res = await window.api.updateSettings(payload as any);
       if (res.success) {
         addNotification('Settings Saved', 'Your preferences have been updated.', 'success');
         await loadSettings();
         await loadSyncStatus();
+        await reloadModules();
       } else {
         addNotification('Save Failed', res.error || 'A database error occurred.', 'error');
       }
@@ -1266,6 +1278,121 @@ export default function Settings() {
                   </div>
                 </SectionCard>
               </>
+            )}
+
+            {/* ══ MODULES ════════════════════════════════════════════════════ */}
+            {activeTab === 'modules' && (
+              <div className="space-y-5">
+                {/* Bakery Module */}
+                <div className="rounded-xl border border-border/60 bg-card overflow-hidden">
+                  <div className="h-0.5 w-full" style={{ background: 'linear-gradient(90deg, #f97316, #fb923c)' }} />
+                  <div className="px-5 pt-5 pb-4 border-b border-border/50">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-orange-500/10 border border-orange-500/20 flex items-center justify-center shrink-0">
+                        <span className="text-lg">🥐</span>
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold leading-none">Bakery / Sweets Module</h3>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">Expiry tracking, weight-based pricing, production dates</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="p-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold">Enable Bakery Module</p>
+                        <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+                          Adds bakery product fields (expiry date, weight, unit type, per-kg pricing),
+                          expiry alerts on the dashboard, and weight-based sale calculations.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = !settings.bakery_module_enabled;
+                          setSettings(s => ({ ...s, bakery_module_enabled: next }));
+                        }}
+                        className={cn(
+                          'relative inline-flex h-7 w-12 items-center rounded-full transition-colors duration-200 focus:outline-none shrink-0 ml-4',
+                          settings.bakery_module_enabled ? 'bg-orange-500' : 'bg-muted'
+                        )}
+                      >
+                        <span className={cn(
+                          'inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform duration-200',
+                          settings.bakery_module_enabled ? 'translate-x-6' : 'translate-x-1'
+                        )} />
+                      </button>
+                    </div>
+                    {settings.bakery_module_enabled && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {['Expiry Date Tracking', 'Weight-Based Pricing', 'Production Date', 'Near-Expiry Alerts', 'Unit Types (kg/g/piece/tray)'].map(f => (
+                          <span key={f} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-orange-500/10 border border-orange-500/20 text-orange-700 dark:text-orange-400 text-[11px] font-medium">
+                            ✓ {f}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Accounting Module */}
+                <div className="rounded-xl border border-border/60 bg-card overflow-hidden">
+                  <div className="h-0.5 w-full" style={{ background: 'linear-gradient(90deg, #10b981, #34d399)' }} />
+                  <div className="px-5 pt-5 pb-4 border-b border-border/50">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                        <span className="text-lg">📊</span>
+                      </div>
+                      <div>
+                        <h3 className="text-sm font-bold leading-none">Accounting / Cash Flow Module</h3>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">Full ledger, cash flow, AR/AP, profit reports</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="p-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-semibold">Enable Accounting Module</p>
+                        <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+                          Activates full accounting workflows: customer/vendor ledgers, cash flow tracking,
+                          cash in hand, bank balances, expense management, and profit reports.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSettings(s => ({ ...s, accounting_module_enabled: !s.accounting_module_enabled }))}
+                        className={cn(
+                          'relative inline-flex h-7 w-12 items-center rounded-full transition-colors duration-200 focus:outline-none shrink-0 ml-4',
+                          settings.accounting_module_enabled ? 'bg-emerald-500' : 'bg-muted'
+                        )}
+                      >
+                        <span className={cn(
+                          'inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform duration-200',
+                          settings.accounting_module_enabled ? 'translate-x-6' : 'translate-x-1'
+                        )} />
+                      </button>
+                    </div>
+                    {settings.accounting_module_enabled && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {['Cash Flow Tracking', 'Customer Ledger', 'Supplier Ledger', 'AR / AP Reports', 'Expense Management', 'Profit Analytics', 'Bank Account Tracking'].map(f => (
+                          <span key={f} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-[11px] font-medium">
+                            ✓ {f}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Info card */}
+                <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
+                  <p className="text-xs text-blue-700 dark:text-blue-400 font-semibold mb-1">ℹ Module Architecture</p>
+                  <p className="text-xs text-blue-600/80 dark:text-blue-400/70">
+                    All modules are optional. Disabling a module hides its UI and routes but never deletes any data.
+                    You can re-enable a module at any time to restore full access.
+                  </p>
+                </div>
+              </div>
             )}
 
             {/* ── Save footer ─────────────────────────────────────────────── */}

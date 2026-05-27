@@ -13,8 +13,10 @@ import { useNotifications } from '../components/NotificationProvider';
 import { subService } from '../services/subscription';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, PieChart, Pie, Cell
+  ResponsiveContainer, PieChart, Pie, Cell,
+  ComposedChart, Bar, Line, Legend, BarChart,
 } from 'recharts';
+import { useModules } from '../contexts/ModulesContext';
 
 interface DashboardProps { onLock: () => void; onLockSystem?: () => void; }
 
@@ -71,6 +73,39 @@ const RevTooltip = ({ active, payload, label }: any) => {
   );
 };
 
+/* ── P&L chart tooltip ── */
+const PlTooltip = ({ active, payload, label }: any) => {
+  if (!active || !payload?.length) return null;
+  const d = new Date(label);
+  const rows: { key: string; label: string; color: string }[] = [
+    { key: 'revenue',     label: 'Revenue',      color: '#3b82f6' },
+    { key: 'cogs',        label: 'COGS',          color: '#f97316' },
+    { key: 'expenses',    label: 'Expenses',      color: '#ef4444' },
+    { key: 'grossProfit', label: 'Gross Profit',  color: '#10b981' },
+    { key: 'netProfit',   label: 'Net Profit',    color: '#8b5cf6' },
+  ];
+  const map: Record<string, number> = {};
+  for (const p of payload) map[p.dataKey] = Number(p.value) || 0;
+  return (
+    <div className="bg-card/95 backdrop-blur-xl border border-border/50 rounded-2xl px-3.5 py-3 shadow-2xl min-w-[180px]">
+      <p className="text-[11px] text-muted-foreground mb-2 font-medium">
+        {!isNaN(d.getTime()) ? d.toLocaleDateString('en-PK', { month: 'short', day: 'numeric' }) : label}
+      </p>
+      {rows.map(r => map[r.key] !== undefined && (
+        <div key={r.key} className="flex items-center justify-between gap-4 mb-1">
+          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span className="w-2 h-2 rounded-full" style={{ background: r.color }} />
+            {r.label}
+          </span>
+          <span className={cn('text-[11px] font-bold tabular-nums', map[r.key] < 0 ? 'text-red-500' : '')} style={map[r.key] >= 0 ? { color: r.color } : undefined}>
+            {fmt(map[r.key])}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 /* ── Simple hover tooltip wrapper ── */
 const HoverTip = ({ text, children }: { text: string; children: React.ReactNode }) => (
   <div className="group/tip relative">
@@ -102,6 +137,10 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
   const [now, setNow] = useState(new Date());
   const [ownerName, setOwnerName] = useState('');
   const { addNotification } = useNotifications();
+  const { modules } = useModules();
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [accountTxnChart, setAccountTxnChart] = useState<any[]>([]);
+  const [bakeryData, setBakeryData] = useState<any>(null);
 
   /* Fetch owner name from settings once */
   useEffect(() => {
@@ -111,6 +150,17 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
         setOwnerName(full.split(' ')[0] || 'there');
       }
     }).catch(() => {});
+    // Also load accounts for the cash/bank balance section
+    window.api.getAccounts?.().then((res: any) => {
+      if (res?.success && res.data?.accounts) setAccounts(res.data.accounts);
+      if (res?.success && res.data?.chartData) setAccountTxnChart(res.data.chartData);
+    }).catch(() => {});
+    // Load bakery dashboard data if module is enabled
+    if (modules.bakery && window.api.getBakeryDashboard) {
+      window.api.getBakeryDashboard().then((res: any) => {
+        if (res?.success) setBakeryData(res.data);
+      }).catch(() => {});
+    }
   }, []);
 
   const loadStats = async (isManual = false, overrides?: { s?: string; e?: string; p?: string }) => {
@@ -128,12 +178,19 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
         else if (p === 'year') s = new Date(d.getFullYear(), 0, 1).toISOString();
       }
       const payload = s ? { startDate: s, endDate: e || new Date().toISOString() } : undefined;
-      const res = await window.api.getDashboardStats(payload);
-      if (res?.success && res.data) {
-        setStats(res.data);
+      const [statsRes] = await Promise.all([
+        window.api.getDashboardStats(payload),
+        // Refresh accounts on every stats cycle so balances stay current after sales/purchases/expenses
+        window.api.getAccounts?.().then((r: any) => {
+          if (r?.success && r.data?.accounts) setAccounts(r.data.accounts);
+          if (r?.success && r.data?.chartData) setAccountTxnChart(r.data.chartData);
+        }).catch(() => {}),
+      ]);
+      if (statsRes?.success && statsRes.data) {
+        setStats(statsRes.data);
         if (isManual) addNotification('Dashboard refreshed', 'Latest metrics loaded.', 'success');
       } else if (isManual) {
-        addNotification('Refresh Failed', res?.error || 'Could not fetch analytics.', 'error');
+        addNotification('Refresh Failed', statsRes?.error || 'Could not fetch analytics.', 'error');
       }
     } catch (err) {
       console.error(err);
@@ -224,6 +281,55 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
   const totalLoans: number = stats?.totalOutstandingLoans || 0;
   const debtorCount: number = stats?.customersInDebt || 0;
   const totalStockItems = totalProductCount || (inStockCount + lowStockCount + outOfStockCount);
+
+  const totalCash = accounts.filter((a: any) => a.type === 'cash').reduce((s: number, a: any) => s + (Number(a.current_balance) || 0), 0);
+  const totalBank = accounts.filter((a: any) => a.type === 'bank').reduce((s: number, a: any) => s + (Number(a.current_balance) || 0), 0);
+  const totalFunds = totalCash + totalBank;
+
+  /* ── P&L chart data ── */
+  const plChartData = useMemo(() => {
+    return (Array.isArray(stats?.plTrend) ? stats.plTrend : []).map((d: any) => ({
+      day:         d.day,
+      revenue:     Number(d.revenue)     || 0,
+      cogs:        Number(d.cogs)        || 0,
+      expenses:    Number(d.expenses)    || 0,
+      grossProfit: Number(d.grossProfit) || 0,
+      netProfit:   Number(d.netProfit)   || 0,
+    }));
+  }, [stats?.plTrend]);
+
+  /* P&L summary totals for header strip */
+  const plTotals = useMemo(() => {
+    const zero = { revenue: 0, cogs: 0, expenses: 0, grossProfit: 0, netProfit: 0 };
+    return plChartData.reduce((acc, d) => ({
+      revenue:     acc.revenue     + d.revenue,
+      cogs:        acc.cogs        + d.cogs,
+      expenses:    acc.expenses    + d.expenses,
+      grossProfit: acc.grossProfit + d.grossProfit,
+      netProfit:   acc.netProfit   + d.netProfit,
+    }), zero);
+  }, [plChartData]);
+
+  /* Account chart data — each account with in/out bars */
+  const accountChartData = useMemo(() =>
+    accounts.map((a: any) => ({
+      name:    a.bank_name ? `${a.name}\n${a.bank_name}` : a.name,
+      shortName: a.name,
+      balance: Math.max(0, Number(a.current_balance) || 0),
+      total_in:  Number(a.total_in) || 0,
+      total_out: Number(a.total_out) || 0,
+      type:    a.type,
+    })),
+    [accounts]);
+
+  /* Daily cash flow chart (IN vs OUT) — use camelCase keys for recharts compatibility */
+  const cashFlowChartData = useMemo(() =>
+    accountTxnChart.map((d: any) => ({
+      day:      d.day,
+      moneyIn:  Number(d.total_in) || 0,
+      moneyOut: Number(d.total_out) || 0,
+    })),
+    [accountTxnChart]);
 
   const greeting = getGreeting();
   const displayName = ownerName || 'there';
@@ -346,6 +452,127 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
 
       {stats && (
         <>
+          {/* ── Bakery Dashboard Section ── */}
+          {modules.bakery && bakeryData && (
+            <motion.div custom={0.5} variants={fadeUp} initial="hidden" animate="visible">
+              <div className="rounded-2xl border border-orange-500/20 bg-gradient-to-br from-orange-500/5 to-amber-500/3 overflow-hidden shadow-sm">
+                {/* Header */}
+                <div className="flex items-center justify-between p-5 pb-3 border-b border-orange-500/15">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-orange-500/15 p-2.5 rounded-xl">
+                      <span className="text-xl">🧁</span>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-orange-700 dark:text-orange-400">Bakery Dashboard</h3>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {bakeryData.summary?.totalBakeryProducts ?? 0} bakery products ·{' '}
+                        {bakeryData.summary?.totalExpired ?? 0} expired ·{' '}
+                        {bakeryData.summary?.totalExpiringToday ?? 0} expiring today
+                      </p>
+                    </div>
+                  </div>
+                  <Link to="/products">
+                    <Button variant="outline" size="sm" className="h-8 gap-1 rounded-xl text-xs border-orange-500/30 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/20">
+                      Manage <ArrowRight size={11} />
+                    </Button>
+                  </Link>
+                </div>
+
+                {/* Summary chips */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 pb-0">
+                  {[
+                    { label: 'Total Bakery', value: bakeryData.summary?.totalBakeryProducts ?? 0, color: 'text-orange-600', bg: 'bg-orange-500/10', border: 'border-orange-500/20' },
+                    { label: 'Expired', value: bakeryData.summary?.totalExpired ?? 0, color: 'text-red-600', bg: 'bg-red-500/10', border: 'border-red-500/20' },
+                    { label: 'Expiring Today', value: bakeryData.summary?.totalExpiringToday ?? 0, color: 'text-amber-600', bg: 'bg-amber-500/10', border: 'border-amber-500/20' },
+                    { label: 'Near Expiry (7d)', value: bakeryData.summary?.totalExpiringSoon ?? 0, color: 'text-yellow-600', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20' },
+                  ].map(chip => (
+                    <div key={chip.label} className={cn('rounded-xl border p-3', chip.bg, chip.border)}>
+                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">{chip.label}</p>
+                      <p className={cn('text-2xl font-bold', chip.color)}>{chip.value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Expired Products */}
+                {bakeryData.expiredProducts?.length > 0 && (
+                  <div className="p-4">
+                    <div className="flex items-center gap-2 mb-2.5">
+                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                      <p className="text-xs font-bold text-red-600 uppercase tracking-wider">Expired Products</p>
+                      <span className="text-[10px] bg-red-500/10 text-red-600 border border-red-500/20 rounded-full px-2 py-0.5 font-mono">{bakeryData.expiredProducts.length}</span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {bakeryData.expiredProducts.slice(0, 5).map((p: any) => (
+                        <div key={p.id} className="flex items-center justify-between bg-red-500/5 border border-red-500/15 rounded-lg px-3 py-2">
+                          <div>
+                            <p className="text-xs font-semibold">{p.name}</p>
+                            <p className="text-[10px] text-red-500">Expired: {new Date(p.expiry_date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[10px] text-muted-foreground">Stock: {p.stock ?? 0}</p>
+                          </div>
+                        </div>
+                      ))}
+                      {bakeryData.expiredProducts.length > 5 && (
+                        <p className="text-[11px] text-muted-foreground text-center pt-1">+{bakeryData.expiredProducts.length - 5} more expired</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Expiring Today */}
+                {bakeryData.expiringToday?.length > 0 && (
+                  <div className="px-4 pb-3">
+                    <div className="flex items-center gap-2 mb-2.5">
+                      <span className="w-2 h-2 rounded-full bg-amber-500" />
+                      <p className="text-xs font-bold text-amber-600 uppercase tracking-wider">Expiring Today</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      {bakeryData.expiringToday.map((p: any) => (
+                        <div key={p.id} className="flex items-center justify-between bg-amber-500/5 border border-amber-500/15 rounded-lg px-3 py-2">
+                          <p className="text-xs font-semibold">{p.name}</p>
+                          <p className="text-[10px] text-amber-600 font-medium">Today · Stock: {p.stock ?? 0}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Near Expiry (7 days) */}
+                {bakeryData.expiringSoon?.length > 0 && (
+                  <div className="px-4 pb-4">
+                    <div className="flex items-center gap-2 mb-2.5">
+                      <span className="w-2 h-2 rounded-full bg-yellow-500" />
+                      <p className="text-xs font-bold text-yellow-600 uppercase tracking-wider">Near Expiry (Next 7 Days)</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      {bakeryData.expiringSoon.slice(0, 5).map((p: any) => {
+                        const daysLeft = p.expiry_date ? Math.ceil((new Date(p.expiry_date).getTime() - Date.now()) / 86400000) : null;
+                        return (
+                          <div key={p.id} className="flex items-center justify-between bg-yellow-500/5 border border-yellow-500/15 rounded-lg px-3 py-2">
+                            <div>
+                              <p className="text-xs font-semibold">{p.name}</p>
+                              <p className="text-[10px] text-muted-foreground">{new Date(p.expiry_date).toLocaleDateString('en-PK', { day: 'numeric', month: 'short' })}</p>
+                            </div>
+                            <p className="text-[10px] font-bold text-yellow-600">{daysLeft !== null ? `${daysLeft}d left` : ''}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Empty state */}
+                {!bakeryData.expiredProducts?.length && !bakeryData.expiringToday?.length && !bakeryData.expiringSoon?.length && (
+                  <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground">
+                    <span className="text-3xl">✅</span>
+                    <p className="text-xs font-medium">All bakery products are within expiry dates</p>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          )}
+
           {/* ── KPI Row 1 — with sparklines + hover tooltip ── */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
@@ -435,6 +662,173 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
               );
             })}
           </div>
+
+          {/* ── Accounts & Cash Section ── */}
+          {modules.accounting && accounts.length > 0 && (
+            <motion.div custom={9} variants={fadeUp} initial="hidden" animate="visible">
+              <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-xl bg-emerald-500/10">
+                      <Wallet size={15} className="text-emerald-600 dark:text-emerald-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold">Accounts & Cash</h3>
+                      <p className="text-[10px] text-muted-foreground/70 mt-0.5">Live balances across all accounts</p>
+                    </div>
+                  </div>
+                  <Link to="/accounts">
+                    <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground rounded-xl">
+                      View All <ArrowRight size={12} />
+                    </Button>
+                  </Link>
+                </div>
+
+                {/* Summary totals */}
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  {[
+                    { label: 'Cash in Hand', value: totalCash, borderCls: 'border-emerald-500/20 bg-emerald-500/5', valCls: 'text-emerald-600 dark:text-emerald-400' },
+                    { label: 'Bank Total', value: totalBank, borderCls: 'border-blue-500/20 bg-blue-500/5', valCls: 'text-blue-600 dark:text-blue-400' },
+                    { label: 'Net Funds', value: totalFunds, borderCls: totalFunds >= 0 ? 'border-violet-500/20 bg-violet-500/5' : 'border-red-400/20 bg-red-500/5', valCls: totalFunds >= 0 ? 'text-violet-600 dark:text-violet-400' : 'text-red-600 dark:text-red-400' },
+                  ].map(({ label, value, borderCls, valCls }) => (
+                    <div key={label} className={cn('rounded-xl border px-3 py-2.5', borderCls)}>
+                      <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/60">{label}</p>
+                      <p className={cn('text-sm font-black mt-0.5 truncate', valCls)}>{fmt(value)}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Individual account cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                  {accounts.map((acc: any) => (
+                    <div key={acc.id} className={cn(
+                      'flex items-center gap-2.5 rounded-xl border px-3 py-2.5 transition-colors',
+                      acc.type === 'cash'
+                        ? 'bg-emerald-500/5 border-emerald-500/10 hover:border-emerald-500/25'
+                        : 'bg-blue-500/5 border-blue-500/10 hover:border-blue-500/25'
+                    )}>
+                      <div className={cn('w-2 h-2 rounded-full flex-shrink-0', acc.type === 'cash' ? 'bg-emerald-500' : 'bg-blue-500')} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[10px] font-semibold truncate text-foreground">{acc.name}</p>
+                        {acc.bank_name && <p className="text-[9px] text-muted-foreground/60 truncate">{acc.bank_name}</p>}
+                        <p className={cn('text-[11px] font-black truncate', acc.type === 'cash' ? 'text-emerald-600 dark:text-emerald-400' : 'text-blue-600 dark:text-blue-400')}>
+                          {fmt(Number(acc.current_balance) || 0)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Cash Flow Charts */}
+                {accountChartData.length > 0 && (() => {
+                  const hasFlow = accountChartData.some(a => a.total_in > 0 || a.total_out > 0);
+                  const hasTrend = cashFlowChartData.some(d => d.moneyIn > 0 || d.moneyOut > 0);
+
+                  return (
+                    <div className="mt-4 space-y-4">
+                      {/* Per-account balance + IN/OUT */}
+                      <div>
+                        <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">
+                          {hasFlow ? 'Cash Flow by Account (Total)' : 'Balance by Account'}
+                        </p>
+                        <ResponsiveContainer width="100%" height={Math.max(90, accountChartData.length * (hasFlow ? 52 : 36) + 20)}>
+                          <BarChart
+                            data={accountChartData}
+                            layout="vertical"
+                            margin={{ top: 4, right: 50, left: 4, bottom: 4 }}
+                            barSize={hasFlow ? 9 : 14}
+                            barCategoryGap="25%"
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border) / 0.25)" horizontal={false} />
+                            <XAxis
+                              type="number" fontSize={9} tickLine={false} axisLine={false}
+                              tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                              tickFormatter={v => {
+                                const n = Number(v);
+                                if (n === 0) return '0';
+                                if (n >= 100000) return `${(n / 100000).toFixed(1)}L`;
+                                if (n >= 1000) return `${Math.round(n / 1000)}k`;
+                                return String(Math.round(n));
+                              }}
+                            />
+                            <YAxis
+                              type="category" dataKey="shortName"
+                              width={82} fontSize={10}
+                              tickLine={false} axisLine={false}
+                              tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                            />
+                            <Tooltip
+                              contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '14px', border: '1px solid hsl(var(--border))', fontSize: 11 }}
+                              formatter={(v: any, name: string) => [fmt(Number(v)), name]}
+                            />
+                            {hasFlow ? (
+                              <>
+                                <Legend wrapperStyle={{ fontSize: 10, paddingTop: 4 }} iconType="circle" iconSize={7} />
+                                <Bar dataKey="total_in" name="Money In" fill="#10b981" radius={[0, 4, 4, 0]}
+                                  label={{ position: 'right', fontSize: 9, fill: 'hsl(var(--muted-foreground))', formatter: (v: number) => v > 0 ? fmt(v) : '' }} />
+                                <Bar dataKey="total_out" name="Money Out" fill="#ef4444" radius={[0, 4, 4, 0]}
+                                  label={{ position: 'right', fontSize: 9, fill: 'hsl(var(--muted-foreground))', formatter: (v: number) => v > 0 ? fmt(v) : '' }} />
+                              </>
+                            ) : (
+                              <Bar dataKey="balance" name="Balance" radius={[0, 5, 5, 0]}
+                                label={{ position: 'right', fontSize: 9, fill: 'hsl(var(--muted-foreground))', formatter: (v: number) => fmt(v) }}>
+                                {accountChartData.map((a, i) => (
+                                  <Cell key={i} fill={a.type === 'cash' ? '#10b981' : '#3b82f6'} />
+                                ))}
+                              </Bar>
+                            )}
+                          </BarChart>
+                        </ResponsiveContainer>
+                        {!hasFlow && (
+                          <p className="text-[10px] text-muted-foreground/50 italic text-center mt-1">
+                            Cash flow tracking starts once you record sales or purchases with an account selected
+                          </p>
+                        )}
+                      </div>
+
+                      {/* 30-Day trend — only when there is real data */}
+                      {hasTrend && (
+                        <div>
+                          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">30-Day Cash Flow Trend</p>
+                          <ResponsiveContainer width="100%" height={130}>
+                            <ComposedChart data={cashFlowChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                              <defs>
+                                <linearGradient id="inGrad" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.18} />
+                                  <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                                </linearGradient>
+                                <linearGradient id="outGrad" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="0%" stopColor="#ef4444" stopOpacity={0.15} />
+                                  <stop offset="100%" stopColor="#ef4444" stopOpacity={0} />
+                                </linearGradient>
+                              </defs>
+                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border) / 0.3)" />
+                              <XAxis dataKey="day" fontSize={9} tickLine={false} axisLine={false}
+                                tick={{ fill: 'hsl(var(--muted-foreground))' }} minTickGap={32} interval="preserveStartEnd"
+                                tickFormatter={str => { const d = new Date(str); return isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); }}
+                              />
+                              <YAxis fontSize={9} tickLine={false} axisLine={false} width={44}
+                                tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                                tickFormatter={v => { const n = Number(v); if (n === 0) return '0'; if (n >= 100000) return `${(n/100000).toFixed(1)}L`; return `${Math.round(n/1000)}k`; }}
+                              />
+                              <Tooltip
+                                contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '14px', border: '1px solid hsl(var(--border))', fontSize: 11 }}
+                                formatter={(v: any, name: string) => [fmt(Number(v)), name]}
+                                labelFormatter={str => { const d = new Date(str); return isNaN(d.getTime()) ? str : d.toLocaleDateString('en-PK', { month: 'short', day: 'numeric' }); }}
+                              />
+                              <Legend wrapperStyle={{ fontSize: 10 }} iconType="circle" iconSize={7} />
+                              <Area type="monotone" dataKey="moneyIn" name="Money In" stroke="#10b981" strokeWidth={2} fill="url(#inGrad)" dot={false} />
+                              <Area type="monotone" dataKey="moneyOut" name="Money Out" stroke="#ef4444" strokeWidth={2} fill="url(#outGrad)" dot={false} />
+                            </ComposedChart>
+                          </ResponsiveContainer>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            </motion.div>
+          )}
 
           {/* ── Charts: Revenue Overview + Stock Summary ── */}
           <motion.div custom={10} variants={fadeUp} initial="hidden" animate="visible">
@@ -588,6 +982,117 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                     </>
                   )}
                 </div>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* ── Profit & Loss Multi-Level Chart ── */}
+          <motion.div custom={10.5} variants={fadeUp} initial="hidden" animate="visible">
+            <div className="rounded-2xl border border-border/50 bg-card shadow-sm overflow-hidden">
+              {/* Header */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between p-5 pb-3 gap-3 border-b border-border/40">
+                <div>
+                  <h3 className="text-sm font-semibold flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-violet-500 inline-block" />
+                    Profit &amp; Loss — Last 30 Days
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">Revenue · COGS · Expenses · Gross &amp; Net Profit</p>
+                </div>
+                {plChartData.length > 0 && (
+                  <div className="flex flex-wrap gap-x-5 gap-y-1.5 shrink-0">
+                    {[
+                      { label: 'Revenue',     value: plTotals.revenue,     color: 'text-blue-500'   },
+                      { label: 'COGS',        value: plTotals.cogs,        color: 'text-orange-500' },
+                      { label: 'Expenses',    value: plTotals.expenses,    color: 'text-red-500'    },
+                      { label: 'Gross',       value: plTotals.grossProfit, color: plTotals.grossProfit >= 0 ? 'text-emerald-500' : 'text-red-500' },
+                      { label: 'Net',         value: plTotals.netProfit,   color: plTotals.netProfit   >= 0 ? 'text-violet-500'  : 'text-red-500' },
+                    ].map(({ label, value, color }) => (
+                      <div key={label} className="text-right">
+                        <p className="text-[9px] font-bold text-muted-foreground/60 uppercase tracking-widest">{label}</p>
+                        <p className={cn('text-xs font-bold tabular-nums', color)}>{fmt(value)}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Chart */}
+              <div className="h-[300px] px-1 pb-2 pt-1">
+                {plChartData.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                    <TrendingUp size={32} className="opacity-20" />
+                    <p className="text-xs">No data for the last 30 days</p>
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={plChartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                      <defs>
+                        <linearGradient id="plRevGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.9} />
+                          <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.6} />
+                        </linearGradient>
+                        <linearGradient id="plCogsGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#f97316" stopOpacity={0.85} />
+                          <stop offset="100%" stopColor="#f97316" stopOpacity={0.5} />
+                        </linearGradient>
+                        <linearGradient id="plExpGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#ef4444" stopOpacity={0.85} />
+                          <stop offset="100%" stopColor="#ef4444" stopOpacity={0.5} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border) / 0.4)" />
+                      <XAxis
+                        dataKey="day" fontSize={10} tickLine={false} axisLine={false}
+                        tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                        interval="preserveStartEnd" minTickGap={28}
+                        tickFormatter={str => { const d = new Date(str); return isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); }}
+                      />
+                      <YAxis
+                        fontSize={10} tickLine={false} axisLine={false} width={72}
+                        tick={{ fill: 'hsl(var(--muted-foreground))' }}
+                        tickFormatter={v => `PKR ${Number(v).toLocaleString('en-PK')}`}
+                      />
+                      <Tooltip content={<PlTooltip />} />
+                      <Legend
+                        wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
+                        formatter={v => ({
+                          revenue: 'Revenue', cogs: 'COGS', expenses: 'Expenses',
+                          grossProfit: 'Gross Profit', netProfit: 'Net Profit'
+                        }[v as string] ?? v)}
+                      />
+                      {/* Three stacked bar levels */}
+                      <Bar dataKey="revenue"  name="revenue"  fill="url(#plRevGrad)"  radius={[3,3,0,0]} maxBarSize={18} />
+                      <Bar dataKey="cogs"     name="cogs"     fill="url(#plCogsGrad)" radius={[3,3,0,0]} maxBarSize={18} />
+                      <Bar dataKey="expenses" name="expenses" fill="url(#plExpGrad)"  radius={[3,3,0,0]} maxBarSize={18} />
+                      {/* Two profit lines */}
+                      <Line dataKey="grossProfit" name="grossProfit" stroke="#10b981" strokeWidth={2.2}
+                        dot={false} activeDot={{ r: 5, strokeWidth: 0 }} />
+                      <Line dataKey="netProfit"   name="netProfit"   stroke="#8b5cf6" strokeWidth={2.2}
+                        strokeDasharray="5 3" dot={false} activeDot={{ r: 5, strokeWidth: 0 }} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+
+              {/* Legend colour key strip */}
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-5 py-3 border-t border-border/30 bg-muted/20">
+                {[
+                  { color: '#3b82f6', label: 'Revenue',     dash: false },
+                  { color: '#f97316', label: 'COGS',         dash: false },
+                  { color: '#ef4444', label: 'Expenses',     dash: false },
+                  { color: '#10b981', label: 'Gross Profit', dash: false },
+                  { color: '#8b5cf6', label: 'Net Profit',   dash: true  },
+                ].map(({ color, label, dash }) => (
+                  <span key={label} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <span className="flex items-center gap-0.5">
+                      {dash
+                        ? <svg width="18" height="4"><line x1="0" y1="2" x2="18" y2="2" stroke={color} strokeWidth="2" strokeDasharray="5 3" /></svg>
+                        : <span className="w-3 h-3 rounded-sm" style={{ background: color }} />
+                      }
+                    </span>
+                    {label}
+                  </span>
+                ))}
               </div>
             </div>
           </motion.div>
@@ -1169,6 +1674,7 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
               )}
             </div>
           </motion.div>
+
         </>
       )}
     </div>

@@ -5,12 +5,12 @@ import {
   Activity, TrendingUp, Key, Loader2,
   ArrowRight, Wifi, Users, Package,
   RefreshCw, Store, AlertTriangle, AlertCircle, CalendarX,
-  BarChart2, Download,
+  BarChart2, Download, Banknote, TrendingDown, UserPlus, Wallet,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, AreaChart, Area, CartesianGrid,
-  Legend,
+  Legend, ComposedChart, Line,
 } from 'recharts';
 import { statsApi, instancesApi, analyticsApi, DashboardStats, Instance, AnalyticsData, ExpiringInstance } from '../api';
 import clsx from 'clsx';
@@ -35,6 +35,10 @@ function timeAgo(dateStr?: string) {
 function fmtDay(d: string) {
   const dt = new Date(d);
   return dt.toLocaleDateString('en-PK', { month: 'short', day: 'numeric' });
+}
+function fmtMonth(m: string) {
+  const [y, mo] = m.split('-');
+  return new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString('en-PK', { month: 'short', year: '2-digit' });
 }
 
 // ─── JSON download helper ────────────────────────────────────────────────────
@@ -78,6 +82,12 @@ const PLAN_COLORS: Record<string, string> = {
   yearly:    '#f59e0b',
   lifetime:  '#10b981',
   none:      '#6b7280',
+};
+const ACCOUNT_TYPE_COLORS: Record<string, string> = {
+  cash:   '#10b981',
+  bank:   '#3b82f6',
+  credit: '#f59e0b',
+  other:  '#8b5cf6',
 };
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -178,25 +188,57 @@ export default function Dashboard() {
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [loading,   setLoading]   = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError]   = useState<string | null>(null);
+  const [seeding,   setSeeding]     = useState(false);
   const [datePreset, setDatePreset] = useState<DashPreset>('month');
   const [dateFrom, setDateFrom]     = useState(() => toYMD(new Date(Date.now() - 29 * 86400000)));
   const [dateTo, setDateTo]         = useState(() => toYMD(new Date()));
 
   const load = useCallback(async (showSpinner = true, from?: string, to?: string) => {
     if (showSpinner) setLoading(true); else setRefreshing(true);
+    setLoadError(null);
     try {
       const dateParams = from && to ? { date_from: from, date_to: to } : undefined;
-      const [s, inst, an] = await Promise.all([
+
+      // Run independently so a partial failure still populates what it can
+      const [statsResult, instResult, anResult] = await Promise.allSettled([
         statsApi.get(),
-        instancesApi.list({ limit: 8, status: 'approved' }),
+        // Show all statuses so pending/blocked instances appear immediately
+        instancesApi.list({ limit: 10 }),
         analyticsApi.get(dateParams),
       ]);
-      setStats(s);
-      setRecent(inst.data);
-      setAnalytics(an);
-    } catch { /* ignore */ }
-    finally { setLoading(false); setRefreshing(false); }
+
+      if (statsResult.status === 'fulfilled') setStats(statsResult.value);
+      else setLoadError(`Stats failed: ${(statsResult.reason as any)?.message ?? 'Network error'}`);
+
+      if (instResult.status === 'fulfilled') setRecent(instResult.value.data);
+
+      if (anResult.status === 'fulfilled') setAnalytics(anResult.value);
+    } catch (err: any) {
+      setLoadError(err?.message ?? 'Failed to load dashboard data');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
+
+  const handleSeedDemo = async () => {
+    if (!window.confirm('Seed the database with demo instances and sales data for testing? This cannot be undone.')) return;
+    setSeeding(true);
+    try {
+      const { data } = await (await import('../api/client')).default.post('/admin/seed-demo');
+      if (data.success) {
+        alert(`✅ Seeded: ${data.data?.instances ?? 0} instances, ${data.data?.sales ?? 0} sales, ${data.data?.products ?? 0} products. Refreshing…`);
+        load(true);
+      } else {
+        alert('Seed failed: ' + (data.error ?? 'Unknown error'));
+      }
+    } catch (err: any) {
+      alert('Seed request failed: ' + (err?.response?.data?.error ?? err?.message ?? 'Check backend logs'));
+    } finally {
+      setSeeding(false);
+    }
+  };
 
   useEffect(() => {
     const range = getPresetRange(datePreset);
@@ -253,6 +295,31 @@ export default function Dashboard() {
   // Max qty for bar scaling
   const maxQty = topProducts.length > 0 ? topProducts[0].qty : 1;
 
+  // ── New chart data ────────────────────────────────────────────────────────
+  const plData = (analytics?.profitLossData ?? []).map(d => ({
+    ...d,
+    monthLabel: fmtMonth(d.month),
+  }));
+
+  const regData = (analytics?.registrationsTrend ?? []).map(d => ({
+    ...d,
+    label: fmtMonth(d.month),
+  }));
+
+  const acctTypePie = (analytics?.accountStats?.typeDist ?? []).map(d => ({
+    name:  d.account_type.charAt(0).toUpperCase() + d.account_type.slice(1),
+    value: Math.round(d.total_balance),
+    count: d.count,
+    color: ACCOUNT_TYPE_COLORS[d.account_type.toLowerCase()] ?? '#6b7280',
+  }));
+
+  const acctTxnData = (analytics?.accountStats?.txnVolume ?? []).map(d => ({
+    type:   d.txn_type.charAt(0).toUpperCase() + d.txn_type.slice(1),
+    amount: Math.round(d.total_amount),
+    count:  d.count,
+    color:  d.txn_type.toLowerCase() === 'credit' ? '#10b981' : '#ef4444',
+  }));
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
 
@@ -291,6 +358,40 @@ export default function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* ── Error banner ── */}
+      {loadError && (
+        <div className="flex items-start gap-3 p-4 rounded-xl bg-rose-500/8 border border-rose-500/25 text-sm">
+          <AlertCircle size={16} className="text-rose-500 mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <p className="font-semibold text-rose-600 dark:text-rose-400">Failed to load dashboard data</p>
+            <p className="text-rose-500/80 dark:text-rose-400/70 mt-0.5 text-xs font-mono">{loadError}</p>
+            <p className="text-slate-500 dark:text-gray-500 text-xs mt-1">Make sure the backend server is running and you are logged in.</p>
+          </div>
+          <button onClick={() => load(false)} className="text-xs text-rose-500 hover:text-rose-700 dark:hover:text-rose-300 font-semibold underline underline-offset-2 shrink-0">Retry</button>
+        </div>
+      )}
+
+      {/* ── Empty state with seed option (shown only when everything is 0 and no errors) ── */}
+      {!loadError && stats && stats.totalInstances === 0 && recent.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-12 rounded-2xl border-2 border-dashed border-slate-200 dark:border-gray-700 bg-slate-50/50 dark:bg-gray-900/30">
+          <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mb-4">
+            <Store size={26} className="text-blue-500 dark:text-blue-400" />
+          </div>
+          <h3 className="font-semibold text-slate-700 dark:text-gray-200 mb-1">No instances registered yet</h3>
+          <p className="text-sm text-slate-500 dark:text-gray-500 text-center max-w-sm mb-5">
+            No POS clients have registered with this backend yet. Connect a POS app or seed demo data to preview the dashboard.
+          </p>
+          <button
+            onClick={handleSeedDemo}
+            disabled={seeding}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-500 hover:bg-blue-600 text-white text-sm font-semibold transition-colors disabled:opacity-50"
+          >
+            {seeding ? <RefreshCw size={14} className="animate-spin" /> : <Package size={14} />}
+            {seeding ? 'Seeding…' : 'Seed Demo Data'}
+          </button>
+        </div>
+      )}
 
       {/* ── Top stat row ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -624,12 +725,213 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* ── Profit & Loss ── */}
+      <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Profit &amp; Loss</h3>
+            <p className="text-xs text-slate-500 dark:text-gray-500 mt-0.5">Monthly revenue vs expenses — profit shown as line</p>
+          </div>
+          <div className="flex items-center gap-3">
+            {plData.length > 0 && (
+              <>
+                <div className="text-right">
+                  <p className="text-[11px] text-slate-400 dark:text-gray-600">Total Revenue</p>
+                  <p className="text-sm font-bold text-blue-600 dark:text-blue-400 tabular-nums">{fmtRs(plData.reduce((s, d) => s + d.revenue, 0))}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] text-slate-400 dark:text-gray-600">Total Expenses</p>
+                  <p className="text-sm font-bold text-rose-500 dark:text-rose-400 tabular-nums">{fmtRs(plData.reduce((s, d) => s + d.expenses, 0))}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[11px] text-slate-400 dark:text-gray-600">Net Profit</p>
+                  {(() => {
+                    const net = plData.reduce((s, d) => s + d.profit, 0);
+                    return <p className={clsx('text-sm font-bold tabular-nums', net >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400')}>{fmtRs(net)}</p>;
+                  })()}
+                </div>
+              </>
+            )}
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+              <TrendingUp size={15} className="text-emerald-500 dark:text-emerald-400" />
+            </div>
+          </div>
+        </div>
+
+        {plData.length === 0 ? (
+          <div className="py-14 text-center">
+            <TrendingDown className="w-8 h-8 text-slate-300 dark:text-gray-700 mx-auto mb-2" />
+            <p className="text-sm text-slate-500 dark:text-gray-500">No revenue or expense data for this period</p>
+          </div>
+        ) : (
+          <div className="p-4">
+            <ResponsiveContainer width="100%" height={260}>
+              <ComposedChart data={plData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="revBarGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"  stopColor="#3b82f6" stopOpacity={0.9} />
+                    <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.6} />
+                  </linearGradient>
+                  <linearGradient id="expBarGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"  stopColor="#ef4444" stopOpacity={0.85} />
+                    <stop offset="100%" stopColor="#ef4444" stopOpacity={0.5} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                <XAxis dataKey="monthLabel" tick={{ fill: '#6b7280', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis yAxisId="amt" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => 'PKR ' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)} width={65} />
+                <YAxis yAxisId="profit" orientation="right" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={v => 'PKR ' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)} width={65} />
+                <Tooltip
+                  contentStyle={customTooltipStyle}
+                  formatter={(v: number, name: string) => [fmtRs(v), name === 'revenue' ? 'Revenue' : name === 'expenses' ? 'Expenses' : 'Net Profit']}
+                />
+                <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} formatter={(v) => v === 'revenue' ? 'Revenue' : v === 'expenses' ? 'Expenses' : 'Net Profit'} />
+                <Bar yAxisId="amt" dataKey="revenue"  fill="url(#revBarGrad)" radius={[3,3,0,0]} maxBarSize={32} name="revenue" />
+                <Bar yAxisId="amt" dataKey="expenses" fill="url(#expBarGrad)" radius={[3,3,0,0]} maxBarSize={32} name="expenses" />
+                <Line yAxisId="profit" type="monotone" dataKey="profit" stroke="#10b981" strokeWidth={2.5} dot={{ r: 4, fill: '#10b981', strokeWidth: 0 }} activeDot={{ r: 6 }} name="profit" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      {/* ── Account Overview + Store Growth ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+
+        {/* Account overview */}
+        <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Account Overview</h3>
+              <p className="text-xs text-slate-500 dark:text-gray-500 mt-0.5">Balances by type &amp; transaction volume across all stores</p>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
+              <Wallet size={15} className="text-blue-500 dark:text-blue-400" />
+            </div>
+          </div>
+
+          {acctTypePie.length === 0 && acctTxnData.length === 0 ? (
+            <div className="py-14 text-center">
+              <Banknote className="w-8 h-8 text-slate-300 dark:text-gray-700 mx-auto mb-2" />
+              <p className="text-sm text-slate-500 dark:text-gray-500">No account data synced yet</p>
+            </div>
+          ) : (
+            <div className="p-4 space-y-5">
+
+              {/* Account type balance pie */}
+              {acctTypePie.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 dark:text-gray-500 mb-3">Balance by Account Type</p>
+                  <div className="flex items-center gap-4">
+                    <ResponsiveContainer width={120} height={120}>
+                      <PieChart>
+                        <Pie data={acctTypePie} cx="50%" cy="50%" innerRadius={32} outerRadius={54} dataKey="value" paddingAngle={3}>
+                          {acctTypePie.map((entry, i) => <Cell key={i} fill={entry.color} />)}
+                        </Pie>
+                        <Tooltip
+                          contentStyle={customTooltipStyle}
+                          formatter={(v: number) => [fmtRs(v), 'Balance']}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="flex-1 space-y-2">
+                      {acctTypePie.map(a => (
+                        <div key={a.name} className="flex items-center justify-between text-xs">
+                          <span className="flex items-center gap-1.5 text-slate-500 dark:text-gray-400">
+                            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: a.color }} />
+                            {a.name}
+                            <span className="text-slate-400 dark:text-gray-600">({a.count})</span>
+                          </span>
+                          <span className="font-semibold text-slate-700 dark:text-gray-300 tabular-nums">{fmtRs(a.value)}</span>
+                        </div>
+                      ))}
+                      {analytics?.accountStats?.totalBalance !== undefined && (
+                        <div className="pt-2 mt-1 border-t border-slate-200 dark:border-gray-800 flex items-center justify-between text-xs">
+                          <span className="text-slate-500 dark:text-gray-400 font-medium">Total Balance</span>
+                          <span className="font-bold text-slate-900 dark:text-white tabular-nums">{fmtRs(analytics.accountStats.totalBalance)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Debit vs Credit bar */}
+              {acctTxnData.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-slate-500 dark:text-gray-500 mb-2">Transaction Volume by Type</p>
+                  <ResponsiveContainer width="100%" height={120}>
+                    <BarChart data={acctTxnData} layout="vertical" margin={{ left: 8, right: 16, top: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" horizontal={false} />
+                      <XAxis type="number" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false}
+                        tickFormatter={v => 'PKR ' + (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)} />
+                      <YAxis type="category" dataKey="type" tick={{ fill: '#9ca3af', fontSize: 11 }} axisLine={false} tickLine={false} width={50} />
+                      <Tooltip contentStyle={customTooltipStyle} formatter={(v: number) => [fmtRs(v), 'Amount']} />
+                      <Bar dataKey="amount" radius={[0, 4, 4, 0]} maxBarSize={22}>
+                        {acctTxnData.map((d, i) => <Cell key={i} fill={d.color} />)}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                  <p className="text-xs text-slate-400 dark:text-gray-600 mt-1 text-right">
+                    {analytics?.accountStats?.totalTxns ?? 0} total transactions
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Store Registration Growth */}
+        <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Store Growth</h3>
+              <p className="text-xs text-slate-500 dark:text-gray-500 mt-0.5">New registrations vs total — last 12 months</p>
+            </div>
+            <div className="w-8 h-8 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
+              <UserPlus size={15} className="text-violet-500 dark:text-violet-400" />
+            </div>
+          </div>
+
+          {regData.length === 0 ? (
+            <div className="py-14 text-center">
+              <Store className="w-8 h-8 text-slate-300 dark:text-gray-700 mx-auto mb-2" />
+              <p className="text-sm text-slate-500 dark:text-gray-500">No registration data yet</p>
+            </div>
+          ) : (
+            <div className="p-4">
+              <ResponsiveContainer width="100%" height={240}>
+                <ComposedChart data={regData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="totalGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor="#8b5cf6" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fill: '#6b7280', fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis yAxisId="new"   tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} width={30} />
+                  <YAxis yAxisId="total" orientation="right" tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} width={30} />
+                  <Tooltip
+                    contentStyle={customTooltipStyle}
+                    formatter={(v: number, name: string) => [v, name === 'newStores' ? 'New Stores' : 'Cumulative Total']}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} formatter={(v) => v === 'newStores' ? 'New Stores' : 'Total'} />
+                  <Bar yAxisId="new" dataKey="newStores" fill="#a78bfa" radius={[3,3,0,0]} maxBarSize={28} name="newStores" opacity={0.85} />
+                  <Area yAxisId="total" type="monotone" dataKey="total" stroke="#8b5cf6" fill="url(#totalGrad)" strokeWidth={2} dot={false} name="total" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* ── Recent instances table ── */}
       <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-gray-800">
           <div>
-            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Recent Active Stores</h3>
-            <p className="text-xs text-slate-500 dark:text-gray-500 mt-0.5">Approved instances sorted by last seen</p>
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">Recent Stores</h3>
+            <p className="text-xs text-slate-500 dark:text-gray-500 mt-0.5">All instances — newest first</p>
           </div>
           <Link to="/instances" className="btn-ghost text-xs py-1.5 px-3">
             View all <ArrowRight size={14} />
@@ -639,14 +941,15 @@ export default function Dashboard() {
         {recent.length === 0 ? (
           <div className="py-16 text-center">
             <Store className="w-10 h-10 text-slate-300 dark:text-gray-700 mx-auto mb-3" />
-            <p className="text-sm text-slate-500 dark:text-gray-500">No approved instances yet</p>
+            <p className="text-sm text-slate-500 dark:text-gray-500">No instances registered yet</p>
+            <p className="text-xs text-slate-400 dark:text-gray-600 mt-1">POS clients will appear here once they register</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-gray-800">
-                  {['Store / Owner', 'Mobile', 'Plan', 'Revenue', 'Sales', 'Products', 'Customers', 'Last Seen'].map(h => (
+                  {['Store / Owner', 'Status', 'Mobile', 'Plan', 'Revenue', 'Sales', 'Products', 'Customers', 'Last Seen'].map(h => (
                     <th key={h} className="text-left px-5 py-3 text-xs font-medium text-slate-500 dark:text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -659,6 +962,14 @@ export default function Dashboard() {
                         <p className="font-medium text-slate-800 dark:text-gray-100 truncate max-w-[140px]">{inst.store_name || '—'}</p>
                         <p className="text-xs text-slate-500 dark:text-gray-500 mt-0.5">{inst.owner_name || inst.instance_id}</p>
                       </Link>
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <span className={clsx(
+                        'inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border capitalize',
+                        inst.approval_status === 'approved' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400' :
+                        inst.approval_status === 'blocked'  ? 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400' :
+                                                              'bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400'
+                      )}>{inst.approval_status}</span>
                     </td>
                     <td className="px-5 py-3.5 text-slate-500 dark:text-gray-400 font-mono text-xs">{inst.owner_mobile}</td>
                     <td className="px-5 py-3.5">

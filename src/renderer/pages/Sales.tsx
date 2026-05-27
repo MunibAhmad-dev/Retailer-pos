@@ -21,6 +21,7 @@ import { useLocation } from 'react-router-dom';
 import { usePagination } from '../hooks/usePagination';
 import { LoadMoreButton } from '../components/Pagination';
 import AnimatedList from '../components/AnimatedList';
+import { useModules } from '../contexts/ModulesContext';
 
 interface CartItem {
   id: string;
@@ -377,13 +378,28 @@ export default function Sales() {
   const customNameRef = useRef<HTMLInputElement>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [activeCategory, setActiveCategory] = useState<string>('');
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<number | ''>('');
 
   const { addNotification } = useNotifications();
+  const { modules } = useModules();
   const location = useLocation();
 
   useEffect(() => {
     loadProducts(); loadCustomers(); loadSettings(); checkRegister();
   }, []);
+
+  // Reload (or clear) accounts whenever the accounting module is toggled
+  useEffect(() => {
+    if (modules.accounting) {
+      window.api.getAccounts?.().then((res: any) => {
+        if (res?.success && res.data?.accounts) setAccounts(res.data.accounts);
+      }).catch(() => {});
+    } else {
+      setAccounts([]);
+      setSelectedAccountId('');
+    }
+  }, [modules.accounting]);
 
   const checkRegister = async () => {
     try { const res = await window.api.getCurrentRegister(); if (res.success) setCurrentRegister(res.data); } catch { }
@@ -528,6 +544,7 @@ export default function Sales() {
         payment_status: paymentStatus,
         amount_paid: isNaN(amtPaid) ? (selectedCustomerId ? 0 : total) : amtPaid,
         register_id: currentRegister?.id || null,
+        account_id: selectedAccountId ? Number(selectedAccountId) : undefined,
         items: cart.map((c) => ({ product_id: c.product_id || undefined, product_name: c.name || 'Unknown Item', quantity: c.quantity, price: c.price, is_custom: c.is_custom })),
       });
       if (result.success) {
@@ -539,7 +556,13 @@ export default function Sales() {
           paymentMethod, settings: { ...settings }, date: new Date().toLocaleString('en-PK', { timeZoneName: 'short' }),
           customerPhone: cust?.phone, amountPaid: finalAmtPaid, balance: finalAmtPaid - total,
         });
-        loadProducts(); setDiscountValue(''); setAmountPaid(''); setSelectedCustomerId(''); setPaymentMethod('cash');
+        loadProducts(); setDiscountValue(''); setAmountPaid(''); setSelectedCustomerId(''); setPaymentMethod('cash'); setSelectedAccountId('');
+        // Refresh account balances so picker shows updated balance for next sale
+        if (modules.accounting) {
+          window.api.getAccounts?.().then((r: any) => {
+            if (r?.success && r.data?.accounts) setAccounts(r.data.accounts);
+          }).catch(() => {});
+        }
         setTimeout(() => { setShowCheckoutModal(false); setIsProcessing(false); }, 800);
       } else { addNotification("Transaction Failed", result.error || "A processing error occurred.", "error"); setIsProcessing(false); }
     } catch { addNotification("Error", "Critical error processing sale.", "error"); setIsProcessing(false); }
@@ -1167,13 +1190,76 @@ export default function Sales() {
                   {isWalkInPartial && <p className="text-xs text-destructive font-medium">Walk-in customers can't have partial payments. Select a customer or use Udhaar.</p>}
                 </div>
               </div>
+
+              {/* Account selector — only when accounting module is ON and not udhaar */}
+              {modules.accounting && paymentMethod !== 'udhaar' && accounts.length > 0 && (
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+                    Received Into Account
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {accounts.map((acc: any) => (
+                      <button
+                        key={acc.id}
+                        type="button"
+                        onClick={() => setSelectedAccountId(selectedAccountId === acc.id ? '' : acc.id)}
+                        className={cn(
+                          'flex items-center gap-2 px-3 py-2.5 rounded-xl border text-left transition-all text-sm',
+                          selectedAccountId === acc.id
+                            ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-700 dark:text-emerald-400'
+                            : 'bg-muted/30 border-border/50 text-muted-foreground hover:border-border hover:bg-muted/50'
+                        )}
+                      >
+                        <span className={cn('w-2.5 h-2.5 rounded-full flex-shrink-0', acc.type === 'cash' ? 'bg-emerald-500' : 'bg-blue-500')} />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-semibold truncate">{acc.name}</p>
+                          <p className="text-[10px] text-muted-foreground truncate">PKR {Math.round(Number(acc.current_balance) || 0).toLocaleString('en-PK')}</p>
+                        </div>
+                        {selectedAccountId === acc.id && (
+                          <span className="text-emerald-500 flex-shrink-0">✓</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  {!selectedAccountId && (
+                    <p className="text-[10px] text-muted-foreground/70 italic">No account selected — payment won't be tracked</p>
+                  )}
+                  {(() => {
+                    if (!selectedAccountId || paymentMethod === 'udhaar') return null;
+                    const selAcc = accounts.find((a: any) => a.id === selectedAccountId);
+                    const paid = effectiveAmountPaid;
+                    if (!selAcc || paid <= 0) return null;
+                    const bal = Number(selAcc.current_balance) || 0;
+                    if (paid <= bal) return (
+                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                        Balance after receipt: {fmtPKR(bal + paid)}
+                      </p>
+                    );
+                    return null;
+                  })()}
+                </div>
+              )}
             </CardContent>
-            <CardFooter className="gap-3 pt-0">
-              <Button variant="outline" className="flex-1" onClick={() => { setShowCheckoutModal(false); setPaymentMethod('cash'); }}>Cancel</Button>
-              <Button onClick={processPayment} disabled={isProcessing || isWalkInPartial || isOverPayment || isUdhaarWithoutCustomer} className="flex-1 gap-2">
-                {isProcessing ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle size={16} />}
-                Complete Sale
-              </Button>
+            <CardFooter className="flex-col gap-2 pt-0">
+              {modules.accounting && accounts.length > 0 && !selectedAccountId && paymentMethod !== 'udhaar' && (
+                <p className="w-full text-[11px] text-amber-600 dark:text-amber-400 font-medium text-center flex items-center justify-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" />
+                  Please select which account receives this payment
+                </p>
+              )}
+              <div className="flex gap-3 w-full">
+                <Button variant="outline" className="flex-1" onClick={() => { setShowCheckoutModal(false); setPaymentMethod('cash'); }}>Cancel</Button>
+                <Button
+                  onClick={processPayment}
+                  disabled={isProcessing || isWalkInPartial || isOverPayment || isUdhaarWithoutCustomer || (modules.accounting && accounts.length > 0 && !selectedAccountId && paymentMethod !== 'udhaar')}
+                  className="flex-1 gap-2"
+                >
+                  {isProcessing ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle size={16} />}
+                  Complete Sale
+                </Button>
+              </div>
             </CardFooter>
           </Card>
         </div>

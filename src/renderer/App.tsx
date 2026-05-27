@@ -31,7 +31,11 @@ import PendingApproval from './components/PendingApproval';
 import BlockedScreen from './components/BlockedScreen';
 import Returns from './pages/Returns';
 import Payments from './pages/Payments';
+import Accounts from './pages/Accounts';
+import DailyClose from './pages/DailyClose';
+import LicenseIssuer from './components/LicenseIssuer';
 import { LanguageProvider } from './components/LanguageProvider';
+import { ModulesProvider } from './contexts/ModulesContext';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { initPosSync, checkInstanceStatus } from './services/api/posSync';
@@ -41,6 +45,7 @@ export default function App() {
     () => sessionStorage.getItem('pos_unlocked') === 'true'
   );
   const [isSystemLocked, setIsSystemLocked] = useState(false);
+  const [showLicenseIssuer, setShowLicenseIssuer] = useState(false);
 
   const [isActivated, setIsActivated]     = useState<boolean | null>(null);
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
@@ -55,6 +60,12 @@ export default function App() {
     // Start the cloud sync worker — safe to call even while blocked/pending.
     // This starts the 5-minute status poll that detects admin unblock/approve actions.
     initPosSync().catch(() => {});
+
+    // Ctrl+Shift+L → toggle the hidden license issuer panel
+    const unsubLicenseIssuer = window.api.onToggleLicenseIssuer?.(() => {
+      setShowLicenseIssuer(prev => !prev);
+    });
+
 
     // When posSync detects a block (403 or status poll), update the UI immediately
     const onBlocked = () => checkActivation();
@@ -79,6 +90,7 @@ export default function App() {
       window.removeEventListener('pos-blocked', onBlocked);
       window.removeEventListener('pos-approved', onApproved);
       window.removeEventListener('pos-notification', onNotification);
+      unsubLicenseIssuer?.();
     };
   }, []);
 
@@ -227,41 +239,49 @@ export default function App() {
       <ThemeProvider defaultTheme="system" storageKey="pos-ui-theme">
         <LanguageProvider>
           <NotificationProvider>
-            <Router>
-              {isSystemLocked && (
-                <Login mode="system" onAuthenticated={handleSystemUnlock} />
+            <ModulesProvider>
+              <Router>
+                {isSystemLocked && (
+                  <Login mode="system" onAuthenticated={handleSystemUnlock} />
+                )}
+                <Layout>
+                  <Routes>
+                    <Route path="/" element={
+                      !isUnlocked
+                        ? <Login mode="dashboard" onAuthenticated={handleAuthenticated} />
+                        : <ProtectedRoute routeName="dashboard"><Dashboard onLock={handleLock} onLockSystem={handleLockSystem} /></ProtectedRoute>
+                    } />
+                    <Route path="/sales" element={<ProtectedRoute routeName="sales"><Sales /></ProtectedRoute>} />
+                    <Route path="/products" element={<ProtectedRoute routeName="products"><Products /></ProtectedRoute>} />
+                    <Route path="/inventory" element={<ProtectedRoute routeName="inventory"><Inventory /></ProtectedRoute>} />
+                    <Route path="/vendors" element={<ProtectedRoute routeName="vendors"><Vendors /></ProtectedRoute>} />
+                    <Route path="/purchases" element={<ProtectedRoute routeName="purchases"><Purchases /></ProtectedRoute>} />
+                    <Route path="/customers" element={<ProtectedRoute routeName="customers"><Customers /></ProtectedRoute>} />
+                    <Route path="/loans" element={<ProtectedRoute routeName="loans"><Loans /></ProtectedRoute>} />
+                    <Route path="/transactions" element={<ProtectedRoute routeName="transactions"><Transactions /></ProtectedRoute>} />
+                    <Route path="/reports" element={<ProtectedRoute routeName="reports"><Reports /></ProtectedRoute>} />
+                    <Route path="/balance-sheet" element={<ProtectedRoute routeName="balance-sheet"><BalanceSheet /></ProtectedRoute>} />
+                    <Route path="/expenses" element={<ProtectedRoute routeName="expenses"><Expenses /></ProtectedRoute>} />
+                    <Route path="/register-history" element={<ProtectedRoute routeName="register-history"><RegisterHistory /></ProtectedRoute>} />
+                    <Route path="/register" element={<ProtectedRoute routeName="register"><RegisterStatus /></ProtectedRoute>} />
+                    <Route path="/returns" element={<ProtectedRoute routeName="returns"><Returns /></ProtectedRoute>} />
+                    <Route path="/payments" element={<ProtectedRoute routeName="payments"><Payments /></ProtectedRoute>} />
+                    <Route path="/accounts" element={<ProtectedRoute routeName="accounts"><Accounts /></ProtectedRoute>} />
+                    <Route path="/daily-close" element={<ProtectedRoute routeName="daily-close"><DailyClose /></ProtectedRoute>} />
+                    <Route path="/financials" element={<Navigate to="/reports" replace />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="/subscription" element={<Subscription />} />
+                    <Route path="/about" element={<About />} />
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                  </Routes>
+                </Layout>
+              </Router>
+              <Toaster position="top-right" richColors closeButton />
+              {/* License Issuer — triggered by Ctrl+Shift+L, always rendered above everything */}
+              {showLicenseIssuer && (
+                <LicenseIssuer onClose={() => setShowLicenseIssuer(false)} />
               )}
-              <Layout>
-                <Routes>
-                  <Route path="/" element={
-                    !isUnlocked
-                      ? <Login mode="dashboard" onAuthenticated={handleAuthenticated} />
-                      : <ProtectedRoute routeName="dashboard"><Dashboard onLock={handleLock} onLockSystem={handleLockSystem} /></ProtectedRoute>
-                  } />
-                  <Route path="/sales" element={<ProtectedRoute routeName="sales"><Sales /></ProtectedRoute>} />
-                  <Route path="/products" element={<ProtectedRoute routeName="products"><Products /></ProtectedRoute>} />
-                  <Route path="/inventory" element={<ProtectedRoute routeName="inventory"><Inventory /></ProtectedRoute>} />
-                  <Route path="/vendors" element={<ProtectedRoute routeName="vendors"><Vendors /></ProtectedRoute>} />
-                  <Route path="/purchases" element={<ProtectedRoute routeName="purchases"><Purchases /></ProtectedRoute>} />
-                  <Route path="/customers" element={<ProtectedRoute routeName="customers"><Customers /></ProtectedRoute>} />
-                  <Route path="/loans" element={<ProtectedRoute routeName="loans"><Loans /></ProtectedRoute>} />
-                  <Route path="/transactions" element={<ProtectedRoute routeName="transactions"><Transactions /></ProtectedRoute>} />
-                  <Route path="/reports" element={<ProtectedRoute routeName="reports"><Reports /></ProtectedRoute>} />
-                  <Route path="/balance-sheet" element={<ProtectedRoute routeName="balance-sheet"><BalanceSheet /></ProtectedRoute>} />
-                  <Route path="/expenses" element={<ProtectedRoute routeName="expenses"><Expenses /></ProtectedRoute>} />
-                  <Route path="/register-history" element={<ProtectedRoute routeName="register-history"><RegisterHistory /></ProtectedRoute>} />
-                  <Route path="/register" element={<ProtectedRoute routeName="register"><RegisterStatus /></ProtectedRoute>} />
-                  <Route path="/returns" element={<ProtectedRoute routeName="returns"><Returns /></ProtectedRoute>} />
-                  <Route path="/payments" element={<ProtectedRoute routeName="payments"><Payments /></ProtectedRoute>} />
-                  <Route path="/financials" element={<Navigate to="/reports" replace />} />
-                  <Route path="/settings" element={<Settings />} />
-                  <Route path="/subscription" element={<Subscription />} />
-                  <Route path="/about" element={<About />} />
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
-              </Layout>
-            </Router>
-            <Toaster position="top-right" richColors closeButton />
+            </ModulesProvider>
           </NotificationProvider>
         </LanguageProvider>
       </ThemeProvider>

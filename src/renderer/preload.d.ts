@@ -115,6 +115,7 @@ declare global {
 
       // Dashboard
       getDashboardStats: (args?: any) => Promise<ApiResponse<DashboardStats>>;
+      getBakeryDashboard: () => Promise<any>;
 
       // Reports
       getReport: (args: 'today' | 'week' | 'month' | { startDate: string; endDate?: string }) => Promise<ApiResponse<any>>;
@@ -123,6 +124,16 @@ declare global {
       getExpenses: (opts?: any) => Promise<ApiResponse<any[]>>;
       addExpense: (data: any) => Promise<ApiResponse<void>>;
       deleteExpense: (id: number) => Promise<ApiResponse<void>>;
+
+      // Accounts module
+      getAccounts: () => Promise<{ success: boolean; data: { accounts: any[]; chartData: any[] }; error?: string }>;
+      addAccount: (data: any) => Promise<ApiResponse<any>>;
+      updateAccount: (id: number, data: any) => Promise<ApiResponse<any>>;
+      deleteAccount: (id: number) => Promise<ApiResponse<void>>;
+      getAccountTxns: (opts?: any) => Promise<{ success: boolean; data: any[]; total: number; error?: string }>;
+      addAccountTxn: (data: any) => Promise<ApiResponse<void>>;
+      deleteAccountTxn: (id: number) => Promise<ApiResponse<void>>;
+      transferBetweenAccounts: (data: any) => Promise<ApiResponse<void>>;
 
       // Auth
       verifyPassword: (password: string) => Promise<boolean | ApiResponse<{ isValid: boolean }>>;

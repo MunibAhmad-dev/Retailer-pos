@@ -65,8 +65,11 @@ const DEV_WHATSAPP = '+923298748232';
 
 // ── phase: 'setup' = steps 0-1, 'waiting' = polling screen, 'approved' = done ──
 type Phase = 'setup' | 'waiting' | 'approved';
+// ── mode: landing choice, new registration, or returning sign-in ──
+type Mode = 'choose' | 'new' | 'existing';
 
 export default function Setup({ onComplete }: SetupProps) {
+  const [mode, setMode]           = useState<Mode>('choose');
   const [step, setStep]           = useState<0 | 1>(0);
   const [phase, setPhase]         = useState<Phase>('setup');
   const [isDark, setIsDark]       = useState(() => document.documentElement.classList.contains('dark'));
@@ -75,6 +78,8 @@ export default function Setup({ onComplete }: SetupProps) {
   const [saving, setSaving]       = useState(false);
   const [activationKey, setActKey]= useState('');
   const [verificationMethod, setMethod] = useState<'online' | 'offline' | null>(null);
+  const [signInMobile, setSignInMobile] = useState('');
+  const [signInLoading, setSignInLoading] = useState(false);
 
   // waiting-phase state
   const [regMobile, setRegMobile]   = useState('');
@@ -254,6 +259,7 @@ export default function Setup({ onComplete }: SetupProps) {
   const handleSwitchToOffline = async () => {
     if (pollRef.current) clearInterval(pollRef.current);
     setPhase('setup');
+    setMode('new');
     setStep(1);
     setMethod('offline');
   };
@@ -298,6 +304,71 @@ export default function Setup({ onComplete }: SetupProps) {
     }
   };
 
+  /* ── Sign-in: returning user ────────────────────────────────── */
+  const handleSignIn = async () => {
+    const mobile = signInMobile.trim();
+    if (!mobile) {
+      addNotification('Mobile Required', 'Enter the mobile number you registered with.', 'warning');
+      return;
+    }
+    setSignInLoading(true);
+    try {
+      // Mark setup as started (idempotent — won't break fresh installs)
+      await window.api.updateSettings({
+        store_phone: mobile, owner_mobile: mobile,
+        license_mode: 'online', approval_status: 'pending',
+        cloud_backend_url: DEFAULT_BACKEND_URL,
+        setup_completed: true,
+      } as any);
+
+      try {
+        const result = await submitRegistration({
+          businessName: 'Restored Shop',
+          ownerName: 'Owner',
+          mobile,
+          fingerprint: fingerprint || undefined,
+        }, DEFAULT_BACKEND_URL);
+
+        if (result.api_key) {
+          await window.api.updateSettings({
+            cloud_backend_token: result.api_key,
+            cloud_instance_id: result.instance_id || mobile,
+            cloud_connected: 1,
+          } as any);
+          setRegApiKey(result.api_key);
+          if (result.instance_id) setCloudInstanceId(result.instance_id);
+        }
+
+        // Already approved — finish immediately
+        if (result.approval_status === 'approved') {
+          if (result.licenseKey) {
+            await window.api.activateAppV2(result.licenseKey).catch(() => {});
+            await window.api.updateSettings({ activation_key: result.licenseKey } as any);
+          }
+          await window.api.updateSettings({ approval_status: 'approved' } as any);
+          addNotification('Welcome Back!', 'Your account has been restored.', 'success');
+          setTimeout(() => onComplete(), 1200);
+          return;
+        }
+      } catch {
+        addNotification('Offline', 'Could not reach server. Try again when connected.', 'warning');
+        setSignInLoading(false);
+        return;
+      }
+
+      // Go to waiting screen (will poll every 5 s)
+      setRegMobile(mobile);
+      setPollCount(0);
+      setLastChecked(null);
+      setPollError('');
+      setPhase('waiting');
+    } catch (err: any) {
+      addNotification('Error', err?.message || 'Sign-in failed.', 'error');
+    } finally {
+      setSignInLoading(false);
+    }
+  };
+
   const copyFp = async () => {
     if (!fingerprint) return;
     await navigator.clipboard.writeText(fingerprint);
@@ -322,8 +393,8 @@ export default function Setup({ onComplete }: SetupProps) {
     color:T.sub, pointerEvents:'none',
   };
 
-  /* ── step indicators (hidden during waiting/approved) ───────── */
-  const showSteps = phase === 'setup';
+  /* ── step indicators (only for new-shop setup flow) ─────────── */
+  const showSteps = mode === 'new' && phase === 'setup';
 
   return (
     <div style={{ position:'fixed', inset:0, zIndex:9999, background:T.bg, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:20, minHeight:'100vh', overflowY:'auto' }}>
@@ -368,8 +439,119 @@ export default function Setup({ onComplete }: SetupProps) {
       )}
 
       {/* Card */}
-      <div style={{ width:'100%', maxWidth: (phase !== 'setup' || step === 1) ? 560 : 520, background:T.cardBg, border:`1px solid ${T.cardBorder}`, borderRadius:20, backdropFilter:'blur(28px)', WebkitBackdropFilter:'blur(28px)', padding:'32px 36px', position:'relative', zIndex:1, boxShadow:isDark?'0 28px 80px rgba(0,0,0,0.65)':'0 28px 80px rgba(0,0,0,0.10)', transition:'max-width 0.35s ease' }}>
+      <div style={{ width:'100%', maxWidth: mode === 'choose' ? 560 : (phase !== 'setup' || step === 1) ? 560 : 520, background:T.cardBg, border:`1px solid ${T.cardBorder}`, borderRadius:20, backdropFilter:'blur(28px)', WebkitBackdropFilter:'blur(28px)', padding:'32px 36px', position:'relative', zIndex:1, boxShadow:isDark?'0 28px 80px rgba(0,0,0,0.65)':'0 28px 80px rgba(0,0,0,0.10)', transition:'max-width 0.35s ease' }}>
         <AnimatePresence mode="wait">
+
+          {/* ══ CHOOSE SCREEN ═══════════════════════════════════════ */}
+          {mode === 'choose' && (
+            <motion.div key="choose"
+              initial={{ opacity:0, scale:0.97 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0, scale:0.97 }}
+              transition={{ duration:0.3, ease:[0.22,1,0.36,1] }}>
+
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', marginBottom:28 }}>
+                <div style={{ width:52, height:52, borderRadius:15, background:'rgba(59,130,246,0.12)', border:'1.5px solid rgba(59,130,246,0.25)', display:'flex', alignItems:'center', justifyContent:'center', marginBottom:14 }}>
+                  <Store size={26} color="#3b82f6" />
+                </div>
+                <h2 style={{ margin:0, fontSize:20, fontWeight:800, color:T.heading, textAlign:'center' }}>Welcome to OsaTech POS</h2>
+                <p style={{ margin:'6px 0 0', fontSize:12, color:T.sub, textAlign:'center', lineHeight:1.6, maxWidth:320 }}>
+                  New setup? Register your shop in 2 minutes.<br />Already registered? Sign in to restore access.
+                </p>
+              </div>
+
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:20 }}>
+                {/* New Shop */}
+                <button type="button" onClick={() => setMode('new')}
+                  style={{ padding:'20px 18px', borderRadius:16, background:'linear-gradient(145deg,rgba(59,130,246,0.10),rgba(59,130,246,0.05))', border:'1.5px solid rgba(59,130,246,0.30)', cursor:'pointer', textAlign:'left', transition:'all 0.2s', display:'flex', flexDirection:'column', gap:10 }}
+                  onMouseEnter={e=>(e.currentTarget.style.borderColor='rgba(59,130,246,0.55)')} onMouseLeave={e=>(e.currentTarget.style.borderColor='rgba(59,130,246,0.30)')}>
+                  <div style={{ width:38, height:38, borderRadius:11, background:'rgba(59,130,246,0.12)', border:'1px solid rgba(59,130,246,0.22)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    <Store size={18} color="#3b82f6" />
+                  </div>
+                  <div>
+                    <p style={{ margin:0, fontSize:13, fontWeight:800, color:T.heading }}>New Shop</p>
+                    <p style={{ margin:'4px 0 0', fontSize:11, color:T.sub, lineHeight:1.45 }}>First-time setup.<br />Register your business.</p>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', gap:4, fontSize:10, fontWeight:700, color:'#3b82f6', marginTop:2 }}>
+                    Get started <ArrowRight size={11} />
+                  </div>
+                </button>
+
+                {/* Sign In */}
+                <button type="button" onClick={() => setMode('existing')}
+                  style={{ padding:'20px 18px', borderRadius:16, background:'linear-gradient(145deg,rgba(16,185,129,0.10),rgba(16,185,129,0.05))', border:'1.5px solid rgba(16,185,129,0.28)', cursor:'pointer', textAlign:'left', transition:'all 0.2s', display:'flex', flexDirection:'column', gap:10 }}
+                  onMouseEnter={e=>(e.currentTarget.style.borderColor='rgba(16,185,129,0.55)')} onMouseLeave={e=>(e.currentTarget.style.borderColor='rgba(16,185,129,0.28)')}>
+                  <div style={{ width:38, height:38, borderRadius:11, background:'rgba(16,185,129,0.12)', border:'1px solid rgba(16,185,129,0.22)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                    <ShieldCheck size={18} color="#10b981" />
+                  </div>
+                  <div>
+                    <p style={{ margin:0, fontSize:13, fontWeight:800, color:T.heading }}>Sign In</p>
+                    <p style={{ margin:'4px 0 0', fontSize:11, color:T.sub, lineHeight:1.45 }}>Already registered.<br />Restore your account.</p>
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', gap:4, fontSize:10, fontWeight:700, color:'#10b981', marginTop:2 }}>
+                    Recover access <ArrowRight size={11} />
+                  </div>
+                </button>
+              </div>
+
+              <div style={{ padding:'10px 14px', borderRadius:10, background:'rgba(255,255,255,0.04)', border:`1px solid ${T.cardBorder}`, display:'flex', alignItems:'center', gap:8 }}>
+                <MessageCircle size={12} color={T.sub} style={{ flexShrink:0 }} />
+                <p style={{ margin:0, fontSize:11, color:T.sub, lineHeight:1.5 }}>
+                  Need help? WhatsApp <strong style={{ color:'#25d366' }}>{DEV_WHATSAPP}</strong>
+                </p>
+              </div>
+            </motion.div>
+          )}
+
+          {/* ══ SIGN IN SCREEN ══════════════════════════════════════ */}
+          {mode === 'existing' && phase === 'setup' && (
+            <motion.div key="signin"
+              initial={{ opacity:0, x:18 }} animate={{ opacity:1, x:0 }} exit={{ opacity:0, x:-18 }}
+              transition={{ duration:0.28, ease:[0.22,1,0.36,1] }}>
+
+              <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:24 }}>
+                <div style={{ width:44, height:44, borderRadius:13, background:'rgba(16,185,129,0.12)', border:'1.5px solid rgba(16,185,129,0.28)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                  <ShieldCheck size={22} color="#10b981" />
+                </div>
+                <div>
+                  <h2 style={{ margin:0, fontSize:19, fontWeight:700, color:T.heading, lineHeight:1.2 }}>Sign In</h2>
+                  <p style={{ margin:0, marginTop:3, fontSize:12, color:T.sub }}>Enter your registered mobile number to restore access</p>
+                </div>
+              </div>
+
+              <div style={{ marginBottom:16 }}>
+                <label style={lbl}>Registered Mobile <span style={{ color:'#ef4444' }}>*</span></label>
+                <div style={{ position:'relative' }}>
+                  <Phone size={15} style={ico} />
+                  <input className="sup-inp" style={inp}
+                    value={signInMobile} onChange={e=>setSignInMobile(e.target.value)}
+                    placeholder="03001234567" />
+                </div>
+              </div>
+
+              <div style={{ padding:'10px 13px', borderRadius:10, background:'rgba(16,185,129,0.06)', border:'1px solid rgba(16,185,129,0.18)', marginBottom:18, display:'flex', alignItems:'flex-start', gap:8 }}>
+                <CheckCircle2 size={13} color="#10b981" style={{ flexShrink:0, marginTop:1 }} />
+                <p style={{ margin:0, fontSize:11, color:T.sub, lineHeight:1.5 }}>
+                  We'll look up your account using your mobile number. If already approved, you'll be signed in immediately. Otherwise, you'll see the approval screen.
+                </p>
+              </div>
+
+              <div style={{ padding:'9px 12px', borderRadius:9, background:'rgba(251,191,36,0.07)', border:'1px solid rgba(251,191,36,0.18)', marginBottom:18, display:'flex', alignItems:'flex-start', gap:7 }}>
+                <Wifi size={13} color="#fbbf24" style={{ flexShrink:0, marginTop:1 }} />
+                <p style={{ margin:0, fontSize:11, color:T.sub, lineHeight:1.5 }}>
+                  <strong style={{ color:T.heading }}>Internet required.</strong> Your device must be online to restore access. For offline use, contact admin for a license key.
+                </p>
+              </div>
+
+              <button type="button" onClick={handleSignIn} disabled={signInLoading || !signInMobile.trim()}
+                style={{ width:'100%', height:46, background:(signInLoading||!signInMobile.trim())?'rgba(16,185,129,0.25)':'linear-gradient(135deg,#10b981,#059669)', border:'none', borderRadius:12, color:'#fff', fontSize:13, fontWeight:700, cursor:(signInLoading||!signInMobile.trim())?'not-allowed':'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:8 }}>
+                {signInLoading ? <><Loader2 size={14} className="animate-spin" />Checking…</> : <><ShieldCheck size={14} />Restore Access</>}
+              </button>
+
+              <button type="button" onClick={() => setMode('choose')}
+                style={{ marginTop:12, width:'100%', background:'transparent', border:'none', color:T.backBtn, fontSize:12, cursor:'pointer', padding:'6px 0', display:'flex', alignItems:'center', justifyContent:'center', gap:4 }}>
+                ← Back to start
+              </button>
+            </motion.div>
+          )}
 
           {/* ══ WAITING SCREEN ══════════════════════════════════════ */}
           {phase === 'waiting' && (
@@ -460,7 +642,7 @@ export default function Setup({ onComplete }: SetupProps) {
           )}
 
           {/* ══ STEP 0: Business info ════════════════════════════════ */}
-          {phase === 'setup' && step === 0 && (
+          {mode === 'new' && phase === 'setup' && step === 0 && (
             <motion.div key="s0" initial={{ opacity:0, x:-18 }} animate={{ opacity:1, x:0 }} exit={{ opacity:0, x:18 }} transition={{ duration:0.28, ease:[0.22,1,0.36,1] }}>
               <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:24 }}>
                 <div style={{ width:44, height:44, borderRadius:13, background:'rgba(59,130,246,0.14)', border:'1.5px solid rgba(59,130,246,0.28)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
@@ -527,7 +709,7 @@ export default function Setup({ onComplete }: SetupProps) {
           )}
 
           {/* ══ STEP 1: Verification ════════════════════════════════ */}
-          {phase === 'setup' && step === 1 && (
+          {mode === 'new' && phase === 'setup' && step === 1 && (
             <motion.div key="s1" initial={{ opacity:0, x:18 }} animate={{ opacity:1, x:0 }} exit={{ opacity:0, x:-18 }} transition={{ duration:0.28, ease:[0.22,1,0.36,1] }}>
 
               <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:22 }}>

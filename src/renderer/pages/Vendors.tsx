@@ -597,6 +597,32 @@ export default function Vendors() {
     return { totalPurchased, totalPaid, totalReturned };
   }, [vendorDetails, summaryDateFilter, summaryMonths, summaryFrom, summaryTo]);
 
+  const vendorLedger = useMemo(() => {
+    if (!vendorDetails) return [];
+    const rows: Array<{ date: Date; type: string; desc: string; debit: number; credit: number }> = [];
+
+    (vendorDetails.purchases || []).forEach((p: any) => {
+      if ((p.status || '').toLowerCase() !== 'cancelled') {
+        rows.push({ date: new Date(p.date_created), type: 'Purchase', desc: `PO #${p.id}`, debit: Number(p.total) || 0, credit: 0 });
+      }
+    });
+    (vendorDetails.payments || []).forEach((p: any) => {
+      rows.push({ date: new Date(p.date_created), type: 'Payment', desc: p.notes || 'Payment sent', debit: 0, credit: Number(p.amount) || 0 });
+    });
+    (vendorDetails.returns || []).forEach((r: any) => {
+      rows.push({ date: new Date(r.date_created || r.date_returned), type: 'Return', desc: `Return – PO #${r.purchase_id || 'N/A'}`, debit: 0, credit: Number(r.total_returned) || 0 });
+    });
+
+    // Sort oldest-first for running balance, then attach balance_after
+    rows.sort((a, b) => a.date.getTime() - b.date.getTime());
+    let balance = 0;
+    const withBalance = rows.map(row => {
+      balance += row.debit - row.credit;
+      return { ...row, balance: Math.max(0, balance) };
+    });
+    return withBalance.reverse(); // newest first for display
+  }, [vendorDetails]);
+
   const HISTORY_PAGE_SIZE = 20;
   const historyTotalPages = Math.max(1, Math.ceil(filteredAdvancedHistory.length / HISTORY_PAGE_SIZE));
   const pagedAdvancedHistory = useMemo(() => {
@@ -923,8 +949,9 @@ export default function Vendors() {
                   {/* ── Transaction Timeline ── */}
                   <div className="p-4">
                     <Tabs defaultValue="tx-history">
-                      <TabsList className="w-full grid grid-cols-2 mb-4 h-8">
+                      <TabsList className="w-full grid grid-cols-3 mb-4 h-8">
                         <TabsTrigger value="tx-history" className="text-[11px]">Transactions</TabsTrigger>
+                        <TabsTrigger value="ledger" className="text-[11px]">Ledger</TabsTrigger>
                         <TabsTrigger value="activity-log" className="text-[11px]">Action Log</TabsTrigger>
                       </TabsList>
 
@@ -1112,6 +1139,66 @@ export default function Vendors() {
                                 Load more ({historyVisible} of {historyLogs.length})
                               </Button>
                             )}
+                          </div>
+                        )}
+                      </TabsContent>
+
+                      {/* ── Ledger tab ── */}
+                      <TabsContent value="ledger">
+                        <div className="flex items-center justify-between mb-3">
+                          <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/60">Running Balance</p>
+                          <Badge variant="secondary" className="text-[10px]">{vendorLedger.length} entries</Badge>
+                        </div>
+
+                        {vendorLedger.length === 0 ? (
+                          <div className="py-10 text-center border border-dashed rounded-xl text-sm text-muted-foreground">
+                            No transactions yet.
+                          </div>
+                        ) : (
+                          <div className="rounded-xl border border-border/60 overflow-hidden">
+                            {/* Header */}
+                            <div className="grid grid-cols-[1fr_52px_52px_70px] text-[9px] font-black uppercase tracking-wider text-muted-foreground/50 bg-muted/30 px-3 py-2 border-b border-border/40">
+                              <span>Details</span>
+                              <span className="text-right">Debit</span>
+                              <span className="text-right">Credit</span>
+                              <span className="text-right">Balance</span>
+                            </div>
+                            <div className="max-h-64 overflow-y-auto divide-y divide-border/40">
+                              {vendorLedger.map((row, idx) => (
+                                <div
+                                  key={idx}
+                                  className="grid grid-cols-[1fr_52px_52px_70px] px-3 py-2.5 text-xs items-start hover:bg-muted/20 transition-colors"
+                                >
+                                  <div>
+                                    <p className={`font-semibold ${row.type === 'Purchase' ? 'text-rose-600 dark:text-rose-400' : row.type === 'Payment' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+                                      {row.type}
+                                    </p>
+                                    <p className="text-[10px] text-muted-foreground/70 mt-0.5 truncate">{row.desc}</p>
+                                    <p className="text-[9px] text-muted-foreground/50 mt-0.5">
+                                      {row.date.toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                    </p>
+                                  </div>
+                                  <p className="text-right font-mono text-rose-600 dark:text-rose-400 text-[10px] pt-0.5">
+                                    {row.debit > 0 ? fmtPKR(row.debit).replace('PKR ', '') : '—'}
+                                  </p>
+                                  <p className="text-right font-mono text-emerald-600 dark:text-emerald-400 text-[10px] pt-0.5">
+                                    {row.credit > 0 ? fmtPKR(row.credit).replace('PKR ', '') : '—'}
+                                  </p>
+                                  <p className={`text-right font-black text-[11px] pt-0.5 ${row.balance > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                    {fmtPKR(row.balance).replace('PKR ', '')}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                            {/* Footer total */}
+                            <div className="grid grid-cols-[1fr_52px_52px_70px] px-3 py-2 border-t border-border/60 bg-muted/10">
+                              <span className="text-[9px] font-black uppercase tracking-wider text-muted-foreground/60">Net Balance</span>
+                              <span />
+                              <span />
+                              <span className={`text-right text-xs font-black ${(vendorDetails?.balance || 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                                {fmtPKR(Math.max(0, vendorDetails?.balance || 0)).replace('PKR ', '')}
+                              </span>
+                            </div>
                           </div>
                         )}
                       </TabsContent>

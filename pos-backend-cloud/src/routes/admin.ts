@@ -531,36 +531,63 @@ router.get('/instances/:id/export', (req: Request, res: Response) => {
     }
   }
 
-  // Convert maps to arrays
+  // Convert maps to arrays (keys are singular entity_type values)
   const structured: Record<string, any[]> = {};
   for (const [type, items] of Object.entries(entityMap)) {
     structured[type] = Array.from(items.values());
   }
 
+  // Map singular entity_type → plural POS table name
+  const ENTITY_TO_TABLE: Record<string, string> = {
+    product:               'products',
+    customer:              'customers',
+    vendor:                'vendors',
+    purchase:              'purchases',
+    sale:                  'sales',
+    sale_item:             'sale_items',
+    expense:               'expenses',
+    account:               'accounts',
+    account_txn:           'account_txns',
+    vendor_payment:        'vendor_payments',
+    customer_payment:      'customer_payments',
+    inventory_batch:       'inventory_batches',
+    sale_return:           'sale_returns',
+    sale_return_item:      'sale_return_items',
+    purchase_return:       'purchase_returns',
+    purchase_return_item:  'purchase_return_items',
+    financial_transaction: 'financial_transactions',
+    register:              'registers',
+    entity_history:        'entity_history',
+  };
+
+  // Build POS-compatible plural-keyed export object
+  const exportPayload: Record<string, any[]> = {};
+  for (const [singular, plural] of Object.entries(ENTITY_TO_TABLE)) {
+    exportPayload[plural] = structured[singular] || [];
+  }
+  // Include any unknown entity types future-proofed (pass through as-is)
+  for (const [type, items] of Object.entries(structured)) {
+    if (!ENTITY_TO_TABLE[type]) exportPayload[type] = items;
+  }
+
   // If no synced sales, fall back to instance_sales table
-  const fallbackSales = structured.sales?.length
-    ? []
-    : db.prepare('SELECT * FROM instance_sales WHERE instance_id = ? ORDER BY date_created').all(req.params.id);
+  if (!exportPayload.sales?.length) {
+    exportPayload.sales = db
+      .prepare('SELECT * FROM instance_sales WHERE instance_id = ? ORDER BY date_created')
+      .all(req.params.id) as any[];
+  }
 
   res.json({
     exported_at: new Date().toISOString(),
     instance: {
-      store_name:    instance.store_name,
-      owner_name:    instance.owner_name,
-      owner_mobile:  instance.owner_mobile,
-      license_plan:  instance.license_plan,
+      store_name:      instance.store_name,
+      owner_name:      instance.owner_name,
+      owner_mobile:    instance.owner_mobile,
+      license_plan:    instance.license_plan,
       approval_status: instance.approval_status,
     },
-    // POS-compatible keys (matches window.api.importData expected structure)
-    products:          structured.products          || [],
-    customers:         structured.customers         || [],
-    vendors:           structured.vendors           || [],
-    purchases:         structured.purchases         || [],
-    expenses:          structured.expenses          || [],
-    sales:             structured.sales?.length ? structured.sales : fallbackSales,
-    sale_items:        structured.sale_items        || [],
-    inventory_batches: structured.inventory_batches || [],
-    customer_payments: structured.customer_payments || [],
+    // POS-compatible table keys — importable via Settings > Restore JSON Backup
+    ...exportPayload,
     // Meta
     raw_events_count: rawEvents.length,
   });
@@ -603,9 +630,40 @@ router.get('/export-all', (req: Request, res: Response) => {
     const structured: Record<string, any[]> = {};
     for (const [type, items] of Object.entries(entityMap)) structured[type] = Array.from(items.values());
 
-    const fallbackSales = structured.sales?.length
-      ? []
-      : db.prepare('SELECT * FROM instance_sales WHERE instance_id = ? ORDER BY date_created').all(inst.instance_id);
+    const ENTITY_TO_TABLE: Record<string, string> = {
+      product:               'products',
+      customer:              'customers',
+      vendor:                'vendors',
+      purchase:              'purchases',
+      sale:                  'sales',
+      sale_item:             'sale_items',
+      expense:               'expenses',
+      account:               'accounts',
+      account_txn:           'account_txns',
+      vendor_payment:        'vendor_payments',
+      customer_payment:      'customer_payments',
+      inventory_batch:       'inventory_batches',
+      sale_return:           'sale_returns',
+      sale_return_item:      'sale_return_items',
+      purchase_return:       'purchase_returns',
+      purchase_return_item:  'purchase_return_items',
+      financial_transaction: 'financial_transactions',
+      register:              'registers',
+      entity_history:        'entity_history',
+    };
+
+    const exportPayload: Record<string, any[]> = {};
+    for (const [singular, plural] of Object.entries(ENTITY_TO_TABLE)) {
+      exportPayload[plural] = structured[singular] || [];
+    }
+    for (const [type, items] of Object.entries(structured)) {
+      if (!ENTITY_TO_TABLE[type]) exportPayload[type] = items;
+    }
+    if (!exportPayload.sales?.length) {
+      exportPayload.sales = db
+        .prepare('SELECT * FROM instance_sales WHERE instance_id = ? ORDER BY date_created')
+        .all(inst.instance_id) as any[];
+    }
 
     return {
       instance: {
@@ -621,15 +679,7 @@ router.get('/export-all', (req: Request, res: Response) => {
         total_customers: inst.total_customers,
         total_products:  inst.total_products,
       },
-      products:          structured.products          || [],
-      customers:         structured.customers         || [],
-      vendors:           structured.vendors           || [],
-      purchases:         structured.purchases         || [],
-      expenses:          structured.expenses          || [],
-      sales:             structured.sales?.length ? structured.sales : fallbackSales,
-      sale_items:        structured.sale_items        || [],
-      inventory_batches: structured.inventory_batches || [],
-      customer_payments: structured.customer_payments || [],
+      ...exportPayload,
     };
   });
 
@@ -1009,6 +1059,88 @@ router.get('/analytics', (req: Request, res: Response) => {
     WHERE entity_type = 'vendor' AND operation = 'create'
   `).get() as any)?.cnt ?? 0;
 
+  // ── Profit & Loss — monthly revenue vs expenses ───────────────────────────
+  const plRevenue = (db.prepare(`
+    SELECT strftime('%Y-%m', date_created) AS month,
+           COALESCE(SUM(total), 0) AS revenue
+    FROM instance_sales
+    WHERE ${hasDateRange
+      ? "date(date_created) BETWEEN ? AND ?"
+      : "date_created >= datetime('now', '-12 months')"}
+    GROUP BY month ORDER BY month
+  `).all(...(hasDateRange ? [date_from, date_to] : []))) as Array<{ month: string; revenue: number }>;
+
+  const plExpenses = (db.prepare(`
+    SELECT strftime('%Y-%m', received_at) AS month,
+           COALESCE(SUM(CAST(json_extract(payload, '$.amount') AS REAL)), 0) AS expenses
+    FROM sync_events
+    WHERE entity_type = 'expense' AND operation != 'delete'
+      AND ${hasDateRange
+        ? "date(received_at) BETWEEN ? AND ?"
+        : "received_at >= datetime('now', '-12 months')"}
+    GROUP BY month ORDER BY month
+  `).all(...(hasDateRange ? [date_from, date_to] : []))) as Array<{ month: string; expenses: number }>;
+
+  const plMerge = new Map<string, { revenue: number; expenses: number }>();
+  for (const r of plRevenue)  plMerge.set(r.month, { revenue: r.revenue, expenses: 0 });
+  for (const e of plExpenses) {
+    const ex = plMerge.get(e.month) ?? { revenue: 0, expenses: 0 };
+    plMerge.set(e.month, { ...ex, expenses: e.expenses });
+  }
+  const profitLossData = Array.from(plMerge.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, d]) => ({
+      month,
+      revenue:  Math.round(d.revenue),
+      expenses: Math.round(d.expenses),
+      profit:   Math.round(d.revenue - d.expenses),
+    }));
+
+  // ── Store Registration Trend — monthly new instances (last 12 months) ─────
+  const registrationsTrend = db.prepare(`
+    SELECT strftime('%Y-%m', created_at) AS month, COUNT(*) AS count
+    FROM instances
+    WHERE created_at >= datetime('now', '-12 months')
+    GROUP BY month ORDER BY month
+  `).all() as Array<{ month: string; count: number }>;
+
+  // Running cumulative total for each month
+  let cumulative = 0;
+  const registrationsCumulative = registrationsTrend.map(r => {
+    cumulative += r.count;
+    return { month: r.month, newStores: r.count, total: cumulative };
+  });
+
+  // ── Account stats — from sync_events ─────────────────────────────────────
+  const accountTypeDist = db.prepare(`
+    SELECT
+      COALESCE(NULLIF(json_extract(payload, '$.type'), ''), 'other') AS account_type,
+      COUNT(*) AS count,
+      COALESCE(SUM(CAST(json_extract(payload, '$.balance') AS REAL)), 0) AS total_balance
+    FROM sync_events
+    WHERE entity_type = 'account' AND operation = 'create'
+    GROUP BY account_type ORDER BY total_balance DESC
+  `).all() as Array<{ account_type: string; count: number; total_balance: number }>;
+
+  const accountTxnVolume = db.prepare(`
+    SELECT
+      COALESCE(NULLIF(json_extract(payload, '$.type'), ''), 'debit') AS txn_type,
+      COUNT(*) AS count,
+      COALESCE(SUM(CAST(json_extract(payload, '$.amount') AS REAL)), 0) AS total_amount
+    FROM sync_events
+    WHERE entity_type = 'account_txn' AND operation = 'create'
+    GROUP BY txn_type ORDER BY total_amount DESC
+  `).all() as Array<{ txn_type: string; count: number; total_amount: number }>;
+
+  const totalAccountBalance = ((db.prepare(`
+    SELECT COALESCE(SUM(CAST(json_extract(payload, '$.balance') AS REAL)), 0) AS total
+    FROM sync_events WHERE entity_type = 'account' AND operation = 'create'
+  `).get() as any) ?? {}).total ?? 0;
+
+  const totalAccountTxns = ((db.prepare(`
+    SELECT COUNT(*) AS cnt FROM sync_events WHERE entity_type = 'account_txn' AND operation = 'create'
+  `).get() as any) ?? {}).cnt ?? 0;
+
   res.json({
     success: true,
     data: {
@@ -1020,6 +1152,15 @@ router.get('/analytics', (req: Request, res: Response) => {
       topEntityTypes,
       topProducts,
       totals: { ...totals, total_vendors: vendorTotal },
+      // New chart data
+      profitLossData,
+      registrationsTrend: registrationsCumulative,
+      accountStats: {
+        typeDist:      accountTypeDist,
+        txnVolume:     accountTxnVolume,
+        totalBalance:  Math.round(totalAccountBalance),
+        totalTxns:     totalAccountTxns,
+      },
     },
   });
 });
@@ -1228,6 +1369,154 @@ router.delete('/notifications/:id', (req: Request, res: Response) => {
     return;
   }
   res.json({ success: true, message: 'Notification deleted' });
+});
+
+// ─── Demo / Seed ──────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/admin/seed-demo
+ * Seeds realistic demo instances and sales data for dashboard preview.
+ * Idempotent — uses INSERT OR IGNORE, safe to call multiple times.
+ */
+router.post('/seed-demo', (_req: Request, res: Response) => {
+  try {
+    // Only run when DB is empty (no instances yet)
+    const existingCount = (db.prepare('SELECT COUNT(*) as c FROM instances').get() as any).c;
+
+    const PRODUCTS_DEMO = [
+      { name: 'Pepsi 1.5L',       category: 'Beverages',    price: 150,  purchase: 120 },
+      { name: 'Coca-Cola 500ml',  category: 'Beverages',    price: 70,   purchase: 55  },
+      { name: 'Lipton Tea 500g',  category: 'Groceries',    price: 680,  purchase: 560 },
+      { name: 'Dettol Soap',      category: 'Personal Care', price: 120, purchase: 95  },
+      { name: 'Shan Masala',      category: 'Groceries',    price: 95,   purchase: 75  },
+      { name: 'Nestle Milk 1L',   category: 'Dairy',        price: 260,  purchase: 220 },
+      { name: 'Sunsilk Shampoo',  category: 'Personal Care', price: 300, purchase: 245 },
+      { name: 'Lays Chips',       category: 'Snacks',       price: 50,   purchase: 38  },
+      { name: 'Ariel Detergent',  category: 'Household',    price: 450,  purchase: 370 },
+      { name: 'Colgate Paste',    category: 'Personal Care', price: 175, purchase: 140 },
+      { name: 'Whole Wheat Bread',category: 'Bakery',       price: 140,  purchase: 110 },
+      { name: 'Basmati Rice 5kg', category: 'Groceries',    price: 1800, purchase: 1550},
+    ];
+
+    const STORES_DEMO = [
+      { name: 'Khan General Store', owner: 'Bilal Khan',   mobile: '03001234567', plan: 'yearly',    days: 365, status: 'approved' as const },
+      { name: 'City Mart',          owner: 'Usman Raza',   mobile: '03111234567', plan: 'monthly',   days: 30,  status: 'approved' as const },
+      { name: 'Al-Baraka Traders',  owner: 'Asim Nawaz',   mobile: '03211234567', plan: 'quarterly', days: 90,  status: 'approved' as const },
+      { name: 'Metro Mini Market',  owner: 'Farhan Ahmed', mobile: '03311234567', plan: 'monthly',   days: 30,  status: 'approved' as const },
+      { name: 'Sunrise Store',      owner: 'Naveed Iqbal', mobile: '03001119876', plan: 'none',      days: 0,   status: 'pending'  as const },
+      { name: 'Green Valley Shop',  owner: 'Kamran Malik', mobile: '03121119876', plan: 'none',      days: 0,   status: 'pending'  as const },
+    ];
+
+    const rnd = (a: number, b: number) => Math.floor(Math.random() * (b - a + 1)) + a;
+    const randDate = (daysBack: number) =>
+      new Date(Date.now() - rnd(0, daysBack * 86400000)).toISOString().replace('T', ' ').slice(0, 19);
+    const hoursAgoStr = (h: number) =>
+      new Date(Date.now() - h * 3600000).toISOString().replace('T', ' ').slice(0, 19);
+
+    const insertInst = db.prepare(`
+      INSERT OR IGNORE INTO instances
+        (instance_id, store_name, owner_name, owner_mobile, business_name,
+         api_key, license_key, license_plan, license_expiry,
+         approval_status, last_seen,
+         total_sales, total_revenue, total_customers, total_products,
+         created_at, updated_at)
+      VALUES (?,?,?,?,?, ?,?,?,?, ?,?, ?,?,?,?, datetime('now',?), datetime('now',?))
+    `);
+
+    const insertSaleInst = db.prepare(`
+      INSERT OR IGNORE INTO instance_sales
+        (instance_id, pos_sale_id, total, discount, payment_method,
+         payment_status, status, items_count, items_summary, date_created)
+      VALUES (?,?,?,?,?,?,?,?,?,?)
+    `);
+
+    const insertEv = db.prepare(`
+      INSERT INTO sync_events (instance_id, entity_type, operation, payload, received_at)
+      VALUES (?,?,?,?,?)
+    `);
+
+    let instancesCreated = 0, salesCreated = 0, productsCreated = 0;
+    const PAYMENT_METHODS = ['cash', 'card', 'online'];
+
+    const seedTx = db.transaction(() => {
+      for (let si = 0; si < STORES_DEMO.length; si++) {
+        const s = STORES_DEMO[si];
+        const instanceId = `demo_${s.mobile}`;
+        const apiKey     = `ak_demo_${crypto.randomBytes(16).toString('hex')}`;
+        const licKey     = s.plan !== 'none'
+          ? generateLicenseKey({ issuedTo: s.name, fingerprint: '', plan: s.plan, durationDays: s.days }).licenseKey
+          : '';
+        const expiry = s.plan !== 'none' && s.days > 0
+          ? new Date(Date.now() + s.days * 86400000).toISOString()
+          : null;
+
+        const totalSalesEst  = s.status === 'approved' ? rnd(40, 180) : 0;
+        const totalRevEst    = totalSalesEst * rnd(300, 1400);
+        const totalCustEst   = s.status === 'approved' ? rnd(8, 50) : 0;
+        const totalProdEst   = s.status === 'approved' ? PRODUCTS_DEMO.length : 0;
+        const daysCreatedAgo = si * 7;
+
+        const res = insertInst.run(
+          instanceId, s.name, s.owner, s.mobile, s.name,
+          apiKey, licKey, s.plan, expiry,
+          s.status, hoursAgoStr(rnd(1, si * 12 + 2)),
+          totalSalesEst, totalRevEst, totalCustEst, totalProdEst,
+          `-${daysCreatedAgo} days`, `-${daysCreatedAgo} days`,
+        );
+        if (res.changes > 0) instancesCreated++;
+
+        if (s.status !== 'approved') continue;
+
+        // Sales
+        let posId = rnd(100, 999);
+        for (let i = 0; i < totalSalesEst; i++) {
+          posId++;
+          const numItems = rnd(1, 4);
+          let total = 0;
+          const parts: string[] = [];
+          for (let j = 0; j < numItems; j++) {
+            const p = PRODUCTS_DEMO[rnd(0, PRODUCTS_DEMO.length - 1)];
+            const qty = rnd(1, 3);
+            total += p.price * qty;
+            parts.push(`${p.name} (x${qty})`);
+          }
+          const disc = Math.random() > 0.85 ? Math.floor(total * rnd(5, 12) / 100) : 0;
+          try {
+            insertSaleInst.run(
+              instanceId, posId, total - disc, disc,
+              PAYMENT_METHODS[rnd(0, 2)], 'Paid', 'Completed',
+              numItems, parts.join(', '), randDate(90),
+            );
+            salesCreated++;
+          } catch { /* ignore dup */ }
+        }
+
+        // Products (sync_events)
+        for (let i = 0; i < PRODUCTS_DEMO.length; i++) {
+          const p = PRODUCTS_DEMO[i];
+          insertEv.run(
+            instanceId, 'product', 'create',
+            JSON.stringify({ id: i + 1, name: p.name, category: p.category, price: p.price, purchase_price: p.purchase, stock: rnd(10, 400) }),
+            randDate(60),
+          );
+          productsCreated++;
+        }
+      }
+    });
+
+    seedTx();
+
+    res.json({
+      success: true,
+      message: existingCount > 0
+        ? `Demo data merged (${existingCount} instances already existed)`
+        : 'Demo data seeded successfully',
+      data: { instances: instancesCreated, sales: salesCreated, products: productsCreated },
+    });
+  } catch (err: any) {
+    console.error('[seed-demo]', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 export default router;
