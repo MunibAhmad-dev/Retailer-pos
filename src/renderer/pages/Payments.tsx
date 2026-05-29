@@ -102,119 +102,30 @@ export default function Payments() {
     URL.revokeObjectURL(url);
   };
 
-  const printReceipt = async (p: any) => {
-    let html = '';
+  const buildReceiptHtml = (p: any): string => {
     const dateStr = new Date(p.date_added).toLocaleString();
     const amountStr = fmtPKR(p.amount);
-
     if (p.type === 'Customer Payment' || p.type === 'Vendor Payment') {
-      html = `
-        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; border: 1px solid #e2e8f0; max-width: 600px; margin: auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">
-          <div style="text-align: center; margin-bottom: 30px;">
-            <h1 style="margin: 0; color: #1e40af; font-size: 28px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">Payment Receipt</h1>
-            <p style="margin: 5px 0 0 0; color: #64748b; font-size: 14px;">Official Transaction Record</p>
-          </div>
-          
-          <div style="display: flex; justify-content: space-between; margin-bottom: 30px; padding: 15px; background: #f8fafc; border-radius: 8px;">
-            <div>
-              <p style="margin: 0; font-size: 10px; color: #64748b; text-transform: uppercase; font-weight: 700;">Receipt Number</p>
-              <p style="margin: 2px 0 0 0; font-weight: 700; color: #1e293b;">#PAY-${p.id}</p>
-            </div>
-            <div style="text-align: right;">
-              <p style="margin: 0; font-size: 10px; color: #64748b; text-transform: uppercase; font-weight: 700;">Date Issued</p>
-              <p style="margin: 2px 0 0 0; font-weight: 700; color: #1e293b;">${dateStr}</p>
-            </div>
-          </div>
-
-          <div style="margin-bottom: 30px;">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #f1f5f9; padding-bottom: 5px;">
-              <span style="color: #64748b;">Transaction Party</span>
-              <span style="font-weight: 700; color: #1e293b;">${p.party_name}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #f1f5f9; padding-bottom: 5px;">
-              <span style="color: #64748b;">Payment Type</span>
-              <span style="font-weight: 700; color: #1e293b;">${p.type}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: #64748b;">Notes</span>
-              <span style="font-weight: 500; color: #1e293b; font-style: italic;">${p.notes || 'No notes provided'}</span>
-            </div>
-          </div>
-
-          <div style="background: #1e40af; padding: 25px; border-radius: 10px; text-align: center; color: #fff; margin-bottom: 30px;">
-            <p style="margin: 0; text-transform: uppercase; font-size: 12px; font-weight: 700; opacity: 0.8;">Total Amount Paid</p>
-            <p style="margin: 8px 0 0 0; font-size: 36px; font-weight: 900; letter-spacing: -1px;">${amountStr}</p>
-          </div>
-
-          <div style="display: flex; justify-content: space-between; gap: 20px;">
-            <div style="flex: 1; border-top: 1px solid #e2e8f0; padding-top: 10px; text-align: center;">
-              <p style="margin: 0; font-size: 10px; color: #94a3b8; text-transform: uppercase;">Customer Signature</p>
-            </div>
-            <div style="flex: 1; border-top: 1px solid #e2e8f0; padding-top: 10px; text-align: center;">
-              <p style="margin: 0; font-size: 10px; color: #94a3b8; text-transform: uppercase;">Authorized By</p>
-            </div>
-          </div>
-          
-          <div style="margin-top: 40px; text-align: center; font-size: 11px; color: #cbd5e1;">
-            This is a computer generated receipt. No signature required.
-          </div>
-        </div>
-      `;
-    } else {
-      html = `
-        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; border: 1px solid #ffe4e6; max-width: 600px; margin: auto; background: #fff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">
-          <div style="text-align: center; margin-bottom: 30px;">
-            <h1 style="margin: 0; color: #e11d48; font-size: 28px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">Return Voucher</h1>
-            <p style="margin: 5px 0 0 0; color: #9f1239; font-size: 14px;">Official Credit Adjustment</p>
-          </div>
-          
-          <div style="display: flex; justify-content: space-between; margin-bottom: 30px; padding: 15px; background: #fff1f2; border-radius: 8px;">
-            <div>
-              <p style="margin: 0; font-size: 10px; color: #9f1239; text-transform: uppercase; font-weight: 700;">Voucher Number</p>
-              <p style="margin: 2px 0 0 0; font-weight: 700; color: #881337;">#RET-${p.id}</p>
-            </div>
-            <div style="text-align: right;">
-              <p style="margin: 0; font-size: 10px; color: #9f1239; text-transform: uppercase; font-weight: 700;">Date Issued</p>
-              <p style="margin: 2px 0 0 0; font-weight: 700; color: #881337;">${dateStr}</p>
-            </div>
-          </div>
-
-          <div style="margin-bottom: 30px;">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #fecdd3; padding-bottom: 5px;">
-              <span style="color: #9f1239;">Transaction Party</span>
-              <span style="font-weight: 700; color: #881337;">${p.party_name}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #fecdd3; padding-bottom: 5px;">
-              <span style="color: #9f1239;">Return Type</span>
-              <span style="font-weight: 700; color: #881337;">${p.type}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between;">
-              <span style="color: #9f1239;">Reason</span>
-              <span style="font-weight: 500; color: #881337; font-style: italic;">${p.notes || 'No reason provided'}</span>
-            </div>
-          </div>
-
-          <div style="background: #e11d48; padding: 25px; border-radius: 10px; text-align: center; color: #fff; margin-bottom: 30px;">
-            <p style="margin: 0; text-transform: uppercase; font-size: 12px; font-weight: 700; opacity: 0.8;">Total Refund Amount</p>
-            <p style="margin: 8px 0 0 0; font-size: 36px; font-weight: 900; letter-spacing: -1px;">${amountStr}</p>
-          </div>
-
-          <div style="display: flex; justify-content: space-between; gap: 20px;">
-            <div style="flex: 1; border-top: 1px solid #fecdd3; padding-top: 10px; text-align: center;">
-              <p style="margin: 0; font-size: 10px; color: #f43f5e; text-transform: uppercase;">Customer Acknowledgement</p>
-            </div>
-            <div style="flex: 1; border-top: 1px solid #fecdd3; padding-top: 10px; text-align: center;">
-              <p style="margin: 0; font-size: 10px; color: #f43f5e; text-transform: uppercase;">Manager Approval</p>
-            </div>
-          </div>
-          
-          <div style="margin-top: 40px; text-align: center; font-size: 11px; color: #fb7185;">
-            Generated by Retailer POS System
-          </div>
-        </div>
-      `;
+      return `<div style="font-family:'Segoe UI',sans-serif;padding:40px;border:1px solid #e2e8f0;max-width:600px;margin:auto;background:#fff;border-radius:12px"><div style="text-align:center;margin-bottom:30px"><h1 style="margin:0;color:#1e40af;font-size:28px;font-weight:800;text-transform:uppercase;letter-spacing:1px">Payment Receipt</h1><p style="margin:5px 0 0;color:#64748b;font-size:14px">Official Transaction Record</p></div><div style="display:flex;justify-content:space-between;margin-bottom:30px;padding:15px;background:#f8fafc;border-radius:8px"><div><p style="margin:0;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Receipt Number</p><p style="margin:2px 0 0;font-weight:700;color:#1e293b">#PAY-${p.id}</p></div><div style="text-align:right"><p style="margin:0;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700">Date</p><p style="margin:2px 0 0;font-weight:700;color:#1e293b">${dateStr}</p></div></div><div style="margin-bottom:30px"><div style="display:flex;justify-content:space-between;margin-bottom:10px;border-bottom:1px solid #f1f5f9;padding-bottom:5px"><span style="color:#64748b">Party</span><span style="font-weight:700;color:#1e293b">${p.party_name}</span></div><div style="display:flex;justify-content:space-between;margin-bottom:10px;border-bottom:1px solid #f1f5f9;padding-bottom:5px"><span style="color:#64748b">Type</span><span style="font-weight:700;color:#1e293b">${p.type}</span></div><div style="display:flex;justify-content:space-between"><span style="color:#64748b">Notes</span><span style="font-style:italic;color:#1e293b">${p.notes || '—'}</span></div></div><div style="background:#1e40af;padding:25px;border-radius:10px;text-align:center;color:#fff;margin-bottom:30px"><p style="margin:0;font-size:12px;font-weight:700;opacity:.8;text-transform:uppercase">Amount</p><p style="margin:8px 0 0;font-size:36px;font-weight:900;letter-spacing:-1px">${amountStr}</p></div><div style="text-align:center;font-size:11px;color:#cbd5e1;margin-top:30px">Computer generated receipt — No signature required.</div></div>`;
     }
-    await window.api.printInvoice(html);
+    return `<div style="font-family:'Segoe UI',sans-serif;padding:40px;border:1px solid #ffe4e6;max-width:600px;margin:auto;background:#fff;border-radius:12px"><div style="text-align:center;margin-bottom:30px"><h1 style="margin:0;color:#e11d48;font-size:28px;font-weight:800;text-transform:uppercase;letter-spacing:1px">Return Voucher</h1><p style="margin:5px 0 0;color:#9f1239;font-size:14px">Official Credit Adjustment</p></div><div style="display:flex;justify-content:space-between;margin-bottom:30px;padding:15px;background:#fff1f2;border-radius:8px"><div><p style="margin:0;font-size:10px;color:#9f1239;text-transform:uppercase;font-weight:700">Voucher</p><p style="margin:2px 0 0;font-weight:700;color:#881337">#RET-${p.id}</p></div><div style="text-align:right"><p style="margin:0;font-size:10px;color:#9f1239;text-transform:uppercase;font-weight:700">Date</p><p style="margin:2px 0 0;font-weight:700;color:#881337">${dateStr}</p></div></div><div style="margin-bottom:30px"><div style="display:flex;justify-content:space-between;margin-bottom:10px;border-bottom:1px solid #fecdd3;padding-bottom:5px"><span style="color:#9f1239">Party</span><span style="font-weight:700;color:#881337">${p.party_name}</span></div><div style="display:flex;justify-content:space-between;margin-bottom:10px;border-bottom:1px solid #fecdd3;padding-bottom:5px"><span style="color:#9f1239">Type</span><span style="font-weight:700;color:#881337">${p.type}</span></div><div style="display:flex;justify-content:space-between"><span style="color:#9f1239">Reason</span><span style="font-style:italic;color:#881337">${p.notes || '—'}</span></div></div><div style="background:#e11d48;padding:25px;border-radius:10px;text-align:center;color:#fff;margin-bottom:30px"><p style="margin:0;font-size:12px;font-weight:700;opacity:.8;text-transform:uppercase">Refund Amount</p><p style="margin:8px 0 0;font-size:36px;font-weight:900;letter-spacing:-1px">${amountStr}</p></div><div style="text-align:center;font-size:11px;color:#fb7185;margin-top:30px">Generated by Retailer POS System</div></div>`;
+  };
+
+  const savePdf = async (p: any) => {
+    try {
+      const result = await window.api.saveInvoicePdf(buildReceiptHtml(p));
+      if (result?.success) {
+        addNotification('PDF Saved', 'Payment receipt PDF saved.', 'success');
+      } else if (result?.error && result.error !== 'Cancelled') {
+        addNotification('PDF Failed', result.error || 'Could not generate PDF.', 'error');
+      }
+    } catch (err: any) {
+      addNotification('PDF Error', err?.message || 'Unexpected error.', 'error');
+    }
+  };
+
+  const printReceipt = async (p: any) => {
+    await window.api.printInvoice(buildReceiptHtml(p));
   };
 
   const shareWhatsApp = (p: any) => {
@@ -402,6 +313,9 @@ export default function Payments() {
                       <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-blue-500" onClick={() => printReceipt(p)} title="Print Receipt">
                           <Printer size={15} />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-violet-500 hover:text-violet-600 hover:bg-violet-500/10" onClick={() => savePdf(p)} title="Save as PDF">
+                          <Download size={15} />
                         </Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-emerald-500" onClick={() => shareWhatsApp(p)} title="Share on WhatsApp">
                           <MessageCircle size={15} />

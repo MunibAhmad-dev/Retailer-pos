@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { ShoppingBag, Search, Plus, CheckCircle, RefreshCw, Trash2, Package,
-  Truck, Receipt, X, Banknote } from 'lucide-react';
+  Truck, Receipt, X, Banknote, ShoppingCart, Tag } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -57,6 +57,8 @@ export default function Purchases() {
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<number | ''>('');
+  const [discount, setDiscount] = useState('');
+  const [transportCharges, setTransportCharges] = useState('');
   const { addNotification } = useNotifications();
   const { modules } = useModules();
 
@@ -125,7 +127,10 @@ export default function Purchases() {
     setCart(prev => prev.map((i) => i.id === id ? { ...i, purchase_price: price } : i));
   };
 
-  const total = cart.reduce((s, i) => s + i.purchase_price * i.quantity, 0);
+  const itemsSubtotal = cart.reduce((s, i) => s + i.purchase_price * i.quantity, 0);
+  const discountVal = parseFloat(discount) || 0;
+  const transportVal = parseFloat(transportCharges) || 0;
+  const grandTotal = Math.max(0, itemsSubtotal - discountVal + transportVal);
 
   const processPurchase = async () => {
     if (cart.length === 0 || isProcessing) return;
@@ -142,7 +147,9 @@ export default function Purchases() {
       const paid = parseFloat(amountPaid) || 0;
       const res = await window.api.createPurchase({
         vendor_id: Number(selectedVendorId),
-        total,
+        total: itemsSubtotal,
+        discount: discountVal,
+        transport_charges: transportVal,
         amount_paid: paid,
         account_id: selectedAccountId ? Number(selectedAccountId) : undefined,
         items: cart.map((c) => ({
@@ -157,6 +164,8 @@ export default function Purchases() {
         addNotification('Success', 'Purchase Order completed and stock updated!', 'success');
         setCart([]);
         setAmountPaid('');
+        setDiscount('');
+        setTransportCharges('');
         setSelectedVendorId('');
         setSelectedAccountId('');
         setShowCheckoutModal(false);
@@ -225,7 +234,7 @@ export default function Purchases() {
                 className="flex items-center gap-2 bg-green-500 hover:bg-green-400 rounded-xl px-5 py-2.5 text-white text-sm font-semibold shadow-lg shadow-green-500/30 transition-all duration-200"
               >
                 <CheckCircle size={15} />
-                Process Purchase · {fmtPKR(total)}
+                Process Purchase · {fmtPKR(grandTotal)}
               </button>
             )}
           </div>
@@ -263,6 +272,28 @@ export default function Purchases() {
           </CardHeader>
 
           <CardContent className="flex-1 overflow-y-auto p-0 custom-scrollbar">
+            {/* ── To-Order products — quick-add strip ── */}
+            {!searchTerm && products.filter(p => (p as any).purchase_status === 'to_order').length > 0 && (
+              <div className="px-3 pt-3 pb-2 border-b border-amber-500/20 bg-amber-500/5">
+                <p className="text-[10px] font-black uppercase tracking-widest text-amber-600 dark:text-amber-400 mb-2 flex items-center gap-1.5">
+                  <ShoppingCart size={11} /> Products Marked to Order
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {products.filter(p => (p as any).purchase_status === 'to_order').map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => addProductToCart(p)}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400 text-xs font-semibold hover:bg-amber-500/20 transition-colors"
+                    >
+                      <ShoppingCart size={10} />
+                      {p.name}
+                      <span className="text-[10px] opacity-70">{fmtPKR(p.purchase_price || 0)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {filteredProducts.slice(0, 50).map((product: Product) => (
               <div
                 key={product.id}
@@ -381,7 +412,7 @@ export default function Purchases() {
           <CardFooter className="p-4 border-t flex flex-col gap-3 bg-muted/10 shrink-0">
             <div className="flex justify-between w-full items-center">
               <span className="text-sm font-semibold text-muted-foreground">Bill Total</span>
-              <span className="text-xl font-black text-primary">{fmtPKR(total)}</span>
+              <span className="text-xl font-black text-primary">{fmtPKR(grandTotal)}</span>
             </div>
             <Button
               className="w-full h-11 text-sm font-bold bg-green-600 hover:bg-green-500 shadow-lg shadow-green-500/20"
@@ -415,7 +446,7 @@ export default function Purchases() {
                   </div>
                   <div>
                     <h2 className="text-white text-base font-bold">Finalize Purchase Order</h2>
-                    <p className="text-green-300/70 text-xs mt-0.5">{cart.length} item(s) · {fmtPKR(total)}</p>
+                    <p className="text-green-300/70 text-xs mt-0.5">{cart.length} item(s) · {fmtPKR(grandTotal)}</p>
                   </div>
                 </div>
                 <button
@@ -477,10 +508,56 @@ export default function Purchases() {
 
               {/* Bill Summary */}
               <div className="bg-muted/30 rounded-xl border border-border/50 p-4 space-y-3">
-                <div className="flex justify-between text-sm font-medium">
-                  <span className="text-muted-foreground">Total Bill Amount</span>
-                  <span className="font-bold text-lg">{fmtPKR(total)}</span>
+
+                {/* Subtotal + adjustments */}
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Items Subtotal</span>
+                    <span className="font-semibold">{fmtPKR(itemsSubtotal)}</span>
+                  </div>
+
+                  {/* Discount */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 w-28 shrink-0">
+                      <Tag size={12} className="text-emerald-500 shrink-0" />
+                      <label className="text-xs font-semibold text-muted-foreground">Discount</label>
+                    </div>
+                    <Input
+                      type="text"
+                      value={discount}
+                      onChange={(e) => setDiscount(e.target.value.replace(/[^0-9.]/g, ''))}
+                      placeholder="0"
+                      className="h-8 text-sm flex-1 border-emerald-500/30 focus-visible:ring-emerald-500/30"
+                    />
+                    {discountVal > 0 && (
+                      <span className="text-xs font-bold text-emerald-600 shrink-0">−{fmtPKR(discountVal)}</span>
+                    )}
+                  </div>
+
+                  {/* Transport Charges */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 w-28 shrink-0">
+                      <Truck size={12} className="text-amber-500 shrink-0" />
+                      <label className="text-xs font-semibold text-muted-foreground">Transport</label>
+                    </div>
+                    <Input
+                      type="text"
+                      value={transportCharges}
+                      onChange={(e) => setTransportCharges(e.target.value.replace(/[^0-9.]/g, ''))}
+                      placeholder="0"
+                      className="h-8 text-sm flex-1 border-amber-500/30 focus-visible:ring-amber-500/30"
+                    />
+                    {transportVal > 0 && (
+                      <span className="text-xs font-bold text-amber-600 shrink-0">+{fmtPKR(transportVal)}</span>
+                    )}
+                  </div>
+
+                  <div className="flex justify-between text-sm font-bold border-t border-border/50 pt-2 mt-1">
+                    <span>Grand Total</span>
+                    <span className="text-lg text-primary">{fmtPKR(grandTotal)}</span>
+                  </div>
                 </div>
+
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Amount Paid Today</label>
                   <Input
@@ -490,14 +567,14 @@ export default function Purchases() {
                       const raw = e.target.value.replace(/[^0-9]/g, '');
                       if (!raw) { setAmountPaid(''); return; }
                       const num = parseInt(raw, 10) || 0;
-                      setAmountPaid(String(Math.min(num, Math.ceil(total))));
+                      setAmountPaid(String(Math.min(num, Math.ceil(grandTotal))));
                     }}
                     placeholder="0"
                     className="font-bold text-base h-11"
                   />
                   {selectedVendorId && (
                     <p className="text-xs text-muted-foreground">
-                      Remaining {fmtPKR(Math.max(0, total - (parseFloat(amountPaid) || 0)))} → vendor's payable balance
+                      Remaining {fmtPKR(Math.max(0, grandTotal - (parseFloat(amountPaid) || 0)))} → vendor's payable balance
                     </p>
                   )}
                 </div>

@@ -411,10 +411,15 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
               {PERIODS.map((p) => (
                 <button key={p.id}
                   onClick={() => { setPeriod(p.id); if (p.id !== 'custom') loadStats(true, { p: p.id }); }}
-                  className={cn('h-7 px-3 text-xs font-semibold rounded-lg transition-all duration-200',
+                  className={cn('relative h-7 px-3 text-xs font-semibold rounded-lg transition-all duration-200',
                     period === p.id ? 'bg-background text-primary shadow-sm border border-border/30' : 'text-muted-foreground hover:text-foreground'
                   )}
-                >{p.label}</button>
+                >
+                  {p.label}
+                  {loading && period === p.id && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-primary animate-pulse shadow-sm shadow-primary/50" />
+                  )}
+                </button>
               ))}
             </div>
             {/* Lock Dashboard — covers content area, sidebar stays usable */}
@@ -451,7 +456,7 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
       </motion.div>
 
       {stats && (
-        <>
+        <div className="flex flex-col gap-5" style={{ opacity: loading ? 0.72 : 1, transition: 'opacity 0.25s ease' }}>
           {/* ── Bakery Dashboard Section ── */}
           {modules.bakery && bakeryData && (
             <motion.div custom={0.5} variants={fadeUp} initial="hidden" animate="visible">
@@ -666,15 +671,17 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
           {/* ── Accounts & Cash Section ── */}
           {modules.accounting && accounts.length > 0 && (
             <motion.div custom={9} variants={fadeUp} initial="hidden" animate="visible">
-              <div className="rounded-2xl border border-border/50 bg-card p-5 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
+              <div className="rounded-2xl bg-card p-5 relative overflow-hidden" style={{ border: '1px solid rgba(16,185,129,0.2)', boxShadow: '0 4px 24px -4px rgba(16,185,129,0.10), 0 1px 4px rgba(0,0,0,0.05)' }}>
+                {/* Top accent bar */}
+                <div className="absolute top-0 left-0 right-0 h-[3px] bg-gradient-to-r from-emerald-600 via-teal-500 to-cyan-400" />
+                <div className="flex items-center justify-between mb-4 mt-1">
                   <div className="flex items-center gap-2.5">
-                    <div className="p-2 rounded-xl bg-emerald-500/10">
+                    <div className="p-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
                       <Wallet size={15} className="text-emerald-600 dark:text-emerald-400" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-semibold">Accounts & Cash</h3>
-                      <p className="text-[10px] text-muted-foreground/70 mt-0.5">Live balances across all accounts</p>
+                      <h3 className="text-sm font-bold">Accounts & Cash</h3>
+                      <p className="text-[11px] text-muted-foreground/70 mt-0.5">Live balances across all accounts</p>
                     </div>
                   </div>
                   <Link to="/accounts">
@@ -735,11 +742,11 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                           <BarChart
                             data={accountChartData}
                             layout="vertical"
-                            margin={{ top: 4, right: 50, left: 4, bottom: 4 }}
-                            barSize={hasFlow ? 9 : 14}
-                            barCategoryGap="25%"
+                            margin={{ top: 4, right: 54, left: 4, bottom: 4 }}
+                            barSize={hasFlow ? 10 : 15}
+                            barCategoryGap="28%"
                           >
-                            <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border) / 0.25)" horizontal={false} />
+                            <CartesianGrid strokeDasharray="2 4" stroke="hsl(var(--border) / 0.3)" horizontal={false} />
                             <XAxis
                               type="number" fontSize={9} tickLine={false} axisLine={false}
                               tick={{ fill: 'hsl(var(--muted-foreground))' }}
@@ -758,7 +765,7 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                               tick={{ fill: 'hsl(var(--muted-foreground))' }}
                             />
                             <Tooltip
-                              contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '14px', border: '1px solid hsl(var(--border))', fontSize: 11 }}
+                              contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '16px', border: '1px solid hsl(var(--border))', fontSize: 11, boxShadow: '0 8px 30px rgba(0,0,0,0.12)' }}
                               formatter={(v: any, name: string) => [fmt(Number(v)), name]}
                             />
                             {hasFlow ? (
@@ -789,20 +796,26 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                       {/* 30-Day trend — only when there is real data */}
                       {hasTrend && (
                         <div>
-                          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">30-Day Cash Flow Trend</p>
-                          <ResponsiveContainer width="100%" height={130}>
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-[10px] font-black text-muted-foreground/60 uppercase tracking-widest">30-Day Cash Flow Trend</p>
+                            <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" style={{ boxShadow: '0 0 5px rgba(16,185,129,0.6)' }} />In</span>
+                              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500" style={{ boxShadow: '0 0 5px rgba(239,68,68,0.6)' }} />Out</span>
+                            </div>
+                          </div>
+                          <ResponsiveContainer width="100%" height={140}>
                             <ComposedChart data={cashFlowChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                               <defs>
                                 <linearGradient id="inGrad" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.18} />
+                                  <stop offset="0%" stopColor="#10b981" stopOpacity={0.28} />
                                   <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
                                 </linearGradient>
                                 <linearGradient id="outGrad" x1="0" y1="0" x2="0" y2="1">
-                                  <stop offset="0%" stopColor="#ef4444" stopOpacity={0.15} />
+                                  <stop offset="0%" stopColor="#ef4444" stopOpacity={0.22} />
                                   <stop offset="100%" stopColor="#ef4444" stopOpacity={0} />
                                 </linearGradient>
                               </defs>
-                              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border) / 0.3)" />
+                              <CartesianGrid strokeDasharray="2 4" vertical={false} stroke="hsl(var(--border) / 0.35)" />
                               <XAxis dataKey="day" fontSize={9} tickLine={false} axisLine={false}
                                 tick={{ fill: 'hsl(var(--muted-foreground))' }} minTickGap={32} interval="preserveStartEnd"
                                 tickFormatter={str => { const d = new Date(str); return isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); }}
@@ -812,13 +825,12 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                                 tickFormatter={v => { const n = Number(v); if (n === 0) return '0'; if (n >= 100000) return `${(n/100000).toFixed(1)}L`; return `${Math.round(n/1000)}k`; }}
                               />
                               <Tooltip
-                                contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '14px', border: '1px solid hsl(var(--border))', fontSize: 11 }}
+                                contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '16px', border: '1px solid hsl(var(--border))', fontSize: 11, boxShadow: '0 8px 30px rgba(0,0,0,0.12)' }}
                                 formatter={(v: any, name: string) => [fmt(Number(v)), name]}
                                 labelFormatter={str => { const d = new Date(str); return isNaN(d.getTime()) ? str : d.toLocaleDateString('en-PK', { month: 'short', day: 'numeric' }); }}
                               />
-                              <Legend wrapperStyle={{ fontSize: 10 }} iconType="circle" iconSize={7} />
-                              <Area type="monotone" dataKey="moneyIn" name="Money In" stroke="#10b981" strokeWidth={2} fill="url(#inGrad)" dot={false} />
-                              <Area type="monotone" dataKey="moneyOut" name="Money Out" stroke="#ef4444" strokeWidth={2} fill="url(#outGrad)" dot={false} />
+                              <Area type="monotone" dataKey="moneyIn" name="Money In" stroke="#10b981" strokeWidth={2.2} fill="url(#inGrad)" dot={false} />
+                              <Area type="monotone" dataKey="moneyOut" name="Money Out" stroke="#ef4444" strokeWidth={2.2} fill="url(#outGrad)" dot={false} />
                             </ComposedChart>
                           </ResponsiveContainer>
                         </div>
@@ -835,17 +847,25 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
 
               {/* Revenue Overview — 3/5 */}
-              <div className="lg:col-span-3 rounded-2xl border border-border/50 bg-card shadow-sm overflow-hidden">
-                <div className="flex items-center justify-between p-5 pb-2">
+              <div className="lg:col-span-3 rounded-2xl bg-card overflow-hidden relative" style={{ border: '1px solid rgba(99,102,241,0.2)', boxShadow: '0 4px 28px -4px rgba(99,102,241,0.14), 0 1px 4px rgba(0,0,0,0.06)' }}>
+                {/* Top accent bar */}
+                <div className="h-[3px] bg-gradient-to-r from-indigo-600 via-violet-500 to-indigo-400" />
+                <div className="flex items-center justify-between px-5 pt-4 pb-3">
                   <div>
-                    <h3 className="text-sm font-semibold flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block animate-pulse" />
-                      Revenue Overview
-                    </h3>
-                    <p className="text-xs text-muted-foreground mt-0.5">Daily performance metrics</p>
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-indigo-500 inline-block" style={{ boxShadow: '0 0 8px rgba(99,102,241,0.65)' }} />
+                      <h3 className="text-sm font-bold tracking-tight">Revenue Overview</h3>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground/70 ml-[18px]">Daily sales trend for selected period</p>
                   </div>
+                  {salesTrend.length > 0 && (
+                    <div className="text-right shrink-0">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/50 mb-0.5">Period Total</p>
+                      <p className="text-lg font-black text-indigo-500 tabular-nums">{fmt(salesTrend.reduce((s: number, r: any) => s + r.revenue, 0))}</p>
+                    </div>
+                  )}
                 </div>
-                <div className="h-[272px] px-1 pb-2">
+                <div className="h-[264px] pb-3">
                   {salesTrend.length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center gap-2 text-muted-foreground">
                       <BarChart3 size={32} className="opacity-20" />
@@ -853,14 +873,15 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                     </div>
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={salesTrend} margin={{ top: 12, right: 16, left: 0, bottom: 0 }}>
+                      <AreaChart data={salesTrend} margin={{ top: 8, right: 18, left: 0, bottom: 0 }}>
                         <defs>
                           <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#6366f1" stopOpacity={0.22} />
+                            <stop offset="0%" stopColor="#6366f1" stopOpacity={0.32} />
+                            <stop offset="50%" stopColor="#6366f1" stopOpacity={0.10} />
                             <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
                           </linearGradient>
                         </defs>
-                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border) / 0.5)" />
+                        <CartesianGrid strokeDasharray="2 4" vertical={false} stroke="hsl(var(--border) / 0.4)" />
                         <XAxis dataKey="date" fontSize={10} tickLine={false} axisLine={false}
                           tick={{ fill: 'hsl(var(--muted-foreground))' }} minTickGap={28} interval="preserveStartEnd"
                           tickFormatter={str => { const d = new Date(str); return isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }); }}
@@ -871,9 +892,8 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                         />
                         <Tooltip content={<RevTooltip />} />
                         <Area type="monotone" dataKey="revenue" stroke="#6366f1" strokeWidth={2.5}
-                          fill="url(#revGrad)"
-                          dot={{ fill: '#6366f1', strokeWidth: 2, r: 3.5, stroke: 'hsl(var(--card))' }}
-                          activeDot={{ r: 5.5, stroke: '#6366f1', strokeWidth: 2.5, fill: 'hsl(var(--card))' }}
+                          fill="url(#revGrad)" dot={false}
+                          activeDot={{ r: 6, stroke: '#6366f1', strokeWidth: 2.5, fill: 'hsl(var(--card))' }}
                         />
                       </AreaChart>
                     </ResponsiveContainer>
@@ -882,25 +902,40 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
               </div>
 
               {/* Stock Summary — 2/5 */}
-              <div className="lg:col-span-2 rounded-2xl border border-border/50 bg-card shadow-sm overflow-hidden">
-                <div className="p-5 pb-2">
-                  <h3 className="text-sm font-semibold flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
-                    Stock Summary
-                  </h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">Inventory health overview</p>
+              <div className="lg:col-span-2 rounded-2xl bg-card overflow-hidden relative" style={{ border: `1px solid ${outOfStockCount > 0 ? 'rgba(239,68,68,0.2)' : lowStockCount > 0 ? 'rgba(245,158,11,0.2)' : 'rgba(16,185,129,0.2)'}`, boxShadow: `0 4px 24px -4px ${outOfStockCount > 0 ? 'rgba(239,68,68,0.10)' : lowStockCount > 0 ? 'rgba(245,158,11,0.10)' : 'rgba(16,185,129,0.10)'}, 0 1px 4px rgba(0,0,0,0.05)` }}>
+                {/* Top accent bar */}
+                <div className={cn("h-[3px]", outOfStockCount > 0 ? "bg-gradient-to-r from-red-600 to-rose-400" : lowStockCount > 0 ? "bg-gradient-to-r from-amber-500 to-yellow-400" : "bg-gradient-to-r from-emerald-600 to-teal-400")} />
+                <div className="px-5 pt-4 pb-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className={cn("w-2.5 h-2.5 rounded-full inline-block", outOfStockCount > 0 ? "bg-red-500" : lowStockCount > 0 ? "bg-amber-500" : "bg-emerald-500")} />
+                        <h3 className="text-sm font-bold tracking-tight">Stock Summary</h3>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground/70 ml-[18px]">Inventory health overview</p>
+                    </div>
+                    <span className={cn("text-[10px] font-bold px-2.5 py-1 rounded-full border",
+                      outOfStockCount > 0
+                        ? "bg-red-500/10 border-red-500/20 text-red-600 dark:text-red-400"
+                        : lowStockCount > 0
+                        ? "bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-400"
+                        : "bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+                    )}>
+                      {outOfStockCount > 0 ? `${outOfStockCount} out of stock` : lowStockCount > 0 ? `${lowStockCount} low stock` : 'All good ✓'}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex flex-col" style={{ height: 272 }}>
+                <div className="flex flex-col">
                   {stockSummaryData.length === 0 ? (
                     /* fallback: payment methods */
                     paymentData.length === 0 ? (
-                      <div className="flex-1 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                      <div className="h-40 flex flex-col items-center justify-center gap-2 text-muted-foreground">
                         <Boxes size={32} className="opacity-20" />
                         <p className="text-xs">No stock data available</p>
                       </div>
                     ) : (
                       <>
-                        <div className="flex-1">
+                        <div style={{ height: 180 }}>
                           <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
                               <Pie data={paymentData} cx="50%" cy="48%" innerRadius={52} outerRadius={78}
@@ -936,17 +971,17 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                     )
                   ) : (
                     <>
-                      <div className="flex-1 relative">
+                      <div className="relative" style={{ height: 200 }}>
                         <ResponsiveContainer width="100%" height="100%">
                           <PieChart>
-                            <Pie data={stockSummaryData} cx="50%" cy="50%" innerRadius={58} outerRadius={84}
+                            <Pie data={stockSummaryData} cx="50%" cy="50%" innerRadius={60} outerRadius={86}
                               paddingAngle={3} dataKey="value" nameKey="name" stroke="none">
                               {stockSummaryData.map((entry: any, idx: number) => (
                                 <Cell key={idx} fill={entry.color} />
                               ))}
                             </Pie>
                             <Tooltip
-                              contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '14px', border: '1px solid hsl(var(--border))', fontSize: '12px', boxShadow: '0 20px 40px rgba(0,0,0,0.12)' }}
+                              contentStyle={{ backgroundColor: 'hsl(var(--card))', borderRadius: '16px', border: '1px solid hsl(var(--border))', fontSize: '12px', boxShadow: '0 8px 30px rgba(0,0,0,0.12)' }}
                               formatter={(v: any, n: any) => [`${v} items`, n]}
                             />
                           </PieChart>
@@ -957,23 +992,28 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                           <p className="text-[10px] text-muted-foreground font-medium">Total Items</p>
                         </div>
                       </div>
-                      <div className="px-4 pb-3 space-y-1.5">
+                      <div className="px-4 pb-4 space-y-2.5">
                         {stockSummaryData.map((seg: any) => {
                           const pct = totalStockItems > 0 ? Math.round((seg.value / totalStockItems) * 100) : 0;
                           return (
-                            <div key={seg.name} className="flex items-center justify-between text-xs">
-                              <div className="flex items-center gap-2">
-                                <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: seg.color }} />
-                                <span className="text-muted-foreground">{seg.name}</span>
+                            <div key={seg.name}>
+                              <div className="flex items-center justify-between text-xs mb-1">
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: seg.color }} />
+                                  <span className="text-muted-foreground/90 font-medium">{seg.name}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-bold tabular-nums">{seg.value.toLocaleString()}</span>
+                                  <span className="text-muted-foreground text-[10px] w-7 text-right">{pct}%</span>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold tabular-nums">{seg.value.toLocaleString()}</span>
-                                <span className="text-muted-foreground text-[10px] w-8 text-right">({pct}%)</span>
+                              <div className="h-1.5 rounded-full bg-muted/60 overflow-hidden">
+                                <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, backgroundColor: seg.color, boxShadow: `0 0 6px ${seg.color}80` }} />
                               </div>
                             </div>
                           );
                         })}
-                        <Link to="/inventory" className="block mt-1">
+                        <Link to="/inventory" className="block mt-1.5">
                           <div className="flex items-center gap-1 text-[11px] text-primary font-semibold hover:underline">
                             <BarChart3 size={11} /> View Stock Report →
                           </div>
@@ -988,27 +1028,29 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
 
           {/* ── Profit & Loss Multi-Level Chart ── */}
           <motion.div custom={10.5} variants={fadeUp} initial="hidden" animate="visible">
-            <div className="rounded-2xl border border-border/50 bg-card shadow-sm overflow-hidden">
+            <div className="rounded-2xl bg-card overflow-hidden" style={{ border: '1px solid rgba(139,92,246,0.18)', boxShadow: '0 4px 28px -4px rgba(139,92,246,0.12), 0 1px 4px rgba(0,0,0,0.06)' }}>
+              {/* Top accent bar */}
+              <div className="h-[3px] bg-gradient-to-r from-violet-600 via-purple-500 to-indigo-500" />
               {/* Header */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between p-5 pb-3 gap-3 border-b border-border/40">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between px-5 pt-4 pb-4 gap-3 border-b border-border/30">
                 <div>
-                  <h3 className="text-sm font-semibold flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-violet-500 inline-block" />
-                    Profit &amp; Loss — Last 30 Days
-                  </h3>
-                  <p className="text-xs text-muted-foreground mt-0.5">Revenue · COGS · Expenses · Gross &amp; Net Profit</p>
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-violet-500 inline-block" style={{ boxShadow: '0 0 8px rgba(139,92,246,0.65)' }} />
+                    <h3 className="text-sm font-bold tracking-tight">Profit &amp; Loss — Last 30 Days</h3>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground/70 ml-[18px]">Revenue · COGS · Expenses · Gross &amp; Net Profit</p>
                 </div>
                 {plChartData.length > 0 && (
-                  <div className="flex flex-wrap gap-x-5 gap-y-1.5 shrink-0">
+                  <div className="flex flex-wrap gap-2 shrink-0">
                     {[
-                      { label: 'Revenue',     value: plTotals.revenue,     color: 'text-blue-500'   },
-                      { label: 'COGS',        value: plTotals.cogs,        color: 'text-orange-500' },
-                      { label: 'Expenses',    value: plTotals.expenses,    color: 'text-red-500'    },
-                      { label: 'Gross',       value: plTotals.grossProfit, color: plTotals.grossProfit >= 0 ? 'text-emerald-500' : 'text-red-500' },
-                      { label: 'Net',         value: plTotals.netProfit,   color: plTotals.netProfit   >= 0 ? 'text-violet-500'  : 'text-red-500' },
-                    ].map(({ label, value, color }) => (
-                      <div key={label} className="text-right">
-                        <p className="text-[9px] font-bold text-muted-foreground/60 uppercase tracking-widest">{label}</p>
+                      { label: 'Revenue',  value: plTotals.revenue,     color: 'text-blue-500',    bg: 'bg-blue-500/8 border-blue-500/20'   },
+                      { label: 'COGS',     value: plTotals.cogs,        color: 'text-orange-500',  bg: 'bg-orange-500/8 border-orange-500/20' },
+                      { label: 'Expenses', value: plTotals.expenses,    color: 'text-red-500',     bg: 'bg-red-500/8 border-red-500/20'     },
+                      { label: 'Gross',    value: plTotals.grossProfit, color: plTotals.grossProfit >= 0 ? 'text-emerald-500' : 'text-red-500', bg: 'bg-emerald-500/8 border-emerald-500/20' },
+                      { label: 'Net',      value: plTotals.netProfit,   color: plTotals.netProfit  >= 0 ? 'text-violet-500'  : 'text-red-500', bg: 'bg-violet-500/8 border-violet-500/20'   },
+                    ].map(({ label, value, color, bg }) => (
+                      <div key={label} className={cn('px-2.5 py-1.5 rounded-xl border', bg)}>
+                        <p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground/60 mb-0.5">{label}</p>
                         <p className={cn('text-xs font-bold tabular-nums', color)}>{fmt(value)}</p>
                       </div>
                     ))}
@@ -1016,8 +1058,8 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                 )}
               </div>
 
-              {/* Chart */}
-              <div className="h-[300px] px-1 pb-2 pt-1">
+              {/* Multi-line Chart */}
+              <div className="h-[320px] px-1 pb-2 pt-2">
                 {plChartData.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center gap-2 text-muted-foreground">
                     <TrendingUp size={32} className="opacity-20" />
@@ -1025,22 +1067,19 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                   </div>
                 ) : (
                   <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={plChartData} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+                    <ComposedChart data={plChartData} margin={{ top: 12, right: 20, left: 0, bottom: 0 }}>
                       <defs>
-                        <linearGradient id="plRevGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.9} />
-                          <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.6} />
+                        {/* Subtle area fills under profit lines for visual depth */}
+                        <linearGradient id="plGrossArea" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#10b981" stopOpacity={0.10} />
+                          <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
                         </linearGradient>
-                        <linearGradient id="plCogsGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#f97316" stopOpacity={0.85} />
-                          <stop offset="100%" stopColor="#f97316" stopOpacity={0.5} />
-                        </linearGradient>
-                        <linearGradient id="plExpGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#ef4444" stopOpacity={0.85} />
-                          <stop offset="100%" stopColor="#ef4444" stopOpacity={0.5} />
+                        <linearGradient id="plNetArea" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.08} />
+                          <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0} />
                         </linearGradient>
                       </defs>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border) / 0.4)" />
+                      <CartesianGrid strokeDasharray="2 4" vertical={false} stroke="hsl(var(--border) / 0.38)" />
                       <XAxis
                         dataKey="day" fontSize={10} tickLine={false} axisLine={false}
                         tick={{ fill: 'hsl(var(--muted-foreground))' }}
@@ -1053,43 +1092,43 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
                         tickFormatter={v => `PKR ${Number(v).toLocaleString('en-PK')}`}
                       />
                       <Tooltip content={<PlTooltip />} />
-                      <Legend
-                        wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
-                        formatter={v => ({
-                          revenue: 'Revenue', cogs: 'COGS', expenses: 'Expenses',
-                          grossProfit: 'Gross Profit', netProfit: 'Net Profit'
-                        }[v as string] ?? v)}
-                      />
-                      {/* Three stacked bar levels */}
-                      <Bar dataKey="revenue"  name="revenue"  fill="url(#plRevGrad)"  radius={[3,3,0,0]} maxBarSize={18} />
-                      <Bar dataKey="cogs"     name="cogs"     fill="url(#plCogsGrad)" radius={[3,3,0,0]} maxBarSize={18} />
-                      <Bar dataKey="expenses" name="expenses" fill="url(#plExpGrad)"  radius={[3,3,0,0]} maxBarSize={18} />
-                      {/* Two profit lines */}
-                      <Line dataKey="grossProfit" name="grossProfit" stroke="#10b981" strokeWidth={2.2}
-                        dot={false} activeDot={{ r: 5, strokeWidth: 0 }} />
-                      <Line dataKey="netProfit"   name="netProfit"   stroke="#8b5cf6" strokeWidth={2.2}
-                        strokeDasharray="5 3" dot={false} activeDot={{ r: 5, strokeWidth: 0 }} />
+                      {/* Subtle area fills — rendered first so lines sit on top */}
+                      <Area type="monotone" dataKey="grossProfit" fill="url(#plGrossArea)" stroke="none" isAnimationActive={false} legendType="none" />
+                      <Area type="monotone" dataKey="netProfit"   fill="url(#plNetArea)"   stroke="none" isAnimationActive={false} legendType="none" />
+                      {/* Revenue — bold solid blue */}
+                      <Line type="monotone" dataKey="revenue" stroke="#3b82f6" strokeWidth={2}
+                        dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#3b82f6', fill: 'hsl(var(--card))' }} />
+                      {/* COGS — dashed orange (cost metric, secondary) */}
+                      <Line type="monotone" dataKey="cogs" stroke="#f97316" strokeWidth={1.6}
+                        strokeDasharray="5 3" dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: '#f97316', fill: 'hsl(var(--card))' }} />
+                      {/* Expenses — dashed red (cost metric, secondary) */}
+                      <Line type="monotone" dataKey="expenses" stroke="#ef4444" strokeWidth={1.6}
+                        strokeDasharray="5 3" dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: '#ef4444', fill: 'hsl(var(--card))' }} />
+                      {/* Gross Profit — solid emerald, medium weight */}
+                      <Line type="monotone" dataKey="grossProfit" stroke="#10b981" strokeWidth={2.4}
+                        dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#10b981', fill: 'hsl(var(--card))' }} />
+                      {/* Net Profit — solid violet, boldest — the headline number */}
+                      <Line type="monotone" dataKey="netProfit" stroke="#8b5cf6" strokeWidth={3}
+                        dot={false} activeDot={{ r: 6, strokeWidth: 2.5, stroke: '#8b5cf6', fill: 'hsl(var(--card))' }} />
                     </ComposedChart>
                   </ResponsiveContainer>
                 )}
               </div>
 
               {/* Legend colour key strip */}
-              <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-5 py-3 border-t border-border/30 bg-muted/20">
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 px-5 py-3 border-t border-border/20 bg-muted/15">
                 {[
-                  { color: '#3b82f6', label: 'Revenue',     dash: false },
-                  { color: '#f97316', label: 'COGS',         dash: false },
-                  { color: '#ef4444', label: 'Expenses',     dash: false },
-                  { color: '#10b981', label: 'Gross Profit', dash: false },
-                  { color: '#8b5cf6', label: 'Net Profit',   dash: true  },
-                ].map(({ color, label, dash }) => (
+                  { color: '#3b82f6', label: 'Revenue',      stroke: 2,   dash: false },
+                  { color: '#f97316', label: 'COGS',          stroke: 1.6, dash: true  },
+                  { color: '#ef4444', label: 'Expenses',      stroke: 1.6, dash: true  },
+                  { color: '#10b981', label: 'Gross Profit',  stroke: 2.4, dash: false },
+                  { color: '#8b5cf6', label: 'Net Profit',    stroke: 3,   dash: false },
+                ].map(({ color, label, stroke, dash }) => (
                   <span key={label} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <span className="flex items-center gap-0.5">
-                      {dash
-                        ? <svg width="18" height="4"><line x1="0" y1="2" x2="18" y2="2" stroke={color} strokeWidth="2" strokeDasharray="5 3" /></svg>
-                        : <span className="w-3 h-3 rounded-sm" style={{ background: color }} />
-                      }
-                    </span>
+                    <svg width="22" height="6" className="flex-shrink-0">
+                      <line x1="0" y1="3" x2="22" y2="3" stroke={color} strokeWidth={stroke}
+                        strokeDasharray={dash ? '5 3' : undefined} strokeLinecap="round" />
+                    </svg>
                     {label}
                   </span>
                 ))}
@@ -1675,7 +1714,7 @@ export default function Dashboard({ onLock, onLockSystem }: DashboardProps) {
             </div>
           </motion.div>
 
-        </>
+        </div>
       )}
     </div>
   );

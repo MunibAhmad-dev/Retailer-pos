@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 // Triggering rebuild to fix SQL column error
 import path from 'path';
+import http from 'http';
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -146,7 +147,18 @@ function checkDatabaseSchema(database: Database.Database) {
       ["settings", "cloud_connected", "INTEGER DEFAULT 0"],
       ["settings", "setup_completed", "INTEGER DEFAULT 0"],
       ["settings", "invoice_style", "TEXT DEFAULT 'thermal'"],
-      ["settings", "invoice_notes", "TEXT DEFAULT ''"]];
+      ["settings", "invoice_notes", "TEXT DEFAULT ''"],
+      ["settings", "cloud_service_requested", "INTEGER DEFAULT 0"],
+      ["settings", "cloud_data_consent", "TEXT DEFAULT 'full'"],
+      ["settings", "cloud_registered_at", "TEXT DEFAULT ''"],
+      ["settings", "cloud_request_note", "TEXT DEFAULT ''"],
+      ["settings", "block_reason", "TEXT DEFAULT ''"],
+      ["settings", "license_revoked", "INTEGER DEFAULT 0"],
+      ["purchases", "discount", "REAL DEFAULT 0"],
+      ["purchases", "transport_charges", "REAL DEFAULT 0"],
+      ["sales", "write_off_amount", "REAL DEFAULT 0"],
+      ["products", "purchase_status", "TEXT DEFAULT 'available'"],
+      ["products", "vendor_id", "INTEGER"]];
     for (const [table, col, def] of repairs) {
       try {
         const tableInfo = database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND LOWER(name)=LOWER(?)").get(table) as any;
@@ -713,6 +725,24 @@ function migrate(database: Database.Database) {
         try { database.exec(sql); } catch (e) { logger.warn(`Migration 28: ${e}`); }
       }
       database.exec('PRAGMA user_version = 28');
+    }
+
+    // ── Migration 29: employees / payroll table ──────────────────────
+    if (ver < 29) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS employees (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          role TEXT DEFAULT '',
+          monthly_salary REAL DEFAULT 0,
+          phone TEXT DEFAULT '',
+          notes TEXT DEFAULT '',
+          is_active INTEGER DEFAULT 1,
+          created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+        )
+      `);
+      database.exec('PRAGMA user_version = 29');
+      logger.info('[migrate] Migration 29 done — employees table created.');
     }
 
     logger.info(`Database migration completed. Current version: ${database.pragma('user_version', { simple: true })}`);
@@ -1378,6 +1408,66 @@ function verifyActivationKey(name: string, key: string): { valid: boolean, licen
   }
 }
 
+// ─── Web Bridge ──────────────────────────────────────────────────────────────
+// Dev-only HTTP server (port 3001, localhost) that mirrors every ipcMain handler
+// so the renderer can reach it via fetch('/api/invoke') when running in a plain
+// browser (no Electron preload). Vite proxies /api → 127.0.0.1:3001.
+// ─────────────────────────────────────────────────────────────────────────────
+const webHandlers = new Map<string, (...args: any[]) => Promise<any>>();
+
+// Monkey-patch ipcMain.handle BEFORE any handlers are registered so every
+// subsequent ipcMain.handle('channel', fn) is automatically mirrored.
+const _origIpcHandle = ipcMain.handle.bind(ipcMain);
+(ipcMain as any).handle = (channel: string, listener: any) => {
+  _origIpcHandle(channel, listener);
+  webHandlers.set(channel, (...args: any[]) => listener({} as any, ...args));
+};
+
+if (isDev) {
+  const bridgeServer = http.createServer((req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    if (req.method === 'POST' && req.url === '/api/invoke') {
+      let body = '';
+      req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      req.on('end', async () => {
+        try {
+          const { channel, args = [] } = JSON.parse(body);
+          const handler = webHandlers.get(channel);
+          if (!handler) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: `Unknown channel: ${channel}` }));
+            return;
+          }
+          const argsArr = Array.isArray(args) ? args : [args];
+          const result = await handler(...argsArr);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result ?? { success: true }));
+        } catch (e: any) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: false, error: e.message }));
+        }
+      });
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+
+  bridgeServer.listen(3001, '127.0.0.1', () => {
+    logger.info('[Web Bridge] HTTP API server on 127.0.0.1:3001 (dev only)');
+  });
+  bridgeServer.on('error', (err: any) => {
+    logger.warn('[Web Bridge] Server error (port 3001 in use?):', err.message);
+  });
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 ipcMain.handle('is-activated', async () => {
   try {
     if (!db || !licenseManager) {
@@ -1566,8 +1656,9 @@ ipcMain.handle('add-product', async (_, product: { name: string; price: number; 
     const stmt = db.prepare(`
       INSERT INTO products (name, price, category, purchase_price, stock, barcode, unit, product_type, metadata,
         is_bakery, production_date, expiry_date, weight_value, unit_type, price_per_kg, auto_price_by_weight,
+        vendor_id, purchase_status,
         created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (datetime('now', 'localtime')), (datetime('now', 'localtime')))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (datetime('now', 'localtime')), (datetime('now', 'localtime')))
     `);
     const info = stmt.run(
       product.name.trim(),
@@ -1586,6 +1677,8 @@ ipcMain.handle('add-product', async (_, product: { name: string; price: number; 
       (product as any).unit_type || 'piece',
       (product as any).price_per_kg != null ? Number((product as any).price_per_kg) : null,
       (product as any).auto_price_by_weight ? 1 : 0,
+      (product as any).vendor_id ? Number((product as any).vendor_id) : null,
+      (product as any).purchase_status || 'available',
     );
 
     const newProduct = db.prepare('SELECT * FROM products WHERE id = ?').get(info.lastInsertRowid);
@@ -1622,6 +1715,7 @@ ipcMain.handle('update-product', async (_, id: number, product: { name: string; 
       UPDATE products
       SET name = ?, price = ?, category = ?, purchase_price = ?, stock = ?, barcode = ?, unit = ?, product_type = ?, metadata = ?,
           is_bakery = ?, production_date = ?, expiry_date = ?, weight_value = ?, unit_type = ?, price_per_kg = ?, auto_price_by_weight = ?,
+          vendor_id = ?, purchase_status = ?,
           updated_at = (datetime('now', 'localtime'))
       WHERE id = ?
     `);
@@ -1642,6 +1736,8 @@ ipcMain.handle('update-product', async (_, id: number, product: { name: string; 
       (product as any).unit_type || 'piece',
       (product as any).price_per_kg != null ? Number((product as any).price_per_kg) : null,
       (product as any).auto_price_by_weight ? 1 : 0,
+      (product as any).vendor_id ? Number((product as any).vendor_id) : null,
+      (product as any).purchase_status || 'available',
       id
     );
 
@@ -1656,6 +1752,17 @@ ipcMain.handle('update-product', async (_, id: number, product: { name: string; 
     return { success: true, data: updatedProduct };
   } catch (error: any) {
     logger.error('Failed to update product:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+/** Toggle a product's purchase_status between 'available' and 'to_order' */
+ipcMain.handle('set-product-purchase-status', async (_, id: number, status: 'available' | 'to_order') => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    db.prepare("UPDATE products SET purchase_status = ? WHERE id = ?").run(status, id);
+    return { success: true };
+  } catch (error: any) {
     return { success: false, error: error.message };
   }
 });
@@ -1732,13 +1839,15 @@ ipcMain.handle('update-settings', async (_, settings: any) => {
   try {
     if (!db) throw new Error('Database not initialized');
 
+    const existing = db.prepare('SELECT * FROM settings WHERE id = 1').get() as any;
+
     const stmt = db.prepare(`
-      UPDATE settings 
-      SET store_name = ?, 
-          store_phone = ?, 
-          store_address = ?, 
-          store_logo = ?, 
-          receipt_footer = ?, 
+      UPDATE settings
+      SET store_name = ?,
+          store_phone = ?,
+          store_address = ?,
+          store_logo = ?,
+          receipt_footer = ?,
           pos_password = ?,
           receipt_size = ?,
           low_stock_threshold = ?,
@@ -1759,11 +1868,15 @@ ipcMain.handle('update-settings', async (_, settings: any) => {
           business_name = ?,
           activation_key = ?,
           invoice_style = ?,
-          invoice_notes = ?
+          invoice_notes = ?,
+          cloud_service_requested = ?,
+          cloud_data_consent = ?,
+          cloud_registered_at = ?,
+          cloud_request_note = ?,
+          block_reason = ?,
+          license_revoked = ?
       WHERE id = 1
     `);
-
-    const existing = db.prepare('SELECT * FROM settings WHERE id = 1').get() as any;
 
     stmt.run(
       settings.store_name ?? existing?.store_name ?? 'Retailer Shop',
@@ -1791,7 +1904,13 @@ ipcMain.handle('update-settings', async (_, settings: any) => {
       settings.business_name ?? settings.store_name ?? existing?.business_name ?? existing?.store_name ?? 'Retailer Shop',
       settings.activation_key ?? existing?.activation_key ?? '',
       settings.invoice_style ?? existing?.invoice_style ?? 'thermal',
-      settings.invoice_notes ?? existing?.invoice_notes ?? ''
+      settings.invoice_notes ?? existing?.invoice_notes ?? '',
+      settings.cloud_service_requested !== undefined ? (settings.cloud_service_requested ? 1 : 0) : (existing?.cloud_service_requested ?? 0),
+      settings.cloud_data_consent ?? existing?.cloud_data_consent ?? 'full',
+      settings.cloud_registered_at ?? existing?.cloud_registered_at ?? '',
+      settings.cloud_request_note ?? existing?.cloud_request_note ?? '',
+      settings.block_reason ?? existing?.block_reason ?? '',
+      settings.license_revoked !== undefined ? (settings.license_revoked ? 1 : 0) : (existing?.license_revoked ?? 0)
     );
 
     // Save module flags separately (optional booleans, not in the main settings form)
@@ -3487,9 +3606,11 @@ ipcMain.handle('import-data', async (_, data: any) => {
       logger.warn('Failed to create pre-import backup:', e);
     }
 
-    db.transaction(() => {
-      db!.prepare('PRAGMA foreign_keys = OFF').run();
+    // PRAGMA foreign_keys must be set OUTSIDE any transaction —
+    // SQLite silently ignores it inside a BEGIN/COMMIT block.
+    db.prepare('PRAGMA foreign_keys = OFF').run();
 
+    db.transaction(() => {
       const existingTableRows = db!.prepare(`
         SELECT name
         FROM sqlite_master
@@ -3583,8 +3704,10 @@ ipcMain.handle('import-data', async (_, data: any) => {
         `).run();
       }
 
-      db!.prepare('PRAGMA foreign_keys = ON').run();
     })();
+
+    // Re-enable foreign key enforcement after the transaction completes
+    db.prepare('PRAGMA foreign_keys = ON').run();
 
     logger.info('Data imported successfully');
     return { success: true };
@@ -3817,15 +3940,19 @@ ipcMain.handle('add-vendor', async (_, vendor: { name: string; phone?: string; a
 });
 
 // ============= PURCHASES / INVENTORY BATCHES =============
-ipcMain.handle('create-purchase', async (_, data: { vendor_id: number; items: any[]; total: number; amount_paid?: number; account_id?: number }) => {
+ipcMain.handle('create-purchase', async (_, data: { vendor_id: number; items: any[]; total: number; amount_paid?: number; account_id?: number; discount?: number; transport_charges?: number }) => {
   try {
     if (!db) throw new Error('Database not initialized');
     const transaction = db.transaction(() => {
       // Get current register if any
       const reg = db!.prepare("SELECT id FROM registers WHERE status = 'open' ORDER BY opened_at DESC LIMIT 1").get() as any;
-      const determinedStatus = (data.amount_paid || 0) >= data.total ? 'Completed' : (data.amount_paid || 0) > 0 ? 'Partial' : 'Pending';
-      const purchaseStmt = db!.prepare("INSERT INTO purchases (vendor_id, total, status, date_created, register_id) VALUES (?, ?, ?, datetime('now', 'localtime'), ?)");
-      const info = purchaseStmt.run(data.vendor_id, data.total, determinedStatus, reg?.id || null);
+      const discount = Number(data.discount) || 0;
+      const transport = Number(data.transport_charges) || 0;
+      // grand_total = items subtotal - discount + transport charges
+      const grandTotal = Math.max(0, data.total - discount + transport);
+      const determinedStatus = (data.amount_paid || 0) >= grandTotal ? 'Completed' : (data.amount_paid || 0) > 0 ? 'Partial' : 'Pending';
+      const purchaseStmt = db!.prepare("INSERT INTO purchases (vendor_id, total, discount, transport_charges, status, date_created, register_id) VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime'), ?)");
+      const info = purchaseStmt.run(data.vendor_id, grandTotal, discount, transport, determinedStatus, reg?.id || null);
       const purchaseId = info.lastInsertRowid;
 
       const batchStmt = db!.prepare(`
@@ -3841,15 +3968,12 @@ ipcMain.handle('create-purchase', async (_, data: { vendor_id: number; items: an
           const p = db!.prepare('SELECT stock, purchase_price, price FROM products WHERE id = ?').get(item.product_id) as any;
           if (p) {
             const oldStock = p.stock || 0;
-            const oldPrice = p.purchase_price || 0;
             const newStock = oldStock + item.quantity;
-            let newWAC = item.purchase_price;
             // Use provided selling_price or keep the current one
             const finalSellingPrice = item.selling_price || p.price;
-
-            // Update the product's master record with NEW stock and the LATEST purchase price
-            db!.prepare('UPDATE products SET stock = ?, purchase_price = ?, price = ? WHERE id = ?')
-              .run(newStock, item.purchase_price, finalSellingPrice, item.product_id);
+            // Update stock, latest purchase price, selling price, and reset purchase_status to 'available'
+            db!.prepare('UPDATE products SET stock = ?, purchase_price = ?, price = ?, purchase_status = ? WHERE id = ?')
+              .run(newStock, item.purchase_price, finalSellingPrice, 'available', item.product_id);
           }
         }
       }
@@ -4156,11 +4280,13 @@ ipcMain.handle('get-customer-details', async (_, customerId: number) => {
       const amountPaid: number = linkedPayments.reduce((acc: number, pay: any) => acc + (Number(pay.amount) || 0), 0);
       const amountReturned: number = linkedReturns.reduce((acc: number, ret: any) => acc + (Number(ret.total_returned) || 0), 0);
 
+      const writeOff = Number(s.write_off_amount) || 0;
       return {
         ...s,
         amountPaid,
         amountReturned,
-        remaining: (s.status === 'Cancelled' ? 0 : (Number(s.total) || 0)) - amountPaid - amountReturned,
+        writeOff,
+        remaining: (s.status === 'Cancelled' ? 0 : (Number(s.total) || 0)) - amountPaid - amountReturned - writeOff,
         linkedPayments,
         linkedReturns,
         items: linkedItems
@@ -4187,6 +4313,30 @@ ipcMain.handle('get-customer-details', async (_, customerId: number) => {
 
     return { success: true, data: { customer, sales: enhancedSales, payments, returns, history, totalTaken, totalPaid, totalReturned, balance: unpaidBalance } };
   } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+/**
+ * Write off a portion of a sale's remaining balance as a discount / bad debt.
+ * This reduces `remaining` without creating a cash payment entry.
+ */
+ipcMain.handle('write-off-sale-balance', async (_, saleId: number, amount: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    if (!saleId || saleId <= 0) throw new Error('Invalid sale ID');
+    const writeOff = Number(amount);
+    if (isNaN(writeOff) || writeOff <= 0) throw new Error('Write-off amount must be positive');
+
+    const sale = db.prepare('SELECT * FROM sales WHERE id = ?').get(saleId) as any;
+    if (!sale) throw new Error('Sale not found');
+
+    const newWriteOff = (Number(sale.write_off_amount) || 0) + writeOff;
+    db.prepare('UPDATE sales SET write_off_amount = ? WHERE id = ?').run(newWriteOff, saleId);
+    logger.info(`Sale #${saleId}: wrote off ${writeOff} (total write-off now ${newWriteOff})`);
+    return { success: true };
+  } catch (error: any) {
+    logger.error('write-off-sale-balance failed:', error);
     return { success: false, error: error.message };
   }
 });
@@ -4410,6 +4560,75 @@ ipcMain.handle('delete-expense', async (_, id: number) => {
   }
 });
 
+// ============= EMPLOYEE / PAYROLL HANDLERS =============
+
+ipcMain.handle('get-employees', async () => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    const rows = db.prepare('SELECT * FROM employees ORDER BY name ASC').all();
+    return { success: true, data: rows };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('add-employee', async (_, data: any) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    db.prepare(
+      'INSERT INTO employees (name, role, monthly_salary, phone, notes) VALUES (?, ?, ?, ?, ?)'
+    ).run(
+      (data.name || '').trim(),
+      data.role   || '',
+      data.monthly_salary || 0,
+      data.phone  || '',
+      data.notes  || ''
+    );
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('update-employee', async (_, id: number, data: any) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    db.prepare(
+      'UPDATE employees SET name=?, role=?, monthly_salary=?, phone=?, notes=?, is_active=? WHERE id=?'
+    ).run(
+      (data.name || '').trim(),
+      data.role   || '',
+      data.monthly_salary || 0,
+      data.phone  || '',
+      data.notes  || '',
+      data.is_active ?? 1,
+      id
+    );
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('delete-employee', async (_, id: number) => {
+  try {
+    if (!db) throw new Error('Database not initialized');
+    db.prepare('DELETE FROM employees WHERE id = ?').run(id);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('open-external-url', async (_, url: string) => {
+  try {
+    await shell.openExternal(url);
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
 // ============= ACCOUNTS MODULE HANDLERS =============
 
 /** Recompute and persist an account's current_balance from all its txns */
@@ -4489,10 +4708,9 @@ ipcMain.handle('add-account', async (_, data: {
 
     const accountId = info.lastInsertRowid as number;
 
-    if (openBal > 0) {
-      db.prepare(`INSERT INTO account_txns (account_id, type, amount, category, note, date_created)
-        VALUES (?, 'in', ?, 'opening', 'Opening Balance', datetime('now', 'localtime'))`).run(accountId, openBal);
-    }
+    // NOTE: Do NOT create a transaction row for the opening balance.
+    // get-accounts computes current_balance = opening_balance + SUM(txns).
+    // Adding a transaction here would double-count the opening balance.
 
     const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(accountId);
     return { success: true, data: account };

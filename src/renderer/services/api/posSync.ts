@@ -15,6 +15,11 @@
 
 import axios from 'axios';
 
+// Default cloud backend URL — set this to your admin panel domain.
+// End users never need to configure this; it's baked into the build.
+// Falls back to whatever cloud_backend_url is in Settings if this is left blank.
+export const DEFAULT_CLOUD_URL = 'http://localhost:4000'; // e.g. 'https://admin.osatech.pk'
+
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const SYNC_INTERVAL_MS      = 30_000;   // Process queue every 30 seconds
@@ -63,7 +68,8 @@ export async function registerInstance(): Promise<boolean> {
     if (!settingsRes?.success || !settingsRes.data) return false;
 
     const s = settingsRes.data;
-    const backendUrl: string = s.cloud_backend_url || '';
+    // Use settings URL first, fall back to the build-time default
+    const backendUrl: string = (s.cloud_backend_url || DEFAULT_CLOUD_URL || '').replace(/\/$/, '');
     if (!backendUrl) return false;
 
     const mobile: string = (s.owner_mobile || '').trim();
@@ -81,11 +87,14 @@ export async function registerInstance(): Promise<boolean> {
       owner_mobile:  mobile,
       owner_email:   s.owner_email      || '',
       store_address: s.store_address    || '',
-      business_name: s.business_name    || '',
+      business_name: (s as any).business_name || s.store_name || '',
       branch_name:   (s as any).branch_name || 'Main Branch',
       license_key:   (s as any).activation_key || '',
       fingerprint,
       app_version:   '1.0',
+      license_mode:  s.license_mode || 'offline',
+      data_consent:  (s as any).cloud_data_consent || 'full',
+      cloud_service_requested: !!((s as any).cloud_service_requested),
     };
 
     const res = await axios.post(`${backendUrl.replace(/\/$/, '')}/api/instances/register`, payload, {
@@ -95,10 +104,11 @@ export async function registerInstance(): Promise<boolean> {
     if (res.data?.success && res.data?.api_key) {
       // Persist the api_key and cloud status to local settings
       await window.api.updateSettings({
-        cloud_backend_token: res.data.api_key,
-        cloud_connected:     1,
-        approval_status:     res.data.approval_status || 'pending',
-      });
+        cloud_backend_token:     res.data.api_key,
+        cloud_connected:         1,
+        approval_status:         res.data.approval_status || 'pending',
+        cloud_registered_at:     new Date().toISOString(),
+      } as any);
       isRegistered = true;
       console.log('[PosSync] Instance registered. Status:', res.data.approval_status);
       return true;
@@ -123,14 +133,21 @@ export async function processSyncQueue(): Promise<{ synced: number; failed: numb
   const settingsRes = await window.api.getSettings();
   if (!settingsRes?.success || !settingsRes.data) return { synced: 0, failed: 0 };
 
-  const s = settingsRes.data;
-  const backendUrl: string  = s.cloud_backend_url   || '';
+  const s = settingsRes.data as any;
+  const backendUrl: string  = s.cloud_backend_url || DEFAULT_CLOUD_URL || '';
   const apiKey: string      = s.cloud_backend_token || '';
 
   if (!backendUrl || !apiKey) return { synced: 0, failed: 0 };
 
+  // Never upload POS data until admin has explicitly approved cloud services.
+  // This prevents data appearing in the admin panel before the request is reviewed.
+  if (s.approval_status && s.approval_status !== 'approved') {
+    console.log('[PosSync] Skipping sync — approval status:', s.approval_status);
+    return { synced: 0, failed: 0 };
+  }
+
   // Auto-register if not yet done
-  if (!isRegistered && !(s.cloud_backend_token)) {
+  if (!isRegistered && !s.cloud_backend_token) {
     await registerInstance();
     return { synced: 0, failed: 0 };
   }
@@ -207,10 +224,13 @@ export async function sendHeartbeat(): Promise<void> {
   const settingsRes = await window.api.getSettings();
   if (!settingsRes?.success || !settingsRes.data) return;
 
-  const s = settingsRes.data;
-  const backendUrl: string = s.cloud_backend_url   || '';
+  const s = settingsRes.data as any;
+  const backendUrl: string = s.cloud_backend_url || DEFAULT_CLOUD_URL || '';
   const apiKey: string     = s.cloud_backend_token || '';
   if (!backendUrl || !apiKey) return;
+
+  // Only heartbeat when approved — don't report store stats before admin grants access
+  if (s.approval_status && s.approval_status !== 'approved') return;
 
   try {
     // Get fresh stats from the dashboard API (reuse existing IPC)
@@ -254,13 +274,23 @@ export async function checkInstanceStatus(): Promise<void> {
     const res = await client.get('/api/instances/status');
 
     if (res.data?.success) {
-      const { approval_status, license_key, license_plan, license_expiry, license_revoked } = res.data;
+      const {
+        approval_status, license_key, license_plan, license_expiry,
+        license_revoked,
+        block_reason,   // admin's comment when blocking
+      } = res.data;
 
       // ── License revocation — admin wiped this instance's license ──────────────
+      // This is a HARD block: the whole application is locked out.
       if (license_revoked) {
         await (window as any).api.clearLocalLicense?.().catch(() => {});
-        await window.api.updateSettings({ approval_status: 'blocked' } as any);
+        await window.api.updateSettings({
+          approval_status:  'blocked',
+          license_revoked:  1,
+          block_reason:     block_reason || 'Your license has been revoked by the administrator.',
+        } as any);
         console.warn('[PosSync] License revoked by admin — local license cleared');
+        // Hard block: triggers full-screen BlockedScreen in App.tsx
         window.dispatchEvent(new CustomEvent('pos-blocked'));
         return;
       }
@@ -275,35 +305,51 @@ export async function checkInstanceStatus(): Promise<void> {
       }
 
       // Only write settings when something changed (avoid unnecessary DB writes)
-      if (
-        approval_status !== s.approval_status ||
-        license_plan    !== (s as any).license_plan ||
-        license_expiry  !== (s as any).license_expiry
-      ) {
+      const statusChanged    = approval_status !== s.approval_status;
+      const planChanged      = license_plan    !== (s as any).license_plan;
+      const expiryChanged    = license_expiry  !== (s as any).license_expiry;
+      const reasonChanged    = (block_reason || '') !== ((s as any).block_reason || '');
+
+      if (statusChanged || planChanged || expiryChanged || reasonChanged) {
         const previousStatus = s.approval_status;
         await window.api.updateSettings({
           approval_status,
-          cloud_connected: 1,
-          cloud_last_sync: new Date().toISOString(),
+          cloud_connected:  1,
+          cloud_last_sync:  new Date().toISOString(),
+          // Always persist the block_reason so it shows in Settings even after app restart
+          block_reason:     block_reason || '',
         } as any);
-        console.log('[PosSync] Status updated from cloud:', approval_status);
+        console.log('[PosSync] Status updated from cloud:', approval_status,
+          block_reason ? `| Reason: "${block_reason}"` : '');
 
-        // Tell App.tsx immediately when status changes
+        // Tell App.tsx immediately when status changes.
+        // 'blocked' here means cloud-services-only block (license_revoked path
+        // already returned above), so fire pos-cloud-blocked — NOT pos-blocked.
+        // App.tsx will re-read settings and update the Settings page banner
+        // without locking the user out of the whole application.
         if (approval_status === 'blocked') {
-          window.dispatchEvent(new CustomEvent('pos-blocked'));
+          window.dispatchEvent(new CustomEvent('pos-cloud-blocked'));
         } else if (previousStatus === 'blocked' && approval_status !== 'blocked') {
-          // Was blocked, now unblocked — trigger re-activation check
-          console.log('[PosSync] Instance unblocked — notifying UI');
+          // Was cloud-blocked, now approved — refresh UI
+          console.log('[PosSync] Cloud block lifted — notifying UI');
           window.dispatchEvent(new CustomEvent('pos-approved'));
         }
       }
     }
   } catch (err: any) {
-    // 403 = blocked by admin
+    // 403 = cloud services blocked by admin (soft block — NOT a license revocation).
+    // The app keeps running; only cloud sync stops. Settings page shows a banner.
     if (axios.isAxiosError(err) && err.response?.status === 403) {
-      await window.api.updateSettings({ approval_status: 'blocked' } as any);
-      console.warn('[PosSync] Instance blocked by admin');
-      window.dispatchEvent(new CustomEvent('pos-blocked'));
+      const reason = err.response?.data?.block_reason
+                  || err.response?.data?.message
+                  || 'Access blocked by administrator.';
+      await window.api.updateSettings({
+        approval_status: 'blocked',
+        block_reason:    reason,
+      } as any);
+      console.warn('[PosSync] Cloud services blocked by admin. Reason:', reason);
+      // Soft block: only refreshes Settings banner, does NOT lock the whole app
+      window.dispatchEvent(new CustomEvent('pos-cloud-blocked'));
     } else {
       console.warn('[PosSync] Status poll failed:', err.message);
     }
@@ -344,6 +390,114 @@ export async function fetchNotifications(): Promise<void> {
     if (!axios.isAxiosError(err) || err.response?.status !== 403) {
       console.warn('[PosSync] Notification fetch failed:', err.message);
     }
+  }
+}
+
+// ─── Cloud Service Request ────────────────────────────────────────────────────
+
+/**
+ * Explicitly requests cloud services from the admin.
+ * Sends full registration payload with cloud_service_requested=true.
+ * Called when the user clicks "Request Cloud Services" in Settings.
+ */
+export async function requestCloudServices(note: string = ''): Promise<{ success: boolean; error?: string }> {
+  try {
+    const settingsRes = await window.api.getSettings();
+    if (!settingsRes?.success || !settingsRes.data) return { success: false, error: 'Could not read settings' };
+    const s = settingsRes.data as any;
+
+    const backendUrl: string = (s.cloud_backend_url || DEFAULT_CLOUD_URL || '').replace(/\/$/, '');
+    if (!backendUrl) return { success: false, error: 'No cloud backend URL configured. Please contact OsaTech support.' };
+
+    const mobile: string = (s.owner_mobile || s.store_phone || '').trim();
+    const instanceId: string = s.cloud_instance_id || mobile || `instance_${Date.now()}`;
+
+    const fpRes = await (window as any).api.getFingerprint?.().catch(() => null);
+    const fingerprint: string = fpRes?.success ? (fpRes.data || '') : '';
+
+    const payload = {
+      instance_id:             instanceId,
+      store_name:              s.store_name || '',
+      owner_name:              s.owner_full_name || '',
+      owner_mobile:            mobile,
+      owner_email:             s.owner_email || '',
+      store_address:           s.store_address || '',
+      business_name:           s.business_name || s.store_name || '',
+      branch_name:             s.branch_name || 'Main Branch',
+      license_key:             s.activation_key || '',
+      fingerprint,
+      app_version:             '1.0',
+      license_mode:            s.license_mode || 'offline',
+      data_consent:            s.cloud_data_consent || 'full',
+      cloud_service_requested: true,
+      request_note:            note,
+    };
+
+    const res = await axios.post(`${backendUrl}/api/instances/register`, payload, { timeout: 15_000 });
+
+    if (res.data?.success) {
+      await (window.api.updateSettings as any)({
+        cloud_backend_token:     res.data.api_key || s.cloud_backend_token || '',
+        cloud_connected:         1,
+        approval_status:         res.data.approval_status || 'pending',
+        cloud_service_requested: 1,
+        cloud_registered_at:     new Date().toISOString(),
+        cloud_request_note:      note,
+      });
+      isRegistered = true;
+      console.log('[PosSync] Cloud services requested. Status:', res.data.approval_status);
+      return { success: true };
+    }
+    return { success: false, error: res.data?.error || 'Request failed. Please try again.' };
+  } catch (err: any) {
+    console.warn('[PosSync] requestCloudServices failed:', err.message);
+    return { success: false, error: err.message || 'Network error. Check your internet connection.' };
+  }
+}
+
+/**
+ * Notifies the admin panel that a license was just activated on this device.
+ * Called immediately after a successful offline license activation.
+ * Works silently — does not block the UI, errors are swallowed.
+ */
+export async function notifyLicenseActivated(): Promise<void> {
+  try {
+    const settingsRes = await window.api.getSettings();
+    if (!settingsRes?.success || !settingsRes.data) return;
+    const s = settingsRes.data as any;
+
+    const backendUrl: string = (s.cloud_backend_url || DEFAULT_CLOUD_URL || '').replace(/\/$/, '');
+    if (!backendUrl) return; // No backend configured — silent skip
+
+    const mobile: string = (s.owner_mobile || s.store_phone || '').trim();
+    const instanceId: string = s.cloud_instance_id || mobile || `instance_${Date.now()}`;
+
+    const fpRes = await (window as any).api.getFingerprint?.().catch(() => null);
+    const fingerprint: string = fpRes?.success ? (fpRes.data || '') : '';
+
+    await axios.post(`${backendUrl}/api/instances/register`, {
+      instance_id:          instanceId,
+      store_name:           s.store_name || '',
+      owner_name:           s.owner_full_name || '',
+      owner_mobile:         mobile,
+      owner_email:          s.owner_email || '',
+      store_address:        s.store_address || '',
+      business_name:        s.business_name || s.store_name || '',
+      branch_name:          s.branch_name || 'Main Branch',
+      license_key:          s.activation_key || '',
+      fingerprint,
+      app_version:          '1.0',
+      license_mode:         s.license_mode || 'offline',
+      data_consent:         s.cloud_data_consent || 'full',
+      cloud_service_requested: !!s.cloud_service_requested,
+      event:                'license_activated',
+      license_activated_at: new Date().toISOString(),
+    }, { timeout: 10_000 });
+
+    await (window.api.updateSettings as any)({ cloud_registered_at: new Date().toISOString() });
+    console.log('[PosSync] License activation notified to admin panel');
+  } catch (err: any) {
+    console.warn('[PosSync] notifyLicenseActivated failed (silent):', err.message);
   }
 }
 

@@ -55,6 +55,9 @@ export class LicenseManager {
     } catch (e) {
       console.error('LicenseManager initDb failed:', e);
     }
+    try {
+      this.db.exec(`ALTER TABLE app_license ADD COLUMN device_fingerprint_stable TEXT DEFAULT ''`);
+    } catch (_) { /* column already exists */ }
   }
 
   private getSystemUuid(): string {
@@ -139,6 +142,42 @@ export class LicenseManager {
 
   public getDeviceName(): string {
     return os.hostname();
+  }
+
+  /**
+   * Stable fingerprint — uses only hardware IDs, no date component.
+   * Used for ongoing license validation so the license doesn't expire daily.
+   */
+  public async getStableFingerprint(): Promise<string> {
+    const interfaces = os.networkInterfaces();
+    const macs: string[] = [];
+    for (const name of Object.keys(interfaces)) {
+      const iface = interfaces[name];
+      if (!iface) continue;
+      for (const entry of iface) {
+        if (
+          !entry.internal &&
+          entry.mac &&
+          entry.mac !== '00:00:00:00:00:00' &&
+          !entry.mac.startsWith('00:05:69') &&
+          !entry.mac.startsWith('08:00:27') &&
+          !entry.mac.startsWith('00:1c:42')
+        ) {
+          macs.push(entry.mac);
+        }
+      }
+    }
+    const firstMac = macs.sort()[0] || 'no-mac';
+    const macHash = crypto.createHash('sha256').update(`${this.macSalt}:${firstMac}`).digest('hex');
+    const cpuModel = os.cpus()[0]?.model || 'unknown-cpu';
+    const cpuCores = String(os.cpus().length);
+    const systemUuid = this.getSystemUuid();
+    const data = [
+      os.hostname(), os.platform(), os.arch(),
+      cpuModel, cpuCores, macHash, systemUuid,
+      // NO date — this hash is stable across days
+    ].join('::');
+    return crypto.createHash('sha256').update(data).digest('hex');
   }
 
   /**
@@ -229,7 +268,7 @@ export class LicenseManager {
    * Validates the currently stored license
    */
   public async validateLocalLicense(): Promise<{ valid: boolean; reason?: string; data?: LicenseData }> {
-    const row = this.db.prepare('SELECT license_key FROM app_license LIMIT 1').get() as any;
+    const row = this.db.prepare('SELECT license_key, device_fingerprint_stable, activated_at FROM app_license LIMIT 1').get() as any;
     if (!row) return { valid: false, reason: 'No license found' };
 
     const data = this.decryptLicense(row.license_key);
@@ -242,9 +281,32 @@ export class LicenseManager {
 
     // 2. Check Fingerprint — empty string means "any device" (used for cloud-approved licenses)
     if (data.issuedForFingerprint) {
-      const currentFingerprint = await this.getDeviceFingerprint();
-      if (data.issuedForFingerprint !== currentFingerprint) {
-        return { valid: false, reason: 'Hardware mismatch', data };
+      const stableFingerprint = await this.getStableFingerprint();
+
+      if (row.device_fingerprint_stable) {
+        // Modern path: compare against the stable fingerprint stored at activation time
+        if (row.device_fingerprint_stable !== stableFingerprint) {
+          return { valid: false, reason: 'Hardware mismatch', data };
+        }
+      } else {
+        // Legacy path: license was activated before this fix (has no stored stable fingerprint)
+        const currentFingerprint = await this.getDeviceFingerprint();
+        if (data.issuedForFingerprint !== currentFingerprint) {
+          // Dated fingerprint mismatch — if the license is locally activated (activated_at set),
+          // treat it as a valid same-device license and migrate it to stable fingerprint.
+          // This gracefully handles licenses activated before the daily-rotation bug was fixed.
+          if (row.activated_at) {
+            this.db.prepare('UPDATE app_license SET device_fingerprint_stable = ? WHERE id = ?')
+              .run(stableFingerprint, row.id);
+            // Continue — treat as valid
+          } else {
+            return { valid: false, reason: 'Hardware mismatch', data };
+          }
+        } else {
+          // Same-day match — store stable fingerprint for future validations
+          this.db.prepare('UPDATE app_license SET device_fingerprint_stable = ? WHERE id = ?')
+            .run(stableFingerprint, row.id);
+        }
       }
     }
 
@@ -287,6 +349,11 @@ export class LicenseManager {
           WHERE id = ?
         `).run(licenseKey, now.toISOString(), data.maxDevices, data.expiresAt, data.issuedForFingerprint, data.id);
       }
+
+      // Store stable fingerprint so daily validation works even after date rolls over
+      const stableFingerprint = await this.getStableFingerprint();
+      this.db.prepare('UPDATE app_license SET device_fingerprint_stable = ? WHERE id = ?')
+        .run(stableFingerprint, data.id);
 
       const existingActivation = this.db.prepare(
         'SELECT id FROM app_license_activations WHERE license_id = ? AND fingerprint = ?'

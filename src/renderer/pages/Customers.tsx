@@ -350,6 +350,30 @@ export default function Customers() {
     } else addNotification('Error', res.error || 'Failed to delete payment', 'error');
   };
 
+  const handleWriteOff = async (saleId: number, remaining: number) => {
+    const input = window.prompt(
+      `Write off balance as discount for Sale #${saleId}.\nRemaining: PKR ${Math.round(remaining)}\n\nEnter amount to write off:`,
+      String(Math.round(remaining))
+    );
+    if (input === null) return; // cancelled
+    const amount = parseFloat(input);
+    if (isNaN(amount) || amount <= 0) {
+      addNotification('Invalid', 'Enter a valid positive amount.', 'warning');
+      return;
+    }
+    if (amount > remaining + 0.5) {
+      addNotification('Too High', `Cannot write off more than the remaining balance (${fmtPKR(remaining)}).`, 'warning');
+      return;
+    }
+    const res = await (window.api as any).writeOffSaleBalance(saleId, amount);
+    if (res?.success) {
+      addNotification('Written Off', `${fmtPKR(amount)} written off as discount on Sale #${saleId}.`, 'success');
+      if (selectedCustomer?.id) loadCustomerDetails(selectedCustomer.id);
+    } else {
+      addNotification('Error', res?.error || 'Failed to write off balance.', 'error');
+    }
+  };
+
   const handleMarkAllPaid = async () => {
     if (!selectedCustomer?.id || !customerDetails?.balance || customerDetails.balance <= 0) {
       addNotification('Info', 'Balance is already 0.', 'info');
@@ -987,6 +1011,17 @@ export default function Customers() {
                                       <div className="flex gap-1.5 pt-0.5">
                                         {s.status !== 'Cancelled' && s.remaining > 0.1 && (
                                           <QuickPaymentInput sale={s} onPay={(amt) => handleAddPayment(s.id, amt)} />
+                                        )}
+                                        {s.status !== 'Cancelled' && s.remaining > 0.1 && (
+                                          <HoverTip text="Write off as discount">
+                                            <Button
+                                              variant="ghost" size="sm"
+                                              className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-violet-500 hover:bg-violet-500/10"
+                                              onClick={() => handleWriteOff(s.id, s.remaining)}
+                                            >
+                                              <Tag size={12} />
+                                            </Button>
+                                          </HoverTip>
                                         )}
                                         <HoverTip text="View details">
                                           <Button variant="outline" size="sm" className="h-8 w-8 p-0 rounded-lg" onClick={() => openSaleDetail(s)}>

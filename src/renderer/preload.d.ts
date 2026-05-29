@@ -108,6 +108,8 @@ declare global {
       getProductAnalytics: () => Promise<ApiResponse<any>>;
       getCustomerDetails: (customerId: number) => Promise<ApiResponse<any>>;
       addCustomerPayment: (data: any) => Promise<ApiResponse<void>>;
+      writeOffSaleBalance: (saleId: number, amount: number) => Promise<ApiResponse<void>>;
+      setProductPurchaseStatus: (id: number, status: 'available' | 'to_order') => Promise<ApiResponse<void>>;
       deleteVendorPayment: (id: number) => Promise<ApiResponse<void>>;
       deleteCustomerPayment: (id: number) => Promise<ApiResponse<void>>;
       getProfitLossReport: (data?: any) => Promise<ApiResponse<any>>;

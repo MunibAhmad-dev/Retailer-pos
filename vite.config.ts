@@ -27,6 +27,17 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    host: true,
+    allowedHosts: ['.trycloudflare.com'],
+    proxy: {
+      // Forward /api/* from the browser to Electron's HTTP bridge (port 3001).
+      // Used by browserApiShim.ts when the app runs in a plain browser via
+      // a Cloudflare tunnel instead of the Electron desktop client.
+      '/api': {
+        target: 'http://127.0.0.1:3001',
+        changeOrigin: true,
+      },
+    },
   },
   resolve: {
     alias: {

@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx';
 import {
   Plus, Pencil, Trash2, Search, Package, Tag, Layers, BarChart2,
   TrendingUp, TrendingDown, AlertCircle, X, Upload, Download,
-  FileSpreadsheet, CheckCircle2, ChevronDown, Boxes
+  FileSpreadsheet, CheckCircle2, ChevronDown, Boxes, ShoppingCart
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
@@ -28,6 +28,7 @@ interface Product {
   unit?: string;
   product_type?: string;
   vendor_id?: number;
+  purchase_status?: 'available' | 'to_order';
   metadata?: any;
   is_bakery?: number;
   production_date?: string;
@@ -56,6 +57,7 @@ const empty: Product = {
   category: '', barcode: '', unit: '', product_type: 'general', metadata: {},
   is_bakery: 0, production_date: '', expiry_date: '',
   weight_value: undefined, unit_type: 'piece', price_per_kg: undefined, auto_price_by_weight: 0,
+  vendor_id: undefined, purchase_status: 'available',
 };
 
 const fmtPKR = (n: number) => 'PKR ' + Math.round(n ?? 0).toLocaleString('en-PK');
@@ -68,23 +70,520 @@ const fadeUp = {
   }),
 };
 
+/* ─── ProductFormModal ───────────────────────────────────────────────────────
+   Isolated component so keystrokes only re-render this modal, not the full
+   Products page with its large product table and useMemo computations.
+──────────────────────────────────────────────────────────────────────────── */
+interface ProductFormModalProps {
+  isOpen: boolean;
+  isEditing: boolean;
+  initialProduct: Product;
+  vendors: any[];
+  categories: string[];
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+function ProductFormModal({ isOpen, isEditing, initialProduct, vendors, categories, onClose, onSaved }: ProductFormModalProps) {
+  const { addNotification } = useNotifications();
+  const { modules } = useModules();
+  const [current, setCurrent] = useState<Product>(initialProduct);
+  const [isSaving, setIsSaving] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  // Reset form state and auto-focus whenever the modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setCurrent({ ...initialProduct });
+      setIsSaving(false);
+      const t = setTimeout(() => nameRef.current?.focus(), 100);
+      return () => clearTimeout(t);
+    }
+  }, [isOpen]); // intentionally exclude initialProduct — it's captured at open time
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!current.name.trim()) {
+      addNotification('Validation', 'Product name is required.', 'warning');
+      nameRef.current?.focus();
+      return;
+    }
+    const price = Number(current.price);
+    if (isNaN(price) || price <= 0) {
+      addNotification('Validation', 'Selling price must be a positive number.', 'warning');
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const productData = {
+        name: current.name.trim(),
+        price,
+        purchase_price: Number(current.purchase_price) || 0,
+        stock: Number(current.stock) || 0,
+        category: (current.category || '').trim(),
+        barcode: (current.barcode || '').trim(),
+        unit: (current.unit || '').trim(),
+        product_type: current.product_type || 'general',
+        metadata: current.metadata || {},
+        is_bakery: current.is_bakery || 0,
+        production_date: current.production_date || null,
+        expiry_date: current.expiry_date || null,
+        weight_value: current.weight_value ?? null,
+        unit_type: current.unit_type || 'piece',
+        price_per_kg: current.price_per_kg ?? null,
+        auto_price_by_weight: current.auto_price_by_weight || 0,
+        vendor_id: current.vendor_id || null,
+        purchase_status: current.purchase_status || 'available',
+      };
+      const res = isEditing && current.id
+        ? await window.api.updateProduct(current.id, productData)
+        : await window.api.addProduct(productData);
+      if (res?.success) {
+        addNotification('Success', isEditing ? 'Product updated.' : 'Product added.', 'success');
+        setTimeout(() => { onClose(); onSaved(); }, 200);
+      } else throw new Error(res?.error || 'Failed to save product');
+    } catch (err: any) {
+      addNotification('Error', err.message, 'error');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[999] flex items-start justify-center p-4 sm:p-8 bg-black/60 backdrop-blur-sm overflow-y-auto animate-in fade-in duration-200"
+      onClick={() => !isSaving && onClose()}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.96, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.25, ease: [0.23, 1, 0.32, 1] }}
+        className="relative w-full max-w-lg my-auto bg-card rounded-2xl shadow-2xl border border-border/50 overflow-hidden"
+        onClick={e => e.stopPropagation()}
+      >
+        <form onSubmit={handleSubmit}>
+          {/* Dialog Header */}
+          <div
+            className="relative p-6 border-b"
+            style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1a3a5c 100%)' }}
+          >
+            <div className="pointer-events-none absolute top-0 right-0 w-32 h-32 rounded-full bg-blue-500/10 blur-2xl" />
+            <div className="flex items-center justify-between relative z-10">
+              <div className="flex items-center gap-3">
+                <div className="bg-blue-500/20 border border-blue-400/30 p-2.5 rounded-xl">
+                  <Package size={19} className="text-blue-300" />
+                </div>
+                <div>
+                  <h2 className="text-white text-lg font-bold">
+                    {isEditing ? 'Edit Product' : 'Add New Product'}
+                  </h2>
+                  <p className="text-blue-300/70 text-xs mt-0.5">
+                    {isEditing ? 'Update product details below.' : 'Fill in details to add to catalogue.'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                className="text-white/50 hover:text-white/90 transition-colors p-1 rounded-lg hover:bg-white/10"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          </div>
+
+          <div className="space-y-6 pt-6 pb-1 px-6 max-h-[65vh] overflow-y-auto custom-scrollbar">
+            {/* Type Selector */}
+            <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
+              {PRODUCT_TYPES.map(t => (
+                <div
+                  key={t.id}
+                  onClick={() => {
+                    if (isEditing) return;
+                    setCurrent(p => ({ ...p, product_type: t.id, metadata: {} }));
+                  }}
+                  className={cn(
+                    'flex flex-col items-center justify-center gap-1 p-2 rounded-xl border cursor-pointer transition-all duration-150 text-center select-none',
+                    current.product_type === t.id
+                      ? 'border-primary bg-primary/10 text-primary shadow-sm'
+                      : isEditing
+                        ? 'opacity-40 cursor-not-allowed border-border/40'
+                        : 'hover:bg-muted/60 text-muted-foreground border-border/40'
+                  )}
+                >
+                  <span className="text-xl">{t.icon}</span>
+                  <span className="text-[10px] font-medium leading-tight">{t.label}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Core Details */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                <span>{PRODUCT_TYPES.find(t => t.id === current.product_type)?.icon}</span> Core Details
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-semibold">Product Name <span className="text-destructive">*</span></label>
+                <Input
+                  ref={nameRef}
+                  required
+                  value={current.name}
+                  onChange={e => setCurrent(p => ({ ...p, name: e.target.value }))}
+                  placeholder="Enter product name"
+                  disabled={isSaving}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold">Cost / Purchase Price</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-semibold">PKR</span>
+                    <Input
+                      type="number" min="0" step="1"
+                      value={current.purchase_price || ''}
+                      onChange={e => setCurrent(p => ({ ...p, purchase_price: parseFloat(e.target.value) || 0 }))}
+                      placeholder="0" className="pl-11" disabled={isSaving}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold">Selling Price <span className="text-destructive">*</span></label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-semibold">PKR</span>
+                    <Input
+                      type="number" min="1" step="1" required
+                      value={current.price || ''}
+                      onChange={e => setCurrent(p => ({ ...p, price: parseFloat(e.target.value) || 0 }))}
+                      placeholder="0" className="pl-11" disabled={isSaving}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Profit preview */}
+              {current.purchase_price > 0 && current.price > 0 && (
+                <div className={cn(
+                  'text-xs px-3 py-2.5 rounded-xl border font-medium',
+                  current.price > current.purchase_price
+                    ? 'bg-emerald-500/8 border-emerald-500/20 text-emerald-600'
+                    : 'bg-destructive/8 border-destructive/20 text-destructive'
+                )}>
+                  {current.price > current.purchase_price
+                    ? `✓ Margin: ${(((current.price - current.purchase_price) / current.price) * 100).toFixed(1)}%  — PKR ${Math.round(current.price - current.purchase_price).toLocaleString('en-PK')} profit/unit`
+                    : '⚠ Selling price is BELOW cost price!'}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold">Opening Stock</label>
+                  <Input
+                    type="number" min="0" step="1"
+                    value={current.stock ?? ''}
+                    onChange={e => setCurrent(p => ({ ...p, stock: parseInt(e.target.value) || 0 }))}
+                    placeholder="0" disabled={isSaving}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold">Unit of Measure</label>
+                  <select
+                    className="w-full h-10 px-3 py-2 text-sm rounded-md border bg-background"
+                    value={current.unit || ''}
+                    onChange={e => setCurrent(p => ({ ...p, unit: e.target.value }))}
+                    disabled={isSaving}
+                  >
+                    <option value="">— select —</option>
+                    {current.product_type === 'food' ? (
+                      <><option value="serving">serving</option><option value="piece">piece</option><option value="plate">plate</option><option value="bowl">bowl</option><option value="cup">cup</option></>
+                    ) : current.product_type === 'medicine' ? (
+                      <><option value="strip">strip</option><option value="bottle">bottle</option><option value="vial">vial</option><option value="box">box</option></>
+                    ) : current.product_type === 'grocery' ? (
+                      <><option value="kg">kg</option><option value="g">g</option><option value="litre">litre</option><option value="ml">ml</option><option value="pack">pack</option><option value="box">box</option></>
+                    ) : current.product_type === 'clothing' ? (
+                      <><option value="pcs">pcs</option><option value="set">set</option><option value="dozen">dozen</option></>
+                    ) : (
+                      <><option value="pcs">pcs</option><option value="kg">kg</option><option value="box">box</option><option value="set">set</option><option value="roll">roll</option><option value="metre">metre</option></>
+                    )}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold">Barcode / SKU</label>
+                  <Input
+                    type="text" value={current.barcode || ''}
+                    onChange={e => setCurrent(p => ({ ...p, barcode: e.target.value }))}
+                    placeholder="Scan or type" disabled={isSaving} className="font-mono text-xs"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-semibold">Category</label>
+                  <Input
+                    type="text" value={current.category || ''}
+                    onChange={e => setCurrent(p => ({ ...p, category: e.target.value }))}
+                    placeholder="e.g. Dry Goods" list="cat-list" disabled={isSaving}
+                  />
+                  <datalist id="cat-list">
+                    {categories.map(c => <option key={c} value={c} />)}
+                  </datalist>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-semibold">Preferred Supplier (Optional)</label>
+                <select
+                  className="w-full h-10 px-3 py-2 text-sm rounded-md border bg-background"
+                  value={current.vendor_id || ''}
+                  onChange={e => setCurrent(p => ({ ...p, vendor_id: e.target.value ? parseInt(e.target.value) : undefined }))}
+                  disabled={isSaving}
+                >
+                  <option value="">— None —</option>
+                  {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {/* Dynamic Type Sections */}
+            {PRODUCT_SCHEMAS[current.product_type || 'general']?.sections?.map((sec: any, idx: number) => (
+              <div key={idx} className="space-y-3 pt-2 border-t border-border/40">
+                <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  {sec.tags ? '🏷 ' : ''}{sec.title}
+                </div>
+                {sec.tags ? (
+                  <div className="flex flex-wrap gap-2">
+                    {sec.tags.map((tag: string) => {
+                      const isSelected = current.metadata?.tags?.includes(tag);
+                      return (
+                        <div
+                          key={tag}
+                          onClick={() => {
+                            if (isSaving) return;
+                            const tags = current.metadata?.tags || [];
+                            const newTags = isSelected ? tags.filter((t: string) => t !== tag) : [...tags, tag];
+                            setCurrent(p => ({ ...p, metadata: { ...p.metadata, tags: newTags } }));
+                          }}
+                          className={cn(
+                            'px-3 py-1.5 text-xs rounded-full border cursor-pointer select-none transition-colors',
+                            isSelected
+                              ? 'bg-primary/10 border-primary text-primary font-medium'
+                              : 'bg-muted/30 hover:bg-muted text-muted-foreground'
+                          )}
+                        >
+                          {tag}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-4">
+                    {sec.fields.map((f: any) => (
+                      <div key={f.id} className="space-y-1.5">
+                        <label className="text-xs font-semibold text-muted-foreground">{f.label}</label>
+                        {f.type === 'select' ? (
+                          <>
+                            <Input
+                              type="text" className="h-9 text-sm"
+                              value={current.metadata?.[f.id] || ''}
+                              onChange={e => setCurrent(p => ({ ...p, metadata: { ...p.metadata, [f.id]: e.target.value } }))}
+                              placeholder={f.ph || `Select or type ${f.label.toLowerCase()}`}
+                              disabled={isSaving} list={`opts-${f.id}`}
+                            />
+                            <datalist id={`opts-${f.id}`}>
+                              {f.opts.map((o: string) => <option key={o} value={o} />)}
+                            </datalist>
+                          </>
+                        ) : (
+                          <Input
+                            type="text" className="h-9 text-sm"
+                            value={current.metadata?.[f.id] || ''}
+                            onChange={e => setCurrent(p => ({ ...p, metadata: { ...p.metadata, [f.id]: e.target.value } }))}
+                            placeholder={f.ph || ''}
+                            disabled={isSaving}
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {/* ── Bakery Module Section ── */}
+            {modules.bakery && (
+              <div className="space-y-3 pt-2 border-t border-orange-500/20">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold text-orange-600 uppercase tracking-wider flex items-center gap-1.5">
+                    🧁 Bakery Details
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCurrent(p => ({ ...p, is_bakery: p.is_bakery ? 0 : 1 }))}
+                    className={cn(
+                      'flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border transition-all',
+                      current.is_bakery
+                        ? 'bg-orange-500/10 border-orange-500/40 text-orange-600'
+                        : 'bg-muted/30 border-border/40 text-muted-foreground hover:bg-muted'
+                    )}
+                  >
+                    <span className={cn('w-8 h-4 rounded-full relative transition-colors inline-block', current.is_bakery ? 'bg-orange-500' : 'bg-muted-foreground/30')}>
+                      <span className={cn('absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all', current.is_bakery ? 'right-0.5' : 'left-0.5')} />
+                    </span>
+                    Bakery Product
+                  </button>
+                </div>
+
+                {current.is_bakery ? (
+                  <div className="space-y-3 bg-orange-500/5 border border-orange-500/15 rounded-xl p-3">
+                    {/* Production & Expiry Dates */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-muted-foreground">Production Date</label>
+                        <Input
+                          type="date"
+                          value={current.production_date || ''}
+                          onChange={e => setCurrent(p => ({ ...p, production_date: e.target.value }))}
+                          disabled={isSaving}
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-muted-foreground">Expiry Date</label>
+                        <Input
+                          type="date"
+                          value={current.expiry_date || ''}
+                          onChange={e => setCurrent(p => ({ ...p, expiry_date: e.target.value }))}
+                          disabled={isSaving}
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Weight & Unit Type */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-muted-foreground">Weight Value</label>
+                        <Input
+                          type="number" min="0" step="0.001"
+                          value={current.weight_value ?? ''}
+                          onChange={e => {
+                            const w = parseFloat(e.target.value) || undefined;
+                            setCurrent(p => ({
+                              ...p,
+                              weight_value: w,
+                              price: (p.auto_price_by_weight && p.price_per_kg && w)
+                                ? Math.round(p.price_per_kg * w)
+                                : p.price,
+                            }));
+                          }}
+                          placeholder="e.g. 0.5"
+                          disabled={isSaving}
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-muted-foreground">Unit Type</label>
+                        <select
+                          className="w-full h-9 px-3 py-2 text-sm rounded-md border bg-background"
+                          value={current.unit_type || 'piece'}
+                          onChange={e => setCurrent(p => ({ ...p, unit_type: e.target.value }))}
+                          disabled={isSaving}
+                        >
+                          <option value="kg">kg</option>
+                          <option value="gram">gram</option>
+                          <option value="piece">piece</option>
+                          <option value="tray">tray</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Auto-Price by Weight toggle */}
+                    <div className="flex items-center justify-between bg-card rounded-lg border border-border/50 p-2.5">
+                      <div>
+                        <p className="text-xs font-semibold">Auto-Price by Weight</p>
+                        <p className="text-[10px] text-muted-foreground">Calculate price = weight × price per kg</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCurrent(p => ({ ...p, auto_price_by_weight: p.auto_price_by_weight ? 0 : 1 }))}
+                        className={cn('w-10 h-5 rounded-full relative transition-colors shrink-0', current.auto_price_by_weight ? 'bg-orange-500' : 'bg-muted-foreground/30')}
+                      >
+                        <span className={cn('absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-all', current.auto_price_by_weight ? 'right-0.5' : 'left-0.5')} />
+                      </button>
+                    </div>
+
+                    {/* Price per kg (conditional) */}
+                    {!!current.auto_price_by_weight && (
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-muted-foreground">Price per kg (PKR)</label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-semibold">PKR</span>
+                          <Input
+                            type="number" min="0" step="1"
+                            value={current.price_per_kg ?? ''}
+                            onChange={e => {
+                              const ppk = parseFloat(e.target.value) || 0;
+                              const w = current.weight_value || 0;
+                              setCurrent(p => ({
+                                ...p,
+                                price_per_kg: ppk,
+                                price: (w > 0) ? Math.round(ppk * w) : p.price,
+                              }));
+                            }}
+                            placeholder="0"
+                            className="pl-11 h-9 text-sm"
+                            disabled={isSaving}
+                          />
+                        </div>
+                        {(current.price_per_kg ?? 0) > 0 && (current.weight_value ?? 0) > 0 && (
+                          <p className="text-[11px] text-orange-600 font-medium">
+                            Calculated price: PKR {Math.round((current.price_per_kg ?? 0) * (current.weight_value ?? 0)).toLocaleString('en-PK')}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-muted-foreground/60 italic">
+                    Enable to add expiry dates, production date, weight info & auto-pricing.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="p-5 border-t bg-muted/10 flex gap-3">
+            <Button type="button" variant="outline" className="w-full" onClick={onClose} disabled={isSaving}>
+              Cancel
+            </Button>
+            <Button type="submit" className="w-full" disabled={isSaving}>
+              {isSaving ? 'Saving...' : isEditing ? 'Save Changes' : 'Create Product'}
+            </Button>
+          </div>
+        </form>
+      </motion.div>
+    </div>,
+    document.body
+  );
+}
+
 export default function Products() {
   const [products, setProducts] = useState<Product[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [showDialog, setShowDialog] = useState(false);
-  const [current, setCurrent] = useState<Product>(empty);
+  const [initialProduct, setInitialProduct] = useState<Product>(empty);
   const [isEditing, setIsEditing] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [analytics, setAnalytics] = useState<any[]>([]);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [vendors, setVendors] = useState<any[]>([]);
-  const nameRef = useRef<HTMLInputElement>(null);
-  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [displayCount, setDisplayCount] = useState(20);
   const { addNotification } = useNotifications();
-  const { modules } = useModules();
 
   // Excel Import State
   const [showImportDialog, setShowImportDialog] = useState(false);
@@ -93,15 +592,7 @@ export default function Products() {
   const [importProgress, setImportProgress] = useState<{ done: number; total: number; errors: string[] } | null>(null);
   const importFileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    load();
-    return () => { if (focusTimerRef.current) clearTimeout(focusTimerRef.current); };
-  }, []);
-
-  useEffect(() => {
-    if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
-    if (showDialog) focusTimerRef.current = setTimeout(() => nameRef.current?.focus(), 100);
-  }, [showDialog]);
+  useEffect(() => { load(); }, []);
 
   const load = async () => {
     setIsLoading(true);
@@ -136,53 +627,20 @@ export default function Products() {
   const categories = useMemo(() => [...new Set(products.map(p => p.category).filter(Boolean))], [products]);
   const lowStockCount = useMemo(() => products.filter(p => (p.stock ?? 0) < 10).length, [products]);
 
-  const openAdd = () => { setCurrent({ ...empty }); setIsEditing(false); setShowDialog(true); };
-  const openEdit = (p: Product) => { setCurrent({ ...p }); setIsEditing(true); setShowDialog(true); };
+  const openAdd = () => { setInitialProduct({ ...empty }); setIsEditing(false); setShowDialog(true); };
+  const openEdit = (p: Product) => { setInitialProduct({ ...p }); setIsEditing(true); setShowDialog(true); };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!current.name.trim()) {
-      addNotification('Validation', 'Product name is required.', 'warning');
-      nameRef.current?.focus();
-      return;
-    }
-    const price = Number(current.price);
-    if (isNaN(price) || price <= 0) {
-      addNotification('Validation', 'Selling price must be a positive number.', 'warning');
-      return;
-    }
-    setIsSaving(true);
-    try {
-      const productData = {
-        name: current.name.trim(),
-        price,
-        purchase_price: Number(current.purchase_price) || 0,
-        stock: Number(current.stock) || 0,
-        category: (current.category || '').trim(),
-        barcode: (current.barcode || '').trim(),
-        unit: (current.unit || '').trim(),
-        product_type: current.product_type || 'general',
-        metadata: current.metadata || {},
-        // Bakery fields
-        is_bakery: current.is_bakery || 0,
-        production_date: current.production_date || null,
-        expiry_date: current.expiry_date || null,
-        weight_value: current.weight_value ?? null,
-        unit_type: current.unit_type || 'piece',
-        price_per_kg: current.price_per_kg ?? null,
-        auto_price_by_weight: current.auto_price_by_weight || 0,
-      };
-      const res = isEditing && current.id
-        ? await window.api.updateProduct(current.id, productData)
-        : await window.api.addProduct(productData);
-      if (res?.success) {
-        addNotification('Success', isEditing ? 'Product updated.' : 'Product added.', 'success');
-        setTimeout(() => { setShowDialog(false); load(); }, 200);
-      } else throw new Error(res?.error || 'Failed to save product');
-    } catch (err: any) {
-      addNotification('Error', err.message, 'error');
-    } finally {
-      setIsSaving(false);
+  const handleTogglePurchaseStatus = async (p: Product) => {
+    if (!p.id) return;
+    const newStatus = p.purchase_status === 'to_order' ? 'available' : 'to_order';
+    const res = await (window.api as any).setProductPurchaseStatus(p.id, newStatus);
+    if (res?.success) {
+      setProducts(prev => prev.map(x => x.id === p.id ? { ...x, purchase_status: newStatus } : x));
+      addNotification(
+        newStatus === 'to_order' ? 'Marked to Order' : 'Marked Available',
+        newStatus === 'to_order' ? `"${p.name}" added to purchase list` : `"${p.name}" removed from purchase list`,
+        'success'
+      );
     }
   };
 
@@ -601,7 +1059,14 @@ export default function Products() {
                         return (
                           <TableRow key={p.id} className="hover:bg-muted/30 transition-colors group">
                             <TableCell className="pl-5">
-                              <div className="font-semibold text-sm">{p.name}</div>
+                              <div className="flex items-center gap-2">
+                                <div className="font-semibold text-sm">{p.name}</div>
+                                {p.purchase_status === 'to_order' && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 shrink-0">
+                                    <ShoppingCart size={9} /> To Order
+                                  </span>
+                                )}
+                              </div>
                               {p.barcode && (
                                 <div className="text-[11px] text-muted-foreground font-mono mt-0.5">{p.barcode}</div>
                               )}
@@ -652,6 +1117,20 @@ export default function Products() {
                             </TableCell>
                             <TableCell className="text-right pr-5">
                               <div className="flex justify-end gap-1.5 opacity-60 group-hover:opacity-100 transition-opacity">
+                                {/* Mark to Order toggle */}
+                                <Button
+                                  variant="ghost" size="icon"
+                                  title={p.purchase_status === 'to_order' ? 'Remove from order list' : 'Mark as "To Order"'}
+                                  onClick={() => handleTogglePurchaseStatus(p)}
+                                  className={cn(
+                                    'h-8 w-8',
+                                    p.purchase_status === 'to_order'
+                                      ? 'text-amber-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 opacity-100'
+                                      : 'text-muted-foreground/50 hover:text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-900/20'
+                                  )}
+                                >
+                                  <ShoppingCart size={13} />
+                                </Button>
                                 <Button
                                   variant="ghost" size="icon"
                                   onClick={() => openEdit(p)}
@@ -914,424 +1393,15 @@ export default function Products() {
       </AnimatePresence>
 
       {/* ── Add / Edit Dialog ── */}
-      {showDialog && createPortal(
-        <div
-          className="fixed inset-0 z-[999] flex items-start justify-center p-4 sm:p-8 bg-black/60 backdrop-blur-sm overflow-y-auto animate-in fade-in duration-200"
-          onClick={() => !isSaving && setShowDialog(false)}
-        >
-          <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            transition={{ duration: 0.25, ease: [0.23, 1, 0.32, 1] }}
-            className="relative w-full max-w-lg my-auto bg-card rounded-2xl shadow-2xl border border-border/50 overflow-hidden"
-            onClick={e => e.stopPropagation()}
-          >
-            <form onSubmit={handleSubmit}>
-              {/* Dialog Header */}
-              <div
-                className="relative p-6 border-b"
-                style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1a3a5c 100%)' }}
-              >
-                <div className="pointer-events-none absolute top-0 right-0 w-32 h-32 rounded-full bg-blue-500/10 blur-2xl" />
-                <div className="flex items-center justify-between relative z-10">
-                  <div className="flex items-center gap-3">
-                    <div className="bg-blue-500/20 border border-blue-400/30 p-2.5 rounded-xl">
-                      <Package size={19} className="text-blue-300" />
-                    </div>
-                    <div>
-                      <h2 className="text-white text-lg font-bold">
-                        {isEditing ? 'Edit Product' : 'Add New Product'}
-                      </h2>
-                      <p className="text-blue-300/70 text-xs mt-0.5">
-                        {isEditing ? 'Update product details below.' : 'Fill in details to add to catalogue.'}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowDialog(false)}
-                    className="text-white/50 hover:text-white/90 transition-colors p-1 rounded-lg hover:bg-white/10"
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-6 pt-6 pb-1 px-6 max-h-[65vh] overflow-y-auto custom-scrollbar">
-                {/* Type Selector */}
-                <div className="grid grid-cols-4 sm:grid-cols-8 gap-2">
-                  {PRODUCT_TYPES.map(t => (
-                    <div
-                      key={t.id}
-                      onClick={() => {
-                        if (isEditing) return;
-                        setCurrent(p => ({ ...p, product_type: t.id, metadata: {} }));
-                      }}
-                      className={cn(
-                        'flex flex-col items-center justify-center gap-1 p-2 rounded-xl border cursor-pointer transition-all duration-150 text-center select-none',
-                        current.product_type === t.id
-                          ? 'border-primary bg-primary/10 text-primary shadow-sm'
-                          : isEditing
-                            ? 'opacity-40 cursor-not-allowed border-border/40'
-                            : 'hover:bg-muted/60 text-muted-foreground border-border/40'
-                      )}
-                    >
-                      <span className="text-xl">{t.icon}</span>
-                      <span className="text-[10px] font-medium leading-tight">{t.label}</span>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Core Details */}
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    <span>{PRODUCT_TYPES.find(t => t.id === current.product_type)?.icon}</span> Core Details
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-semibold">Product Name <span className="text-destructive">*</span></label>
-                    <Input
-                      ref={nameRef}
-                      required
-                      value={current.name}
-                      onChange={e => setCurrent(p => ({ ...p, name: e.target.value }))}
-                      placeholder="Enter product name"
-                      disabled={isSaving}
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-semibold">Cost / Purchase Price</label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-semibold">PKR</span>
-                        <Input
-                          type="number" min="0" step="1"
-                          value={current.purchase_price || ''}
-                          onChange={e => setCurrent(p => ({ ...p, purchase_price: parseFloat(e.target.value) || 0 }))}
-                          placeholder="0" className="pl-11" disabled={isSaving}
-                        />
-                      </div>
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-semibold">Selling Price <span className="text-destructive">*</span></label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-semibold">PKR</span>
-                        <Input
-                          type="number" min="1" step="1" required
-                          value={current.price || ''}
-                          onChange={e => setCurrent(p => ({ ...p, price: parseFloat(e.target.value) || 0 }))}
-                          placeholder="0" className="pl-11" disabled={isSaving}
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Profit preview */}
-                  {current.purchase_price > 0 && current.price > 0 && (
-                    <div className={cn(
-                      'text-xs px-3 py-2.5 rounded-xl border font-medium',
-                      current.price > current.purchase_price
-                        ? 'bg-emerald-500/8 border-emerald-500/20 text-emerald-600'
-                        : 'bg-destructive/8 border-destructive/20 text-destructive'
-                    )}>
-                      {current.price > current.purchase_price
-                        ? `✓ Margin: ${(((current.price - current.purchase_price) / current.price) * 100).toFixed(1)}%  — PKR ${Math.round(current.price - current.purchase_price).toLocaleString('en-PK')} profit/unit`
-                        : '⚠ Selling price is BELOW cost price!'}
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-semibold">Opening Stock</label>
-                      <Input
-                        type="number" min="0" step="1"
-                        value={current.stock ?? ''}
-                        onChange={e => setCurrent(p => ({ ...p, stock: parseInt(e.target.value) || 0 }))}
-                        placeholder="0" disabled={isSaving}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-semibold">Unit of Measure</label>
-                      <select
-                        className="w-full h-10 px-3 py-2 text-sm rounded-md border bg-background"
-                        value={current.unit || ''}
-                        onChange={e => setCurrent(p => ({ ...p, unit: e.target.value }))}
-                        disabled={isSaving}
-                      >
-                        <option value="">— select —</option>
-                        {current.product_type === 'food' ? (
-                          <><option value="serving">serving</option><option value="piece">piece</option><option value="plate">plate</option><option value="bowl">bowl</option><option value="cup">cup</option></>
-                        ) : current.product_type === 'medicine' ? (
-                          <><option value="strip">strip</option><option value="bottle">bottle</option><option value="vial">vial</option><option value="box">box</option></>
-                        ) : current.product_type === 'grocery' ? (
-                          <><option value="kg">kg</option><option value="g">g</option><option value="litre">litre</option><option value="ml">ml</option><option value="pack">pack</option><option value="box">box</option></>
-                        ) : current.product_type === 'clothing' ? (
-                          <><option value="pcs">pcs</option><option value="set">set</option><option value="dozen">dozen</option></>
-                        ) : (
-                          <><option value="pcs">pcs</option><option value="kg">kg</option><option value="box">box</option><option value="set">set</option><option value="roll">roll</option><option value="metre">metre</option></>
-                        )}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-semibold">Barcode / SKU</label>
-                      <Input
-                        type="text" value={current.barcode || ''}
-                        onChange={e => setCurrent(p => ({ ...p, barcode: e.target.value }))}
-                        placeholder="Scan or type" disabled={isSaving} className="font-mono text-xs"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-sm font-semibold">Category</label>
-                      <Input
-                        type="text" value={current.category || ''}
-                        onChange={e => setCurrent(p => ({ ...p, category: e.target.value }))}
-                        placeholder="e.g. Dry Goods" list="cat-list" disabled={isSaving}
-                      />
-                      <datalist id="cat-list">
-                        {categories.map(c => <option key={c} value={c} />)}
-                      </datalist>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-semibold">Preferred Supplier (Optional)</label>
-                    <select
-                      className="w-full h-10 px-3 py-2 text-sm rounded-md border bg-background"
-                      value={current.vendor_id || ''}
-                      onChange={e => setCurrent(p => ({ ...p, vendor_id: e.target.value ? parseInt(e.target.value) : undefined }))}
-                      disabled={isSaving}
-                    >
-                      <option value="">— None —</option>
-                      {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Dynamic Type Sections */}
-                {PRODUCT_SCHEMAS[current.product_type || 'general']?.sections?.map((sec: any, idx: number) => (
-                  <div key={idx} className="space-y-3 pt-2 border-t border-border/40">
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                      {sec.tags ? '🏷 ' : ''}{sec.title}
-                    </div>
-                    {sec.tags ? (
-                      <div className="flex flex-wrap gap-2">
-                        {sec.tags.map((tag: string) => {
-                          const isSelected = current.metadata?.tags?.includes(tag);
-                          return (
-                            <div
-                              key={tag}
-                              onClick={() => {
-                                if (isSaving) return;
-                                const tags = current.metadata?.tags || [];
-                                const newTags = isSelected ? tags.filter((t: string) => t !== tag) : [...tags, tag];
-                                setCurrent(p => ({ ...p, metadata: { ...p.metadata, tags: newTags } }));
-                              }}
-                              className={cn(
-                                'px-3 py-1.5 text-xs rounded-full border cursor-pointer select-none transition-colors',
-                                isSelected
-                                  ? 'bg-primary/10 border-primary text-primary font-medium'
-                                  : 'bg-muted/30 hover:bg-muted text-muted-foreground'
-                              )}
-                            >
-                              {tag}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-4">
-                        {sec.fields.map((f: any) => (
-                          <div key={f.id} className="space-y-1.5">
-                            <label className="text-xs font-semibold text-muted-foreground">{f.label}</label>
-                            {f.type === 'select' ? (
-                              <>
-                                <Input
-                                  type="text" className="h-9 text-sm"
-                                  value={current.metadata?.[f.id] || ''}
-                                  onChange={e => setCurrent(p => ({ ...p, metadata: { ...p.metadata, [f.id]: e.target.value } }))}
-                                  placeholder={f.ph || `Select or type ${f.label.toLowerCase()}`}
-                                  disabled={isSaving} list={`opts-${f.id}`}
-                                />
-                                <datalist id={`opts-${f.id}`}>
-                                  {f.opts.map((o: string) => <option key={o} value={o} />)}
-                                </datalist>
-                              </>
-                            ) : (
-                              <Input
-                                type="text" className="h-9 text-sm"
-                                value={current.metadata?.[f.id] || ''}
-                                onChange={e => setCurrent(p => ({ ...p, metadata: { ...p.metadata, [f.id]: e.target.value } }))}
-                                placeholder={f.ph || ''}
-                                disabled={isSaving}
-                              />
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {/* ── Bakery Module Section ── */}
-                {modules.bakery && (
-                  <div className="space-y-3 pt-2 border-t border-orange-500/20">
-                    <div className="flex items-center justify-between">
-                      <div className="text-xs font-semibold text-orange-600 uppercase tracking-wider flex items-center gap-1.5">
-                        🧁 Bakery Details
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setCurrent(p => ({ ...p, is_bakery: p.is_bakery ? 0 : 1 }))}
-                        className={cn(
-                          'flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border transition-all',
-                          current.is_bakery
-                            ? 'bg-orange-500/10 border-orange-500/40 text-orange-600'
-                            : 'bg-muted/30 border-border/40 text-muted-foreground hover:bg-muted'
-                        )}
-                      >
-                        <span className={cn('w-8 h-4 rounded-full relative transition-colors inline-block', current.is_bakery ? 'bg-orange-500' : 'bg-muted-foreground/30')}>
-                          <span className={cn('absolute top-0.5 w-3 h-3 rounded-full bg-white shadow transition-all', current.is_bakery ? 'right-0.5' : 'left-0.5')} />
-                        </span>
-                        Bakery Product
-                      </button>
-                    </div>
-
-                    {current.is_bakery ? (
-                      <div className="space-y-3 bg-orange-500/5 border border-orange-500/15 rounded-xl p-3">
-                        {/* Production & Expiry Dates */}
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-muted-foreground">Production Date</label>
-                            <Input
-                              type="date"
-                              value={current.production_date || ''}
-                              onChange={e => setCurrent(p => ({ ...p, production_date: e.target.value }))}
-                              disabled={isSaving}
-                              className="h-9 text-sm"
-                            />
-                          </div>
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-muted-foreground">Expiry Date</label>
-                            <Input
-                              type="date"
-                              value={current.expiry_date || ''}
-                              onChange={e => setCurrent(p => ({ ...p, expiry_date: e.target.value }))}
-                              disabled={isSaving}
-                              className="h-9 text-sm"
-                            />
-                          </div>
-                        </div>
-
-                        {/* Weight & Unit Type */}
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-muted-foreground">Weight Value</label>
-                            <Input
-                              type="number" min="0" step="0.001"
-                              value={current.weight_value ?? ''}
-                              onChange={e => {
-                                const w = parseFloat(e.target.value) || undefined;
-                                setCurrent(p => ({
-                                  ...p,
-                                  weight_value: w,
-                                  price: (p.auto_price_by_weight && p.price_per_kg && w)
-                                    ? Math.round(p.price_per_kg * w)
-                                    : p.price,
-                                }));
-                              }}
-                              placeholder="e.g. 0.5"
-                              disabled={isSaving}
-                              className="h-9 text-sm"
-                            />
-                          </div>
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-muted-foreground">Unit Type</label>
-                            <select
-                              className="w-full h-9 px-3 py-2 text-sm rounded-md border bg-background"
-                              value={current.unit_type || 'piece'}
-                              onChange={e => setCurrent(p => ({ ...p, unit_type: e.target.value }))}
-                              disabled={isSaving}
-                            >
-                              <option value="kg">kg</option>
-                              <option value="gram">gram</option>
-                              <option value="piece">piece</option>
-                              <option value="tray">tray</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        {/* Auto-Price by Weight toggle */}
-                        <div className="flex items-center justify-between bg-card rounded-lg border border-border/50 p-2.5">
-                          <div>
-                            <p className="text-xs font-semibold">Auto-Price by Weight</p>
-                            <p className="text-[10px] text-muted-foreground">Calculate price = weight × price per kg</p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setCurrent(p => ({ ...p, auto_price_by_weight: p.auto_price_by_weight ? 0 : 1 }))}
-                            className={cn('w-10 h-5 rounded-full relative transition-colors shrink-0', current.auto_price_by_weight ? 'bg-orange-500' : 'bg-muted-foreground/30')}
-                          >
-                            <span className={cn('absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-all', current.auto_price_by_weight ? 'right-0.5' : 'left-0.5')} />
-                          </button>
-                        </div>
-
-                        {/* Price per kg (conditional) */}
-                        {!!current.auto_price_by_weight && (
-                          <div className="space-y-1.5">
-                            <label className="text-xs font-semibold text-muted-foreground">Price per kg (PKR)</label>
-                            <div className="relative">
-                              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-semibold">PKR</span>
-                              <Input
-                                type="number" min="0" step="1"
-                                value={current.price_per_kg ?? ''}
-                                onChange={e => {
-                                  const ppk = parseFloat(e.target.value) || 0;
-                                  const w = current.weight_value || 0;
-                                  setCurrent(p => ({
-                                    ...p,
-                                    price_per_kg: ppk,
-                                    price: (w > 0) ? Math.round(ppk * w) : p.price,
-                                  }));
-                                }}
-                                placeholder="0"
-                                className="pl-11 h-9 text-sm"
-                                disabled={isSaving}
-                              />
-                            </div>
-                            {(current.price_per_kg ?? 0) > 0 && (current.weight_value ?? 0) > 0 && (
-                              <p className="text-[11px] text-orange-600 font-medium">
-                                Calculated price: PKR {Math.round((current.price_per_kg ?? 0) * (current.weight_value ?? 0)).toLocaleString('en-PK')}
-                              </p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <p className="text-[11px] text-muted-foreground/60 italic">
-                        Enable to add expiry dates, production date, weight info & auto-pricing.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="p-5 border-t bg-muted/10 flex gap-3">
-                <Button type="button" variant="outline" className="w-full" onClick={() => setShowDialog(false)} disabled={isSaving}>
-                  Cancel
-                </Button>
-                <Button type="submit" className="w-full" disabled={isSaving}>
-                  {isSaving ? 'Saving...' : isEditing ? 'Save Changes' : 'Create Product'}
-                </Button>
-              </div>
-            </form>
-          </motion.div>
-        </div>,
-        document.body
-      )}
+      <ProductFormModal
+        isOpen={showDialog}
+        isEditing={isEditing}
+        initialProduct={initialProduct}
+        vendors={vendors}
+        categories={categories}
+        onClose={() => setShowDialog(false)}
+        onSaved={load}
+      />
 
       {/* ── Import Dialog ── */}
       {showImportDialog && createPortal(

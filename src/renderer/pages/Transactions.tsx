@@ -269,13 +269,14 @@ export default function Transactions() {
   };
 
   const buildFormalInvoiceHtml = (sale: Sale, items: any[]) => {
-    const pkrNum = (n: number) => Math.round(n).toLocaleString('en-PK');
-    const paidAmt = sale.amount_paid !== undefined ? sale.amount_paid : sale.total;
-    const balAmt = sale.remaining !== undefined ? sale.remaining : 0;
-    let balanceRow = '';
-    if (balAmt > 0) balanceRow = `<tr><td class="label">BALANCE (CREDIT)</td><td class="value">PKR ${pkrNum(balAmt)}</td></tr>`;
+    const pkrNum     = (n: number) => Math.round(n).toLocaleString('en-PK');
+    const paidAmt    = sale.amount_paid !== undefined ? sale.amount_paid : sale.total;
+    const balAmt     = sale.remaining   !== undefined ? sale.remaining   : 0;
+    let balanceRow   = '';
+    if      (balAmt > 0) balanceRow = `<tr><td class="label">BALANCE (CREDIT)</td><td class="value">PKR ${pkrNum(balAmt)}</td></tr>`;
     else if (balAmt < 0) balanceRow = `<tr><td class="label">CHANGE DUE</td><td class="value">PKR ${pkrNum(Math.abs(balAmt))}</td></tr>`;
-    else balanceRow = `<tr><td class="label">BALANCE</td><td class="value">PKR 0</td></tr>`;
+    else                 balanceRow = `<tr><td class="label">BALANCE</td><td class="value">PKR 0</td></tr>`;
+
     const rowsHtml = items.map((item, idx) => `
       <tr class="item-row">
         <td class="center">${idx + 1}</td><td>${item.product_name}</td>
@@ -283,42 +284,106 @@ export default function Transactions() {
         <td class="right">PKR ${pkrNum(item.price)}</td>
         <td class="right amount-col">PKR ${pkrNum(item.price * item.quantity)}</td>
       </tr>`).join('');
-    const emptyCount = Math.max(0, 10 - items.length);
+
+    const emptyCount    = Math.max(0, 7 - items.length);
     const emptyRowsHtml = Array(emptyCount).fill(`<tr class="item-row empty-row"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>`).join('');
-    const notesLines = (settings.invoice_notes || settings.receipt_footer || '').split('\n').filter(Boolean).map(l => `<div class="note-line">${l.replace(/^[•\-]\s*/, '')}</div>`).join('');
-    const logoHtml = settings.store_logo ? `<img src="${settings.store_logo}" class="logo" alt="logo"/>` : '';
-    return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><title>Invoice ${formatInvoiceId(sale.id, sale.date_created)}</title>
+    const notesLines    = (settings.invoice_notes || settings.receipt_footer || '').split('\n').filter(Boolean).map(l => `<div class="note-line">${l.replace(/^[•\-]\s*/, '')}</div>`).join('');
+    const logoHtml      = settings.store_logo ? `<img src="${settings.store_logo}" class="logo" alt="logo"/>` : '';
+    const storeName     = settings.store_name    || 'Store Name';
+    const storeAddr     = settings.store_address || '';
+    const storePhone    = settings.store_phone   || '';
+    const customerName  = sale.customer_name     || 'Walk-in Customer';
+    const invoiceNo     = formatInvoiceId(sale.id, sale.date_created);
+
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/>
+<title>Invoice ${invoiceNo}</title>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}html,body{width:210mm;background:#fff;color:#1a1a1a;font-family:Arial,Helvetica,sans-serif;font-size:11pt}
-  .page{width:210mm;min-height:297mm;padding:12mm 14mm 10mm;display:flex;flex-direction:column}
-  .header{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:8px;border-bottom:3px solid #cc0000;margin-bottom:10px}
-  .brand{display:flex;align-items:center;gap:10px}.logo{height:52px;object-fit:contain}
-  .store-name{font-size:20pt;font-weight:900;color:#cc0000;line-height:1.1}.store-sub{font-size:8pt;color:#555;margin-top:3px;line-height:1.5}
-  .invoice-meta{text-align:right}.invoice-title{font-size:18pt;font-weight:900;color:#1a1a1a;letter-spacing:2px}
-  .meta-row{font-size:9pt;color:#333;margin-top:4px}.meta-row span{font-weight:bold}
-  table{width:100%;border-collapse:collapse;margin-top:6px}thead tr{background:#cc0000;color:#fff}
-  thead th{padding:7px 6px;font-size:9pt;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border:1px solid #aaa;white-space:nowrap}
-  .item-row td{border:1px solid #ccc;padding:6px;font-size:9.5pt;vertical-align:middle}.item-row:nth-child(even){background:#fafafa}
-  .empty-row td{height:22px}.center{text-align:center}.right{text-align:right}.amount-col{font-weight:700}.warranty-cell{color:#888;font-size:8pt}
-  .bottom{display:flex;justify-content:space-between;gap:16px;margin-top:10px;align-items:flex-start}
-  .notes-box{flex:1;border:1px solid #e0e0e0;border-radius:4px;padding:9px 11px;background:#fffbf8}
-  .notes-title{font-size:8pt;font-weight:700;color:#cc0000;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px}
-  .note-line{font-size:8pt;color:#c00;line-height:1.7;padding-left:8px;position:relative}.note-line::before{content:"•";position:absolute;left:0}
-  .summary{min-width:200px}.summary table{width:100%}.summary td{border:1px solid #ccc;padding:5px 9px;font-size:9.5pt}
-  .summary .label{color:#333}.summary .value{text-align:right;font-weight:600}.summary .discount-row td{color:#cc0000}
-  .summary .grand-row td{font-weight:800;font-size:10.5pt;background:#f5f5f5}
-  .footer{margin-top:14px;border-top:2px solid #cc0000;padding-top:8px;display:flex;justify-content:space-between;align-items:flex-end;font-size:8pt;color:#555}
-  .footer .sign-line{border-bottom:1px solid #999;width:160px;margin-top:14px}.footer .contact{text-align:right;line-height:1.7}
-  @media print{html,body{width:210mm}.page{padding:8mm 12mm}}
+  *{box-sizing:border-box;margin:0;padding:0}
+  @page{size:A4;margin:0}
+  html,body{width:210mm;background:#fff;color:#1a1a1a;font-family:Arial,Helvetica,sans-serif;font-size:10pt}
+  .page{width:210mm;min-height:297mm;padding:10mm 12mm 8mm;display:flex;flex-direction:column}
+  .hdr{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:7px;border-bottom:3px solid #cc0000;margin-bottom:7px}
+  .brand{display:flex;align-items:center;gap:9px}.logo{height:48px;object-fit:contain}
+  .store-name{font-size:18pt;font-weight:900;color:#cc0000;line-height:1.1}
+  .store-sub{font-size:7.5pt;color:#555;margin-top:2px;line-height:1.5}
+  .inv-meta{text-align:right}.inv-title{font-size:16pt;font-weight:900;color:#1a1a1a;letter-spacing:2px}
+  .meta-row{font-size:8.5pt;color:#333;margin-top:3px}.meta-row span{font-weight:bold}
+  .bill-bar{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:7px;padding:5px 9px;background:#fafafa;border:1px solid #e8e8e8;border-radius:3px}
+  .bill-section{flex:1}.bill-section.right{text-align:right}
+  .bill-lbl{font-size:6.5pt;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.5px}
+  .bill-name{font-size:10pt;font-weight:800;color:#1a1a1a;margin-top:2px}
+  .bill-sub{font-size:7.5pt;color:#555;margin-top:1px;line-height:1.4}
+  table{width:100%;border-collapse:collapse}
+  thead tr{background:#cc0000;color:#fff}
+  thead th{padding:5px 5px;font-size:8pt;font-weight:700;text-transform:uppercase;letter-spacing:.5px;border:1px solid #aaa;white-space:nowrap}
+  .item-row td{border:1px solid #ccc;padding:4px 5px;font-size:9pt;vertical-align:middle}
+  .item-row:nth-child(even){background:#fafafa}.empty-row td{height:18px}
+  .center{text-align:center}.right{text-align:right}.amount-col{font-weight:700}.warranty-cell{color:#888;font-size:7.5pt}
+  .bottom{display:flex;justify-content:space-between;gap:14px;margin-top:7px;align-items:flex-start}
+  .notes-box{flex:1;border:1px solid #e0e0e0;border-radius:4px;padding:6px 10px;background:#fffbf8}
+  .notes-title{font-size:7.5pt;font-weight:700;color:#cc0000;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+  .note-line{font-size:7.5pt;color:#c00;line-height:1.6;padding-left:8px;position:relative}.note-line::before{content:"•";position:absolute;left:0}
+  .summary{min-width:190px}.summary table{width:100%}.summary td{border:1px solid #ccc;padding:4px 8px;font-size:9pt}
+  .summary .label{color:#333}.summary .value{text-align:right;font-weight:600}
+  .summary .discount-row td{color:#cc0000}.summary .grand-row td{font-weight:800;font-size:10pt;background:#f5f5f5}
+  .footer{margin-top:auto;padding-top:7px;border-top:2px solid #cc0000;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:7.5pt;color:#555}
+  .sign-block{display:flex;flex-direction:column;align-items:center;text-align:center}
+  .sign-block.right-align{align-items:flex-end;text-align:right}
+  .sign-lbl{font-size:7pt;color:#888;margin-bottom:14px;white-space:nowrap}
+  .sign-line{border-bottom:1px solid #999;width:100%;margin-bottom:3px}
+  .sign-name{font-size:7.5pt;font-weight:700;color:#333}
+  @media print{html,body{width:210mm}.page{padding:8mm 10mm 6mm}}
 </style></head><body><div class="page">
-  <div class="header"><div class="brand">${logoHtml}<div><div class="store-name">${settings.store_name||'Store Name'}</div><div class="store-sub">${settings.store_address?settings.store_address+'<br/>':''}${settings.store_phone?'Tel: '+settings.store_phone:''}</div></div></div>
-  <div class="invoice-meta"><div class="invoice-title">INVOICE</div><div class="meta-row"><span>No:</span> ${formatInvoiceId(sale.id,sale.date_created)}</div><div class="meta-row"><span>Date:</span> ${dayjs(sale.date_created).format('YYYY-MM-DD')}</div></div></div>
-  <table><thead><tr><th style="width:36px">S.No</th><th style="text-align:left">Description</th><th style="width:68px">Warranty</th><th style="width:40px">Qty</th><th style="width:96px">U-Price</th><th style="width:104px">Amount</th></tr></thead>
+
+  <div class="hdr">
+    <div class="brand">${logoHtml}<div><div class="store-name">${storeName}</div><div class="store-sub">${storeAddr ? storeAddr + '<br/>' : ''}${storePhone ? 'Tel: ' + storePhone : ''}</div></div></div>
+    <div class="inv-meta"><div class="inv-title">INVOICE</div><div class="meta-row"><span>No:</span> ${invoiceNo}</div><div class="meta-row"><span>Date:</span> ${dayjs(sale.date_created).format('YYYY-MM-DD')}</div></div>
+  </div>
+
+  <div class="bill-bar">
+    <div class="bill-section">
+      <div class="bill-lbl">Bill To</div>
+      <div class="bill-name">${customerName}</div>
+    </div>
+    <div class="bill-section right">
+      <div class="bill-lbl">From (Seller)</div>
+      <div class="bill-name">${storeName}</div>
+      <div class="bill-sub">${storeAddr}${storePhone ? '<br/>Tel: ' + storePhone : ''}</div>
+    </div>
+  </div>
+
+  <table><thead><tr><th style="width:30px">S.No</th><th style="text-align:left">Description</th><th style="width:60px">Warranty</th><th style="width:34px">Qty</th><th style="width:86px">Unit Price</th><th style="width:96px">Amount</th></tr></thead>
   <tbody>${rowsHtml}${emptyRowsHtml}</tbody></table>
-  <div class="bottom"><div class="notes-box"><div class="notes-title">Terms &amp; Notes</div>${notesLines||'<div class="note-line" style="color:#aaa;padding-left:0">No notes set.</div>'}</div>
-  <div class="summary"><table><tr><td class="label">AMOUNT</td><td class="value">PKR ${pkrNum(sale.subtotal||sale.total)}</td></tr><tr class="discount-row"><td class="label">DISCOUNT</td><td class="value">${Number(sale.discount)>0?'- PKR '+pkrNum(Number(sale.discount)):'—'}</td></tr><tr class="grand-row"><td class="label">GRAND TOTAL</td><td class="value">PKR ${pkrNum(sale.total)}</td></tr><tr><td class="label">PAID</td><td class="value">PKR ${pkrNum(paidAmt)}</td></tr>${balanceRow}</table></div></div>
-  <div class="footer"><div><div style="font-size:8pt;color:#888;margin-bottom:2px">Authorized Signature</div><div class="sign-line"></div></div>
-  <div class="contact">${settings.store_name||''}<br/>${settings.store_address?settings.store_address+'<br/>':''}${settings.store_phone?'Tel: '+settings.store_phone:''}</div></div>
+
+  <div class="bottom">
+    <div class="notes-box"><div class="notes-title">Terms &amp; Notes</div>${notesLines || '<div class="note-line" style="color:#aaa;padding-left:0">No notes set.</div>'}</div>
+    <div class="summary"><table>
+      <tr><td class="label">AMOUNT</td><td class="value">PKR ${pkrNum(sale.subtotal || sale.total)}</td></tr>
+      <tr class="discount-row"><td class="label">DISCOUNT</td><td class="value">${Number(sale.discount) > 0 ? '- PKR ' + pkrNum(Number(sale.discount)) : '—'}</td></tr>
+      <tr class="grand-row"><td class="label">GRAND TOTAL</td><td class="value">PKR ${pkrNum(sale.total)}</td></tr>
+      <tr><td class="label">PAID</td><td class="value">PKR ${pkrNum(paidAmt)}</td></tr>
+      ${balanceRow}
+    </table></div>
+  </div>
+
+  <div class="footer">
+    <div class="sign-block">
+      <div class="sign-lbl">Customer Signature</div>
+      <div class="sign-line"></div>
+      <div class="sign-name">${customerName}</div>
+    </div>
+    <div class="sign-block">
+      <div class="sign-lbl">Prepared By</div>
+      <div class="sign-line"></div>
+      <div class="sign-name">${storeName}</div>
+    </div>
+    <div class="sign-block right-align">
+      <div class="sign-lbl">Authorized Signature</div>
+      <div class="sign-line"></div>
+      <div class="sign-name">${storeName}</div>
+    </div>
+  </div>
+
 </div></body></html>`;
   };
 
@@ -333,10 +398,18 @@ export default function Transactions() {
   };
 
   const saveReceiptPdf = async (sale: Sale) => {
-    const res = await window.api.getSaleItems(sale.id);
-    const items = res?.success && res.data ? res.data : [];
-    await window.api.saveInvoicePdf(buildInvoiceHtml(sale, items));
-    addNotification('PDF Saved', 'Invoice PDF created successfully.', 'success');
+    try {
+      const res = await window.api.getSaleItems(sale.id);
+      const items = res?.success && res.data ? res.data : [];
+      const result = await window.api.saveInvoicePdf(buildInvoiceHtml(sale, items));
+      if (result?.success) {
+        addNotification('PDF Saved', 'Invoice PDF saved successfully.', 'success');
+      } else if (result?.error && result.error !== 'Cancelled') {
+        addNotification('PDF Failed', result.error || 'Could not generate PDF.', 'error');
+      }
+    } catch (err: any) {
+      addNotification('PDF Error', err?.message || 'Unexpected error generating PDF.', 'error');
+    }
   };
 
   const openReturnModal = async (sale: Sale) => {

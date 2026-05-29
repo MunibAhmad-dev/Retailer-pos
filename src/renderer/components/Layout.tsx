@@ -245,7 +245,7 @@ export default function Layout({ children }: LayoutProps) {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5 scrollbar-thin scrollbar-thumb-border">
+        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5 scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent">
           {navGroups.map((group) => {
             const isGroupOpen = openGroups.has(group.label);
             const hasActiveItem = group.items.some(item => location.pathname === item.path);
@@ -265,7 +265,7 @@ export default function Layout({ children }: LayoutProps) {
                       <span className="text-[10px]">{group.emoji}</span>
                       <span className={cn(
                         "text-[9px] font-black uppercase tracking-[0.12em] transition-colors select-none",
-                        hasActiveItem ? "text-primary/80" : "text-muted-foreground/50 group-hover/ghdr:text-muted-foreground/80",
+                        hasActiveItem ? "text-primary" : "text-muted-foreground/75 group-hover/ghdr:text-muted-foreground",
                       )}>
                         {group.label}
                       </span>
@@ -273,7 +273,7 @@ export default function Layout({ children }: LayoutProps) {
                     <ChevronDown
                       size={10}
                       className={cn(
-                        "text-muted-foreground/40 transition-transform duration-200 select-none",
+                        "text-muted-foreground/65 transition-transform duration-200 select-none group-hover/ghdr:text-muted-foreground",
                         isGroupOpen ? "rotate-0" : "-rotate-90",
                       )}
                     />
@@ -424,8 +424,8 @@ export default function Layout({ children }: LayoutProps) {
         </header>
 
         {/* Content */}
-        <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto bg-background/50 relative">
-          <div className="mx-auto w-full max-w-screen-2xl animate-in fade-in slide-in-from-bottom-4 duration-500 h-full flex flex-col">
+        <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto bg-background relative">
+          <div className="mx-auto w-full max-w-screen-2xl animate-in fade-in duration-300 h-full flex flex-col">
             <ErrorBoundary>
               {children}
             </ErrorBoundary>

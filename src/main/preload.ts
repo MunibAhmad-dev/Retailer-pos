@@ -50,6 +50,8 @@ const api = {
   getProductAnalytics: () => ipcRenderer.invoke('get-product-analytics'),
   getCustomerDetails: (customerId: number) => ipcRenderer.invoke('get-customer-details', customerId),
   addCustomerPayment: (data: any) => ipcRenderer.invoke('add-customer-payment', data),
+  writeOffSaleBalance: (saleId: number, amount: number) => ipcRenderer.invoke('write-off-sale-balance', saleId, amount),
+  setProductPurchaseStatus: (id: number, status: string) => ipcRenderer.invoke('set-product-purchase-status', id, status),
   deleteVendorPayment: (id: number) => ipcRenderer.invoke('delete-vendor-payment', id),
   deleteCustomerPayment: (id: number) => ipcRenderer.invoke('delete-customer-payment', id),
   getProfitLossReport: (data?: any) => ipcRenderer.invoke('get-profit-loss-report', data),
@@ -139,6 +141,15 @@ const api = {
   getStockAdjustments: (productId?: number) => ipcRenderer.invoke('get-stock-adjustments', productId),
   cancelSale: (id: number) => ipcRenderer.invoke('cancel-sale', id),
   cancelPurchase: (id: number) => ipcRenderer.invoke('cancel-purchase', id),
+
+  // Employees / Payroll
+  getEmployees: () => ipcRenderer.invoke('get-employees'),
+  addEmployee: (data: any) => ipcRenderer.invoke('add-employee', data),
+  updateEmployee: (id: number, data: any) => ipcRenderer.invoke('update-employee', id, data),
+  deleteEmployee: (id: number) => ipcRenderer.invoke('delete-employee', id),
+
+  // Shell
+  openExternalUrl: (url: string) => ipcRenderer.invoke('open-external-url', url),
 
   // Accounts module
   getAccounts: () => ipcRenderer.invoke('get-accounts'),

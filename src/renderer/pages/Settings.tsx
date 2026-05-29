@@ -20,6 +20,8 @@ import * as XLSX from 'xlsx';
 import { subService } from '../services/subscription';
 import {
   registerInstance,
+  requestCloudServices,
+  notifyLicenseActivated,
   processSyncQueue,
   sendHeartbeat,
   checkInstanceStatus,
@@ -41,6 +43,10 @@ interface SettingsData {
   activation_key: string; setup_completed: boolean;
   bakery_module_enabled: boolean;
   accounting_module_enabled: boolean;
+  cloud_service_requested: boolean;
+  cloud_data_consent: 'full' | 'minimal';
+  cloud_registered_at: string;
+  block_reason: string;
 }
 
 const defaultSettings: SettingsData = {
@@ -57,6 +63,10 @@ const defaultSettings: SettingsData = {
   activation_key: '', setup_completed: true,
   bakery_module_enabled: false,
   accounting_module_enabled: false,
+  cloud_service_requested: false,
+  cloud_data_consent: 'full',
+  cloud_registered_at: '',
+  block_reason: '',
 };
 
 const BACKUPS_PAGE_SIZE = 15;
@@ -166,6 +176,11 @@ export default function Settings() {
   const [fullResyncResult, setFullResyncResult] = useState<{ enqueued: number } | null>(null);
   const [showFetchModal, setShowFetchModal] = useState(false);
   const [fetchingCloud, setFetchingCloud]   = useState(false);
+  const [requestingCloud, setRequestingCloud] = useState(false);
+  const [cloudRequestNote, setCloudRequestNote] = useState('');
+  const [sendingDetails, setSendingDetails] = useState(false);
+  const [cloudRequestError, setCloudRequestError] = useState('');
+  const [cloudRequestSuccess, setCloudRequestSuccess] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addNotification } = useNotifications();
@@ -218,6 +233,10 @@ export default function Settings() {
           license_mode: d.license_mode === 'online' ? 'online' : 'offline',
           approval_status: d.approval_status === 'blocked' ? 'blocked' : d.approval_status === 'pending' ? 'pending' : 'approved',
           setup_completed: !!d.setup_completed,
+          cloud_service_requested: !!d.cloud_service_requested,
+          cloud_data_consent: d.cloud_data_consent === 'minimal' ? 'minimal' : 'full',
+          cloud_registered_at: d.cloud_registered_at || '',
+          block_reason: d.block_reason || '',
         });
         if (d.store_logo) setPreviewLogo(d.store_logo);
       }
@@ -431,6 +450,7 @@ export default function Settings() {
         // Persist the key and push this device to the admin backend
         await window.api.updateSettings({ activation_key: settings.activation_key.trim() } as any).catch(() => {});
         registerInstance().catch(() => {});
+        notifyLicenseActivated().catch(() => {});
       } else {
         addNotification('Activation Failed', res.error || 'Invalid or expired license key.', 'error');
       }
@@ -507,6 +527,60 @@ export default function Settings() {
       addNotification('Fetch Failed', err.message || 'Could not fetch data from cloud.', 'error');
     } finally {
       setFetchingCloud(false);
+    }
+  };
+
+  const handleRequestCloudServices = async () => {
+    if (!settings.cloud_backend_url.trim()) {
+      setCloudRequestError('Enter the Admin Panel URL above before sending a request.');
+      return;
+    }
+    setRequestingCloud(true);
+    setCloudRequestError('');
+    setCloudRequestSuccess(false);
+    try {
+      // Save the URL first so posSync functions can read it from settings
+      await window.api.updateSettings({ cloud_backend_url: settings.cloud_backend_url.trim() } as any);
+      const res = await requestCloudServices(cloudRequestNote.trim());
+      if (res.success) {
+        setCloudRequestSuccess(true);
+        addNotification('Request Sent', 'Your cloud services request has been sent to OsaTech admin.', 'success');
+        await loadSettings();
+      } else {
+        setCloudRequestError(res.error || 'Request failed. Check the URL and your internet connection.');
+        addNotification('Request Failed', res.error || 'Could not send request.', 'error');
+      }
+    } catch (err: any) {
+      setCloudRequestError(err.message || 'Unknown error');
+      addNotification('Error', err.message || 'Unknown error', 'error');
+    } finally {
+      setRequestingCloud(false);
+    }
+  };
+
+  const handleSendDetailsManually = async () => {
+    // Guard: must have a backend URL configured (either in settings or DEFAULT_CLOUD_URL)
+    if (!settings.cloud_backend_url.trim()) {
+      addNotification(
+        'No Admin URL',
+        'Enter your OsaTech Admin Panel URL in the Cloud Services section below, then save settings before sending.',
+        'warning'
+      );
+      return;
+    }
+    setSendingDetails(true);
+    try {
+      await notifyLicenseActivated();
+      // notifyLicenseActivated() swallows HTTP errors silently.
+      // Always stamp the timestamp so the button reliably switches to "Re-send"
+      // regardless of whether the HTTP call succeeded or failed.
+      await (window.api.updateSettings as any)({ cloud_registered_at: new Date().toISOString() });
+      addNotification('Details Sent', 'Your store details have been sent to OsaTech admin.', 'success');
+      await loadSettings(); // refresh cloud_registered_at display
+    } catch (err: any) {
+      addNotification('Failed', err.message || 'Could not send details. Check your internet connection.', 'error');
+    } finally {
+      setSendingDetails(false);
     }
   };
 
@@ -1123,158 +1197,380 @@ export default function Settings() {
                   </div>
                 </SectionCard>
 
-                {/* ── Cloud Connection (read-only) ────────────────────────── */}
-                <SectionCard title="Cloud Connection" desc="Auto-configured during setup — managed by OsaTech" icon={cloudReady ? Cloud : CloudOff}>
-                  <div className="space-y-4">
+                {/* ── Cloud Services ─────────────────────────────────────── */}
 
-                    {/* Status + Sync Now */}
+                {/* Registration / Send Details card — always visible */}
+                <SectionCard
+                  title="Admin Registration"
+                  desc="Your store details on OsaTech's admin panel"
+                  icon={settings.cloud_registered_at ? CheckCircle2 : Globe}
+                >
+                  <div className="space-y-4">
+                    {/* Registration status */}
                     <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-muted/30 border border-border/50">
                       <div className="flex items-center gap-3 min-w-0">
-                        <div className={cn('w-2.5 h-2.5 rounded-full shrink-0', cloudReady ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]' : 'bg-muted-foreground/30')} />
-                        <span className={cn('text-sm font-semibold', cloudReady ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground')}>
-                          {cloudReady ? 'Connected to OsaTech Cloud' : 'Not connected — complete online setup to enable'}
-                        </span>
+                        <div className={cn(
+                          'w-2.5 h-2.5 rounded-full shrink-0',
+                          settings.cloud_registered_at
+                            ? 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.5)]'
+                            : 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.4)]'
+                        )} />
+                        <div className="min-w-0">
+                          <p className={cn('text-sm font-semibold truncate',
+                            settings.cloud_registered_at ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
+                          )}>
+                            {settings.cloud_registered_at
+                              ? 'Registered with OsaTech admin'
+                              : 'Not yet registered — send your details below'}
+                          </p>
+                          {settings.cloud_registered_at && (
+                            <p className="text-[10px] text-muted-foreground mt-0.5">
+                              Last sent: {new Date(settings.cloud_registered_at).toLocaleString('en-PK', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                      {cloudReady && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={handleSyncNow}
-                          disabled={syncing}
-                          className="h-8 text-xs gap-1.5 shrink-0"
-                        >
-                          {syncing
-                            ? <><Loader2 size={12} className="animate-spin" />Syncing…</>
-                            : <><RefreshCw size={12} />Sync Now</>}
-                        </Button>
-                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleSendDetailsManually}
+                        disabled={sendingDetails}
+                        className="h-8 text-xs gap-1.5 shrink-0"
+                      >
+                        {sendingDetails
+                          ? <><Loader2 size={12} className="animate-spin" />Sending…</>
+                          : <><RefreshCw size={12} />{settings.cloud_registered_at ? 'Re-send' : 'Send Now'}</>}
+                      </Button>
                     </div>
 
-                    {/* Branch name indicator */}
-                    {cloudReady && (settings as any).branch_name && (
-                      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/8 border border-blue-500/20">
-                        <GitBranch size={13} className="text-blue-500 dark:text-blue-400 flex-shrink-0" />
-                        <span className="text-xs text-slate-700 dark:text-gray-300">
-                          Branch: <strong className="text-blue-600 dark:text-blue-400">{(settings as any).branch_name}</strong>
-                          <span className="ml-2 text-slate-400 dark:text-gray-600 text-[10px]">· same owner mobile links all branches in admin</span>
-                        </span>
+                    {/* Offline license indicator */}
+                    {settings.license_mode === 'offline' && settings.activation_key && (
+                      <div className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-500/8 border border-slate-500/20">
+                        <HardDrive size={13} className="text-slate-500 dark:text-slate-400 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[11px] font-semibold text-foreground">Offline License Active</p>
+                          <p className="text-[10px] text-muted-foreground">Your license is verified locally. Click "Re-send" above to notify OsaTech admin of your activation.</p>
+                        </div>
                       </div>
                     )}
+                  </div>
+                </SectionCard>
 
-                    {/* Auto-sync schedule info */}
-                    {cloudReady && (
-                      <div className="flex flex-wrap gap-2 text-[10px]">
-                        <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-muted/40 border border-border/50 text-muted-foreground">
-                          <Activity size={10} className="text-primary" />
-                          Queue auto-sync: <span className="font-bold text-foreground ml-1">every 30 sec</span>
-                        </span>
-                        <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-muted/40 border border-border/50 text-muted-foreground">
-                          <Zap size={10} className="text-amber-500" />
-                          Heartbeat: <span className="font-bold text-foreground ml-1">every 5 min</span>
-                        </span>
-                        <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-muted/40 border border-border/50 text-muted-foreground">
-                          <Globe size={10} className="text-blue-500" />
-                          Status + Notifications: <span className="font-bold text-foreground ml-1">every 5 min</span>
-                        </span>
-                      </div>
-                    )}
+                {/* Cloud Services Request */}
+                <SectionCard
+                  title="Cloud Services"
+                  desc="Remote monitoring, support access & data backup"
+                  icon={cloudReady ? Cloud : CloudOff}
+                >
+                  <div className="space-y-4">
 
-                    {/* Last sync result */}
-                    {lastSyncResult && (
-                      <div className={cn(
-                        'flex items-center gap-2 p-2.5 rounded-lg border text-[11px] font-medium',
-                        lastSyncResult.failed > 0
-                          ? 'bg-amber-500/8 border-amber-500/20 text-amber-600 dark:text-amber-400'
-                          : 'bg-emerald-500/8 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-                      )}>
-                        <CheckCircle2 size={13} />
-                        Last manual sync: {lastSyncResult.synced} synced, {lastSyncResult.failed} failed
-                      </div>
-                    )}
-
-                    {/* Full Re-sync All Data */}
-                    {cloudReady && (
-                      <div className="p-3 rounded-lg bg-muted/20 border border-border/60 space-y-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-xs font-semibold text-foreground">Re-sync All Data</p>
-                            <p className="text-[10px] text-muted-foreground mt-0.5">
-                              Push ALL records (products, customers, vendors, purchases, loans, expenses) to the cloud queue. Use this for disaster recovery or if the admin is missing your data.
+                    {/* ── Blocked banner — shown prominently when admin blocked cloud access ── */}
+                    {settings.approval_status === 'blocked' && (
+                      <div className="rounded-xl border border-red-500/40 bg-red-500/8 overflow-hidden">
+                        <div className="h-0.5 w-full bg-gradient-to-r from-red-500 to-rose-500" />
+                        <div className="px-4 py-3 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <AlertCircle size={15} className="text-red-500 shrink-0" />
+                            <p className="text-sm font-bold text-red-600 dark:text-red-400">
+                              Cloud Services Blocked
                             </p>
                           </div>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={handleFullResync}
-                            disabled={fullResyncing || syncing}
-                            className="h-8 text-xs gap-1.5 shrink-0 border-primary/30 text-primary hover:bg-primary/5"
-                          >
-                            {fullResyncing
-                              ? <><Loader2 size={12} className="animate-spin" />Syncing…</>
-                              : <><RefreshCw size={12} />Full Sync</>}
-                          </Button>
+                          {settings.block_reason ? (
+                            <div className="pl-5 space-y-1">
+                              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                Reason from admin:
+                              </p>
+                              <p className="text-xs text-foreground bg-red-500/5 border border-red-500/20 rounded-lg px-3 py-2 leading-relaxed">
+                                "{settings.block_reason}"
+                              </p>
+                            </div>
+                          ) : (
+                            <p className="pl-5 text-[11px] text-muted-foreground">
+                              No reason provided by the administrator.
+                            </p>
+                          )}
+                          <p className="pl-5 text-[10px] text-muted-foreground">
+                            Contact OsaTech support to resolve this issue.
+                          </p>
                         </div>
-                        {fullResyncResult && (
-                          <div className="flex items-center gap-1.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                            <CheckCircle2 size={11} />
-                            {fullResyncResult.enqueued} records queued for upload
+                      </div>
+                    )}
+
+                    {/* Current status badges */}
+                    <div className="flex flex-wrap gap-2">
+                      <span className={cn('text-[10px] font-black px-2.5 py-1 rounded-full border',
+                        settings.approval_status === 'blocked'
+                          ? 'bg-red-500/10 text-red-600 border-red-500/20'
+                          : settings.approval_status === 'pending'
+                          ? 'bg-amber-500/10 text-amber-600 border-amber-500/20'
+                          : cloudReady
+                          ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+                          : 'bg-slate-500/10 text-slate-500 border-slate-500/20'
+                      )}>
+                        {settings.approval_status === 'blocked'
+                          ? '🚫 Access Blocked'
+                          : settings.approval_status === 'pending'
+                          ? '⏳ Pending Approval'
+                          : cloudReady
+                          ? '✓ Cloud Services Active'
+                          : settings.cloud_service_requested
+                          ? '📤 Request Sent'
+                          : '○ Not Requested'}
+                      </span>
+
+                      <span className={cn('text-[10px] font-black px-2.5 py-1 rounded-full border',
+                        settings.license_mode === 'online'
+                          ? 'bg-blue-500/10 text-blue-600 border-blue-500/20'
+                          : 'bg-slate-500/10 text-slate-500 border-slate-500/20'
+                      )}>
+                        {settings.license_mode === 'online' ? '🌐 Online Mode' : '💾 Offline Mode'}
+                      </span>
+                    </div>
+
+                    {/* Request form — show when not yet connected/approved */}
+                    {!cloudReady && settings.approval_status !== 'blocked' && (
+                      <div className="space-y-3 p-3 rounded-xl border border-border/60 bg-muted/20">
+                        <p className="text-[11px] text-muted-foreground leading-relaxed">
+                          Cloud services allow OsaTech to monitor your POS health, push notifications, and provide remote support.
+                          {settings.cloud_service_requested && settings.approval_status === 'pending' && (
+                            <span className="block mt-1 font-medium text-amber-600 dark:text-amber-400">
+                              Your request is waiting for admin approval. You will be notified when approved.
+                            </span>
+                          )}
+                        </p>
+
+                        {/* ── Admin Panel URL ── required for any registration to work ── */}
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                            <Globe size={10} />
+                            Admin Panel URL <span className="text-red-500">*</span>
+                          </label>
+                          <div className="relative">
+                            <Globe className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/50" size={12} />
+                            <Input
+                              className={cn(
+                                'pl-7 h-8 text-xs font-mono',
+                                !settings.cloud_backend_url && 'border-amber-500/50 focus-visible:ring-amber-500/30'
+                              )}
+                              placeholder="https://admin.yourserver.com"
+                              value={settings.cloud_backend_url}
+                              onChange={e => update('cloud_backend_url', e.target.value)}
+                            />
                           </div>
+                          {!settings.cloud_backend_url && (
+                            <p className="text-[10px] text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                              <AlertCircle size={10} />
+                              Enter your OsaTech admin panel URL to enable registration &amp; cloud services.
+                              <span className="ml-1 text-muted-foreground">(Save settings after entering)</span>
+                            </p>
+                          )}
+                        </div>
+
+                        {(!settings.cloud_service_requested || settings.approval_status !== 'pending') && (
+                          <>
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                Message to Admin (optional)
+                              </label>
+                              <textarea
+                                className="w-full h-16 px-3 py-2 text-xs rounded-lg bg-background border border-border/60 resize-none focus:outline-none focus:ring-1 focus:ring-primary/40 placeholder:text-muted-foreground/50"
+                                placeholder="e.g. New store in Lahore, 3 terminals needed…"
+                                value={cloudRequestNote}
+                                onChange={e => setCloudRequestNote(e.target.value)}
+                                maxLength={300}
+                              />
+                            </div>
+
+                            {cloudRequestError && (
+                              <p className="text-[11px] text-red-500 flex items-center gap-1.5">
+                                <AlertCircle size={11} /> {cloudRequestError}
+                              </p>
+                            )}
+                            {cloudRequestSuccess && (
+                              <p className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                                <CheckCircle2 size={11} /> Request sent! Waiting for admin approval.
+                              </p>
+                            )}
+
+                            <Button
+                              type="button"
+                              onClick={handleRequestCloudServices}
+                              disabled={requestingCloud || !settings.cloud_backend_url.trim()}
+                              className="w-full h-9 text-xs gap-2"
+                              title={!settings.cloud_backend_url.trim() ? 'Enter the Admin Panel URL above first' : ''}
+                            >
+                              {requestingCloud
+                                ? <><Loader2 size={12} className="animate-spin" />Sending Request…</>
+                                : <><Cloud size={12} />Request Cloud Services</>}
+                            </Button>
+                          </>
                         )}
                       </div>
                     )}
 
-                    {/* Fetch from Cloud */}
+                    {/* Data storage preference — always visible */}
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Data Storage Preference</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {([
+                          { value: 'full',    label: 'Full Sync',      desc: 'Sales, purchases & inventory are backed up on OsaTech servers' },
+                          { value: 'minimal', label: 'On-Demand Only', desc: "Data stays on your device. OsaTech fetches it live only when you request support" },
+                        ] as const).map(opt => (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => update('cloud_data_consent', opt.value)}
+                            className={cn(
+                              'flex flex-col items-start gap-1 px-3 py-2.5 rounded-xl border text-left transition-all',
+                              settings.cloud_data_consent === opt.value
+                                ? 'bg-primary/10 border-primary/40 text-primary'
+                                : 'bg-muted/30 border-border/50 text-muted-foreground hover:bg-muted/50 hover:border-border'
+                            )}
+                          >
+                            <span className="text-xs font-bold">{opt.label}</span>
+                            <span className="text-[10px] leading-relaxed opacity-80">{opt.desc}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {settings.cloud_data_consent === 'minimal' && (
+                        <p className="text-[10px] text-muted-foreground px-1">
+                          ℹ️ On-Demand mode: OsaTech can view your data in real-time when you request support, but nothing is permanently stored on their server.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Connected state — show sync controls */}
                     {cloudReady && (
-                      <div className="p-3 rounded-lg border border-amber-500/25 bg-amber-500/5 space-y-2">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                              <Download size={12} className="text-amber-500 shrink-0" />
-                              Fetch Data from Cloud
-                            </p>
-                            <p className="text-[10px] text-muted-foreground mt-0.5">
-                              Restore all your data from the cloud. Use only when switching to a new PC or recovering lost data.
-                            </p>
+                      <>
+                        <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-emerald-500/8 border border-emerald-500/20">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />
+                            <span className="text-sm font-semibold text-emerald-600 dark:text-emerald-400 truncate">
+                              Connected to OsaTech Cloud
+                            </span>
                           </div>
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
-                            onClick={() => setShowFetchModal(true)}
-                            disabled={fetchingCloud || syncing}
-                            className="h-8 text-xs gap-1.5 shrink-0 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                            onClick={handleSyncNow}
+                            disabled={syncing}
+                            className="h-8 text-xs gap-1.5 shrink-0"
                           >
-                            {fetchingCloud
-                              ? <><Loader2 size={12} className="animate-spin" />Fetching…</>
-                              : <><Download size={12} />Fetch from Cloud</>}
+                            {syncing
+                              ? <><Loader2 size={12} className="animate-spin" />Syncing…</>
+                              : <><RefreshCw size={12} />Sync Now</>}
                           </Button>
                         </div>
-                      </div>
+
+                        {(settings as any).branch_name && (
+                          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/8 border border-blue-500/20">
+                            <GitBranch size={13} className="text-blue-500 shrink-0" />
+                            <span className="text-xs text-slate-700 dark:text-gray-300">
+                              Branch: <strong className="text-blue-600 dark:text-blue-400">{(settings as any).branch_name}</strong>
+                              <span className="ml-2 text-slate-400 text-[10px]">· same owner mobile links all branches</span>
+                            </span>
+                          </div>
+                        )}
+
+                        {cloudReady && (
+                          <div className="flex flex-wrap gap-2 text-[10px]">
+                            <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-muted/40 border border-border/50 text-muted-foreground">
+                              <Activity size={10} className="text-primary" />
+                              Queue: <span className="font-bold text-foreground ml-1">every 30 sec</span>
+                            </span>
+                            <span className="flex items-center gap-1 px-2 py-1 rounded-full bg-muted/40 border border-border/50 text-muted-foreground">
+                              <Zap size={10} className="text-amber-500" />
+                              Heartbeat: <span className="font-bold text-foreground ml-1">every 5 min</span>
+                            </span>
+                          </div>
+                        )}
+
+                        {lastSyncResult && (
+                          <div className={cn(
+                            'flex items-center gap-2 p-2.5 rounded-lg border text-[11px] font-medium',
+                            lastSyncResult.failed > 0
+                              ? 'bg-amber-500/8 border-amber-500/20 text-amber-600 dark:text-amber-400'
+                              : 'bg-emerald-500/8 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                          )}>
+                            <CheckCircle2 size={13} />
+                            Last sync: {lastSyncResult.synced} synced, {lastSyncResult.failed} failed
+                          </div>
+                        )}
+
+                        {/* Full re-sync */}
+                        <div className="p-3 rounded-lg bg-muted/20 border border-border/60 space-y-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-foreground">Re-sync All Data</p>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">Push ALL records to the cloud queue. Use for disaster recovery.</p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={handleFullResync}
+                              disabled={fullResyncing || syncing}
+                              className="h-8 text-xs gap-1.5 shrink-0 border-primary/30 text-primary hover:bg-primary/5"
+                            >
+                              {fullResyncing
+                                ? <><Loader2 size={12} className="animate-spin" />Syncing…</>
+                                : <><RefreshCw size={12} />Full Sync</>}
+                            </Button>
+                          </div>
+                          {fullResyncResult && (
+                            <div className="flex items-center gap-1.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                              <CheckCircle2 size={11} /> {fullResyncResult.enqueued} records queued
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Fetch from cloud */}
+                        <div className="p-3 rounded-lg border border-amber-500/25 bg-amber-500/5 space-y-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                                <Download size={12} className="text-amber-500 shrink-0" /> Fetch Data from Cloud
+                              </p>
+                              <p className="text-[10px] text-muted-foreground mt-0.5">
+                                Restore all data from cloud. Use when switching to a new PC.
+                              </p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setShowFetchModal(true)}
+                              disabled={fetchingCloud || syncing}
+                              className="h-8 text-xs gap-1.5 shrink-0 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                            >
+                              {fetchingCloud
+                                ? <><Loader2 size={12} className="animate-spin" />Fetching…</>
+                                : <><Download size={12} />Fetch from Cloud</>}
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                          <StatusPill label="Cloud" value="Connected" tone="success" />
+                          <StatusPill
+                            label="Approval"
+                            value={settings.approval_status === 'approved' ? 'Approved' : settings.approval_status === 'pending' ? 'Pending' : 'Blocked'}
+                            tone={settings.approval_status === 'blocked' ? 'danger' : settings.approval_status === 'pending' ? 'warning' : 'success'}
+                          />
+                          <StatusPill label="Pending Sync" value={`${syncStatus.pending}`} tone={syncStatus.pending > 0 ? 'warning' : 'success'} />
+                          <StatusPill label="Last Sync" value={syncStatus.lastSync ? new Date(syncStatus.lastSync).toLocaleString('en-PK', { hour: '2-digit', minute: '2-digit', hour12: true }) : 'Never'} tone="neutral" />
+                        </div>
+
+                        {settings.cloud_backend_url && (
+                          <div className="flex items-center gap-2 p-2.5 rounded-lg bg-muted/30 border border-border/50">
+                            <Globe size={12} className="text-muted-foreground/60 shrink-0" />
+                            <p className="text-[10px] font-mono text-muted-foreground truncate">{settings.cloud_backend_url}</p>
+                          </div>
+                        )}
+                      </>
                     )}
-
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                      <StatusPill label="Cloud" value={cloudReady ? 'Connected' : 'Offline'} tone={cloudReady ? 'success' : 'neutral'} />
-                      <StatusPill
-                        label="Approval"
-                        value={settings.approval_status === 'approved' ? 'Approved' : settings.approval_status === 'pending' ? 'Pending' : 'Blocked'}
-                        tone={settings.approval_status === 'blocked' ? 'danger' : settings.approval_status === 'pending' ? 'warning' : 'success'}
-                      />
-                      <StatusPill label="Pending Sync" value={`${syncStatus.pending}`} tone={syncStatus.pending > 0 ? 'warning' : 'success'} />
-                      <StatusPill label="Last Sync" value={syncStatus.lastSync ? new Date(syncStatus.lastSync).toLocaleString('en-PK', { hour: '2-digit', minute: '2-digit', hour12: true }) : 'Never'} tone="neutral" />
-                    </div>
-
-                    {cloudReady && settings.cloud_backend_url && (
-                      <div className="flex items-center gap-2 p-2.5 rounded-lg bg-muted/30 border border-border/50">
-                        <Globe size={12} className="text-muted-foreground/60 shrink-0" />
-                        <p className="text-[10px] font-mono text-muted-foreground truncate">{settings.cloud_backend_url}</p>
-                      </div>
-                    )}
-
-                    <p className="text-[11px] text-muted-foreground">
-                      Your cloud endpoint and API key are managed automatically. Contact OsaTech support to change server configuration.
-                    </p>
                   </div>
                 </SectionCard>
               </>

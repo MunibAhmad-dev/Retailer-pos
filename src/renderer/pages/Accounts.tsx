@@ -231,6 +231,434 @@ function AccountCard({
   );
 }
 
+/* ─── AddAccountModal ────────────────────────────────────────────────────────
+   Isolated component — form state lives here so keystrokes don't re-render
+   the parent Accounts page with its charts and transaction list.
+──────────────────────────────────────────────────────────────────────────── */
+function AddAccountModal({ isOpen, onClose, onSaved }: { isOpen: boolean; onClose: () => void; onSaved: () => void }) {
+  const { addNotification } = useNotifications();
+  const [accName,     setAccName]    = useState('');
+  const [accType,     setAccType]    = useState<'cash' | 'bank'>('cash');
+  const [accOpenBal,  setAccOpenBal] = useState('');
+  const [accBankName, setAccBankName]= useState('');
+  const [accAccNum,   setAccAccNum]  = useState('');
+  const [accNotes,    setAccNotes]   = useState('');
+
+  // Reset form when closed
+  useEffect(() => {
+    if (!isOpen) {
+      setAccName(''); setAccType('cash'); setAccOpenBal('');
+      setAccBankName(''); setAccAccNum(''); setAccNotes('');
+    }
+  }, [isOpen]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!accName.trim()) return;
+    try {
+      const res = await window.api.addAccount({
+        name: accName, type: accType,
+        opening_balance: parseFloat(accOpenBal) || 0,
+        bank_name: accBankName, account_number: accAccNum, notes: accNotes,
+      });
+      if (res.success) {
+        addNotification('Account Created', `"${accName}" added successfully.`, 'success');
+        onClose();
+        onSaved();
+      } else throw new Error(res.error);
+    } catch (e: any) { addNotification('Error', e.message, 'error'); }
+  };
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        >
+          <motion.div className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            onClick={onClose}
+          />
+          <motion.div
+            className="relative bg-card rounded-2xl border border-border/60 shadow-2xl w-full max-w-md overflow-hidden"
+            initial={{ scale: 0.95, opacity: 0, y: 16 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.95, opacity: 0, y: 8 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <div className="bg-emerald-500/5 border-b border-emerald-500/15 px-5 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center">
+                  <Plus size={15} className="text-emerald-500" />
+                </div>
+                <p className="font-semibold text-sm">New Account</p>
+              </div>
+              <button onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-muted/60 flex items-center justify-center text-muted-foreground">
+                <X size={15} />
+              </button>
+            </div>
+            <form onSubmit={handleSubmit}>
+              <div className="p-5 space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Account Type</label>
+                  <div className="flex gap-2">
+                    {[{ v: 'cash', label: 'Cash in Hand', icon: Banknote }, { v: 'bank', label: 'Bank Account', icon: Landmark }].map(t => (
+                      <button key={t.v} type="button"
+                        onClick={() => setAccType(t.v as any)}
+                        className={cn(
+                          'flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-medium transition-all',
+                          accType === t.v
+                            ? t.v === 'cash'
+                              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
+                              : 'bg-blue-500/10 border-blue-500/40 text-blue-600 dark:text-blue-400'
+                            : 'border-border/50 text-muted-foreground hover:border-border',
+                        )}
+                      >
+                        <t.icon size={15} /> {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5 col-span-2">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Account Name <span className="text-rose-500">*</span>
+                    </label>
+                    <Input required value={accName} onChange={e => setAccName(e.target.value)}
+                      placeholder={accType === 'bank' ? 'e.g. Meezan Savings' : 'e.g. Shop Cash'} className="h-10"
+                    />
+                  </div>
+                  <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Opening Balance</label>
+                    <Input type="number" value={accOpenBal} onChange={e => setAccOpenBal(e.target.value)}
+                      placeholder="0" className="h-10 font-mono"
+                    />
+                  </div>
+                  {accType === 'bank' && (
+                    <>
+                      <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                        <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Bank Name</label>
+                        <Input value={accBankName} onChange={e => setAccBankName(e.target.value)}
+                          placeholder="e.g. Meezan Bank" className="h-10"
+                        />
+                      </div>
+                      <div className="space-y-1.5 col-span-2">
+                        <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Account Number</label>
+                        <Input value={accAccNum} onChange={e => setAccAccNum(e.target.value)}
+                          placeholder="e.g. 0123-0123456789-01" className="h-10 font-mono"
+                        />
+                      </div>
+                    </>
+                  )}
+                  <div className="space-y-1.5 col-span-2">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Notes</label>
+                    <Input value={accNotes} onChange={e => setAccNotes(e.target.value)}
+                      placeholder="Optional description" className="h-10"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="px-5 py-4 border-t border-border/60 bg-muted/20 flex justify-end gap-3">
+                <Button type="button" variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+                <Button type="submit" size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5">
+                  <Plus size={14} /> Create Account
+                </Button>
+              </div>
+            </form>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/* ─── AddTxnModal ────────────────────────────────────────────────────────── */
+function AddTxnModal({
+  isOpen, accounts, prefillAccount, onClose, onSaved,
+}: {
+  isOpen: boolean;
+  accounts: Account[];
+  prefillAccount: Account | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { addNotification } = useNotifications();
+  const [txnAccount,  setTxnAccount]  = useState<number | ''>('');
+  const [txnType,     setTxnType]     = useState<'in' | 'out'>('in');
+  const [txnAmount,   setTxnAmount]   = useState('');
+  const [txnCategory, setTxnCategory] = useState('');
+  const [txnNote,     setTxnNote]     = useState('');
+
+  // Reset / pre-fill when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setTxnAccount(prefillAccount ? prefillAccount.id : '');
+      setTxnType('in');
+      setTxnAmount('');
+      setTxnCategory('');
+      setTxnNote('');
+    }
+  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amount = parseFloat(txnAmount);
+    if (!txnAccount || isNaN(amount) || amount <= 0) return;
+    try {
+      const res = await window.api.addAccountTxn({
+        account_id: txnAccount,
+        type: txnType,
+        amount,
+        category: txnCategory.toLowerCase() || 'manual',
+        note: txnNote,
+      });
+      if (res.success) {
+        addNotification('Entry Added', 'Transaction recorded.', 'success');
+        onClose();
+        onSaved();
+      } else throw new Error(res.error);
+    } catch (e: any) { addNotification('Error', e.message, 'error'); }
+  };
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        >
+          <motion.div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+          <motion.div
+            className="relative bg-card rounded-2xl border border-border/60 shadow-2xl w-full max-w-md overflow-hidden"
+            initial={{ scale: 0.95, opacity: 0, y: 16 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.95, opacity: 0, y: 8 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <div className="bg-violet-500/5 border-b border-violet-500/15 px-5 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-violet-500/15 border border-violet-500/25 flex items-center justify-center">
+                  <DollarSign size={15} className="text-violet-500" />
+                </div>
+                <p className="font-semibold text-sm">
+                  {prefillAccount ? `Add Entry — ${prefillAccount.name}` : 'Add Transaction Entry'}
+                </p>
+              </div>
+              <button onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-muted/60 flex items-center justify-center text-muted-foreground">
+                <X size={15} />
+              </button>
+            </div>
+            <form onSubmit={handleSubmit}>
+              <div className="p-5 space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Type</label>
+                  <div className="flex gap-2">
+                    {[
+                      { v: 'in',  label: 'Money In',  icon: ArrowUpCircle,   cls: 'bg-emerald-500/10 border-emerald-500/40 text-emerald-600 dark:text-emerald-400' },
+                      { v: 'out', label: 'Money Out', icon: ArrowDownCircle, cls: 'bg-rose-500/10 border-rose-500/40 text-rose-600 dark:text-rose-400' },
+                    ].map(t => (
+                      <button key={t.v} type="button" onClick={() => { setTxnType(t.v as any); setTxnCategory(''); }}
+                        className={cn(
+                          'flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-medium transition-all',
+                          txnType === t.v ? t.cls : 'border-border/50 text-muted-foreground hover:border-border',
+                        )}
+                      >
+                        <t.icon size={14} /> {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {!prefillAccount && (
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Account <span className="text-rose-500">*</span></label>
+                    <select required value={txnAccount}
+                      onChange={e => setTxnAccount(Number(e.target.value))}
+                      className="w-full h-10 rounded-lg border border-border/60 bg-background text-sm px-3 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                    >
+                      <option value="">Select account…</option>
+                      {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Amount (PKR) <span className="text-rose-500">*</span></label>
+                    <Input required type="number" value={txnAmount} onChange={e => setTxnAmount(e.target.value)}
+                      placeholder="0" className="h-10 font-mono"
+                    />
+                  </div>
+                  <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Category</label>
+                    <Input value={txnCategory} onChange={e => setTxnCategory(e.target.value)}
+                      placeholder={txnType === 'in' ? 'e.g. Sale Income' : 'e.g. Expense'}
+                      className="h-10" list="cat-suggestions"
+                    />
+                    <datalist id="cat-suggestions">
+                      {(txnType === 'in' ? QUICK_CATEGORIES_IN : QUICK_CATEGORIES_OUT).map(c => <option key={c} value={c} />)}
+                    </datalist>
+                  </div>
+                  <div className="col-span-2 flex flex-wrap gap-1.5">
+                    {(txnType === 'in' ? QUICK_CATEGORIES_IN : QUICK_CATEGORIES_OUT).slice(0, 4).map(c => (
+                      <button key={c} type="button" onClick={() => setTxnCategory(c)}
+                        className={cn(
+                          'px-2.5 py-0.5 rounded-full text-[11px] font-medium border transition-all',
+                          txnCategory === c ? 'bg-foreground text-background border-foreground' : 'bg-muted/60 text-muted-foreground border-border/50 hover:border-border',
+                        )}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="space-y-1.5 col-span-2">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Note</label>
+                    <Input value={txnNote} onChange={e => setTxnNote(e.target.value)}
+                      placeholder="Optional description" className="h-10"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="px-5 py-4 border-t border-border/60 bg-muted/20 flex justify-end gap-3">
+                <Button type="button" variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+                <Button type="submit" size="sm" className={cn(
+                  'gap-1.5 text-white',
+                  txnType === 'in' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700',
+                )}>
+                  {txnType === 'in' ? <ArrowUpCircle size={14} /> : <ArrowDownCircle size={14} />}
+                  Record {txnType === 'in' ? 'Income' : 'Expense'}
+                </Button>
+              </div>
+            </form>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/* ─── TransferModal ──────────────────────────────────────────────────────── */
+function TransferModal({
+  isOpen, accounts, initialFromId, onClose, onSaved,
+}: {
+  isOpen: boolean;
+  accounts: Account[];
+  initialFromId: number | '';
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { addNotification } = useNotifications();
+  const [trFromAcc, setTrFromAcc] = useState<number | ''>(initialFromId);
+  const [trToAcc,   setTrToAcc]   = useState<number | ''>('');
+  const [trAmount,  setTrAmount]  = useState('');
+  const [trNote,    setTrNote]    = useState('');
+
+  // Reset when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setTrFromAcc(initialFromId);
+      setTrToAcc('');
+      setTrAmount('');
+      setTrNote('');
+    }
+  }, [isOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amount = parseFloat(trAmount);
+    if (!trFromAcc || !trToAcc || isNaN(amount) || amount <= 0) return;
+    try {
+      const res = await window.api.transferBetweenAccounts({
+        from_account_id: trFromAcc,
+        to_account_id: trToAcc,
+        amount,
+        note: trNote || 'Internal Transfer',
+      });
+      if (res.success) {
+        addNotification('Transfer Complete', `PKR ${amount.toLocaleString()} transferred.`, 'success');
+        onClose();
+        onSaved();
+      } else throw new Error(res.error);
+    } catch (e: any) { addNotification('Error', e.message, 'error'); }
+  };
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        >
+          <motion.div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+          <motion.div
+            className="relative bg-card rounded-2xl border border-border/60 shadow-2xl w-full max-w-sm overflow-hidden"
+            initial={{ scale: 0.95, opacity: 0, y: 16 }}
+            animate={{ scale: 1, opacity: 1, y: 0 }}
+            exit={{ scale: 0.95, opacity: 0, y: 8 }}
+            transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <div className="bg-blue-500/5 border-b border-blue-500/15 px-5 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-blue-500/15 border border-blue-500/25 flex items-center justify-center">
+                  <ArrowLeftRight size={15} className="text-blue-500" />
+                </div>
+                <p className="font-semibold text-sm">Transfer Between Accounts</p>
+              </div>
+              <button onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-muted/60 flex items-center justify-center text-muted-foreground">
+                <X size={15} />
+              </button>
+            </div>
+            <form onSubmit={handleSubmit}>
+              <div className="p-5 space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">From Account <span className="text-rose-500">*</span></label>
+                  <select required value={trFromAcc} onChange={e => setTrFromAcc(Number(e.target.value))}
+                    className="w-full h-10 rounded-lg border border-border/60 bg-background text-sm px-3 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  >
+                    <option value="">Select account…</option>
+                    {accounts.map(a => <option key={a.id} value={a.id}>{a.name} ({fmt(Number(a.current_balance))})</option>)}
+                  </select>
+                </div>
+                <div className="flex justify-center">
+                  <div className="w-8 h-8 rounded-full border border-border/60 bg-muted/40 flex items-center justify-center">
+                    <ArrowDownCircle size={14} className="text-muted-foreground" />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">To Account <span className="text-rose-500">*</span></label>
+                  <select required value={trToAcc} onChange={e => setTrToAcc(Number(e.target.value))}
+                    className="w-full h-10 rounded-lg border border-border/60 bg-background text-sm px-3 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  >
+                    <option value="">Select account…</option>
+                    {accounts.filter(a => a.id !== trFromAcc).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Amount (PKR) <span className="text-rose-500">*</span></label>
+                  <Input required type="number" value={trAmount} onChange={e => setTrAmount(e.target.value)}
+                    placeholder="0" className="h-10 font-mono"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Note</label>
+                  <Input value={trNote} onChange={e => setTrNote(e.target.value)}
+                    placeholder="Optional note" className="h-10"
+                  />
+                </div>
+              </div>
+              <div className="px-5 py-4 border-t border-border/60 bg-muted/20 flex justify-end gap-3">
+                <Button type="button" variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+                <Button type="submit" size="sm" className="bg-blue-600 hover:bg-blue-700 text-white gap-1.5">
+                  <ArrowLeftRight size={14} /> Transfer
+                </Button>
+              </div>
+            </form>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
 /* ─── Main Page ─────────────────────────────────────────────────────────── */
 export default function Accounts() {
   const { addNotification } = useNotifications();
@@ -249,29 +677,11 @@ export default function Accounts() {
   const [filterAccountId, setFilterAccountId] = useState<number | ''>('');
 
   // Modals
-  const [showAddAccount,  setShowAddAccount]  = useState(false);
-  const [showAddTxn,      setShowAddTxn]      = useState(false);
-  const [showTransfer,    setShowTransfer]    = useState(false);
-  const [prefillAccount,  setPrefillAccount]  = useState<Account | null>(null);
-
-  // Forms
-  const [accName,     setAccName]    = useState('');
-  const [accType,     setAccType]    = useState<'cash' | 'bank'>('cash');
-  const [accOpenBal,  setAccOpenBal] = useState('');
-  const [accBankName, setAccBankName]= useState('');
-  const [accAccNum,   setAccAccNum]  = useState('');
-  const [accNotes,    setAccNotes]   = useState('');
-
-  const [txnAccount,  setTxnAccount] = useState<number | ''>('');
-  const [txnType,     setTxnType]    = useState<'in' | 'out'>('in');
-  const [txnAmount,   setTxnAmount]  = useState('');
-  const [txnCategory, setTxnCategory]= useState('');
-  const [txnNote,     setTxnNote]    = useState('');
-
-  const [trFromAcc, setTrFromAcc]   = useState<number | ''>('');
-  const [trToAcc,   setTrToAcc]     = useState<number | ''>('');
-  const [trAmount,  setTrAmount]    = useState('');
-  const [trNote,    setTrNote]      = useState('');
+  const [showAddAccount,     setShowAddAccount]     = useState(false);
+  const [showAddTxn,         setShowAddTxn]         = useState(false);
+  const [showTransfer,       setShowTransfer]       = useState(false);
+  const [prefillAccount,     setPrefillAccount]     = useState<Account | null>(null);
+  const [initialTransferFrom, setInitialTransferFrom] = useState<number | ''>('');
 
   /* ── Derived stats ── */
   const cashTotal = useMemo(() =>
@@ -336,65 +746,6 @@ export default function Accounts() {
   }, [datePreset, dateFrom, dateTo, filterAccountId]);
 
   /* ── Handlers ── */
-  const handleAddAccount = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!accName.trim()) return;
-    try {
-      const res = await window.api.addAccount({
-        name: accName, type: accType,
-        opening_balance: parseFloat(accOpenBal) || 0,
-        bank_name: accBankName, account_number: accAccNum, notes: accNotes,
-      });
-      if (res.success) {
-        addNotification('Account Created', `"${accName}" added successfully.`, 'success');
-        setShowAddAccount(false);
-        setAccName(''); setAccType('cash'); setAccOpenBal('');
-        setAccBankName(''); setAccAccNum(''); setAccNotes('');
-        await loadAccounts();
-      } else throw new Error(res.error);
-    } catch (e: any) { addNotification('Error', e.message, 'error'); }
-  };
-
-  const handleAddTxn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const amount = parseFloat(txnAmount);
-    if (!txnAccount || isNaN(amount) || amount <= 0) return;
-    try {
-      const res = await window.api.addAccountTxn({
-        account_id: txnAccount,
-        type: txnType,
-        amount,
-        category: txnCategory.toLowerCase() || 'manual',
-        note: txnNote,
-      });
-      if (res.success) {
-        addNotification('Entry Added', 'Transaction recorded.', 'success');
-        setShowAddTxn(false); setPrefillAccount(null);
-        setTxnAmount(''); setTxnCategory(''); setTxnNote(''); setTxnType('in');
-        await loadAccounts(); await loadTxns();
-      } else throw new Error(res.error);
-    } catch (e: any) { addNotification('Error', e.message, 'error'); }
-  };
-
-  const handleTransfer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const amount = parseFloat(trAmount);
-    if (!trFromAcc || !trToAcc || isNaN(amount) || amount <= 0) return;
-    try {
-      const res = await window.api.transferBetweenAccounts({
-        from_account_id: trFromAcc,
-        to_account_id: trToAcc,
-        amount,
-        note: trNote || 'Internal Transfer',
-      });
-      if (res.success) {
-        addNotification('Transfer Complete', `PKR ${amount.toLocaleString()} transferred.`, 'success');
-        setShowTransfer(false); setTrFromAcc(''); setTrToAcc(''); setTrAmount(''); setTrNote('');
-        await loadAccounts(); await loadTxns();
-      } else throw new Error(res.error);
-    } catch (e: any) { addNotification('Error', e.message, 'error'); }
-  };
-
   const handleDeleteTxn = async (id: number) => {
     if (!window.confirm('Delete this transaction? This will update the account balance.')) return;
     try {
@@ -419,13 +770,11 @@ export default function Accounts() {
 
   const openAddTxnFor = (acc: Account) => {
     setPrefillAccount(acc);
-    setTxnAccount(acc.id);
-    setTxnType('in');
     setShowAddTxn(true);
   };
 
   const openTransferFrom = (acc: Account) => {
-    setTrFromAcc(acc.id);
+    setInitialTransferFrom(acc.id);
     setShowTransfer(true);
   };
 
@@ -521,7 +870,7 @@ export default function Accounts() {
           <motion.div key={kpi.label} variants={fadeUp} initial="hidden" animate="show" custom={kpi.custom + 1}
             whileHover={{ y: -2, transition: { duration: 0.18 } }}
           >
-            <div className="rounded-2xl border border-border/50 bg-card/80 backdrop-blur-sm p-5 shadow-sm flex items-center gap-4">
+            <div className="rounded-2xl border border-border/40 bg-card p-5 shadow-sm flex items-center gap-4" style={{ boxShadow: '0 2px 12px -2px rgba(0,0,0,0.06)' }}>
               <div className={cn('w-11 h-11 rounded-xl border flex items-center justify-center flex-shrink-0', kpi.bg)}>
                 <kpi.icon size={20} className={kpi.color} />
               </div>
@@ -544,98 +893,141 @@ export default function Accounts() {
 
         {/* Cash Flow Area Chart */}
         <motion.div variants={fadeUp} initial="hidden" animate="show" custom={4}
-          className="lg:col-span-2 rounded-2xl border border-border/50 bg-card shadow-sm p-5"
+          className="lg:col-span-2 rounded-2xl bg-card overflow-hidden relative"
+          style={{ border: '1px solid rgba(16,185,129,0.2)', boxShadow: '0 4px 24px -4px rgba(16,185,129,0.12), 0 1px 4px rgba(0,0,0,0.05)' }}
         >
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <p className="text-sm font-semibold">Cash Flow — Last 30 Days</p>
-              <p className="text-[11px] text-muted-foreground">Daily money in vs out across all accounts</p>
+          {/* Top accent bar */}
+          <div className="h-[3px] bg-gradient-to-r from-emerald-600 via-teal-500 to-cyan-400" />
+          <div className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" style={{ boxShadow: '0 0 7px rgba(16,185,129,0.65)' }} />
+                  <p className="text-sm font-bold">Cash Flow — Last 30 Days</p>
+                </div>
+                <p className="text-[11px] text-muted-foreground/70 ml-[18px]">Daily money in vs out across all accounts</p>
+              </div>
+              <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" style={{ boxShadow: '0 0 5px rgba(16,185,129,0.6)' }} />In
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-rose-500" style={{ boxShadow: '0 0 5px rgba(239,68,68,0.6)' }} />Out
+                </span>
+              </div>
             </div>
-            <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
-              <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />In</span>
-              <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500" />Out</span>
-            </div>
+            {filledChart.length === 0 ? (
+              <div className="h-48 flex items-center justify-center text-sm text-muted-foreground/50">
+                No transactions yet — add entries to see cash flow
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={200}>
+                <AreaChart data={filledChart} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="gradIn" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#10b981" stopOpacity={0.30} />
+                      <stop offset="50%" stopColor="#10b981" stopOpacity={0.10} />
+                      <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="gradOut" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#ef4444" stopOpacity={0.26} />
+                      <stop offset="50%" stopColor="#ef4444" stopOpacity={0.08} />
+                      <stop offset="100%" stopColor="#ef4444" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="2 4" stroke="hsl(var(--border))" strokeOpacity={0.4} vertical={false} />
+                  <XAxis dataKey="day" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
+                    tickLine={false} axisLine={false} interval={4}
+                  />
+                  <YAxis tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
+                    tickLine={false} axisLine={false} width={58}
+                    tickFormatter={(v) => v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)}
+                  />
+                  <Tooltip content={<CashFlowTooltip />} />
+                  <Area type="monotone" dataKey="total_in"  stroke="#10b981" strokeWidth={2.2} fill="url(#gradIn)"  dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#10b981', fill: 'hsl(var(--card))' }} />
+                  <Area type="monotone" dataKey="total_out" stroke="#ef4444" strokeWidth={2.2} fill="url(#gradOut)" dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#ef4444', fill: 'hsl(var(--card))' }} />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
           </div>
-          {filledChart.length === 0 ? (
-            <div className="h-48 flex items-center justify-center text-sm text-muted-foreground/50">
-              No transactions yet — add entries to see cash flow
-            </div>
-          ) : (
-            <ResponsiveContainer width="100%" height={200}>
-              <AreaChart data={filledChart} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="gradIn" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#10b981" stopOpacity={0.25} />
-                    <stop offset="100%" stopColor="#10b981" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="gradOut" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#ef4444" stopOpacity={0.25} />
-                    <stop offset="100%" stopColor="#ef4444" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" strokeOpacity={0.4} vertical={false} />
-                <XAxis dataKey="day" tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
-                  tickLine={false} axisLine={false}
-                  interval={4}
-                />
-                <YAxis tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
-                  tickLine={false} axisLine={false} width={58}
-                  tickFormatter={(v) => v >= 1000 ? `${Math.round(v / 1000)}k` : String(v)}
-                />
-                <Tooltip content={<CashFlowTooltip />} />
-                <Area type="monotone" dataKey="total_in"  stroke="#10b981" strokeWidth={2} fill="url(#gradIn)"  dot={false} />
-                <Area type="monotone" dataKey="total_out" stroke="#ef4444" strokeWidth={2} fill="url(#gradOut)" dot={false} />
-              </AreaChart>
-            </ResponsiveContainer>
-          )}
         </motion.div>
 
         {/* Balance Distribution Donut */}
         <motion.div variants={fadeUp} initial="hidden" animate="show" custom={5}
-          className="rounded-2xl border border-border/50 bg-card shadow-sm p-5"
+          className="rounded-2xl bg-card overflow-hidden relative"
+          style={{ border: '1px solid rgba(59,130,246,0.2)', boxShadow: '0 4px 20px -4px rgba(59,130,246,0.10), 0 1px 4px rgba(0,0,0,0.05)' }}
         >
-          <p className="text-sm font-semibold mb-1">Balance Distribution</p>
-          <p className="text-[11px] text-muted-foreground mb-4">By account</p>
-          {pieData.length === 0 ? (
-            <div className="h-48 flex items-center justify-center text-sm text-muted-foreground/50">
-              No positive balances
+          {/* Top accent bar */}
+          <div className="h-[3px] bg-gradient-to-r from-blue-600 via-violet-500 to-indigo-400" />
+          <div className="p-5">
+            <div className="flex items-center gap-2 mb-0.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block" style={{ boxShadow: '0 0 7px rgba(59,130,246,0.65)' }} />
+              <p className="text-sm font-bold">Balance Distribution</p>
             </div>
-          ) : (
-            <>
-              <ResponsiveContainer width="100%" height={160}>
-                <PieChart>
-                  <Pie data={pieData} dataKey="value" cx="50%" cy="50%"
-                    innerRadius={45} outerRadius={70} paddingAngle={3}
-                    strokeWidth={0}
-                  >
-                    {pieData.map((entry, i) => (
-                      <Cell key={`cell-${i}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value: any, name: any) => [fmt(value), name]}
-                    contentStyle={{
-                      background: 'hsl(var(--card))',
-                      border: '1px solid hsl(var(--border))',
-                      borderRadius: 12,
-                      fontSize: 12,
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-              <div className="space-y-1.5 mt-2">
-                {pieData.map((d) => (
-                  <div key={d.name} className="flex items-center justify-between text-[11px]">
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: d.color }} />
-                      <span className="text-muted-foreground truncate max-w-[90px]">{d.name}</span>
-                    </div>
-                    <span className="font-semibold font-mono">{fmt(d.value)}</span>
-                  </div>
-                ))}
+            <p className="text-[11px] text-muted-foreground/70 mb-4 ml-[18px]">By account</p>
+            {pieData.length === 0 ? (
+              <div className="h-48 flex items-center justify-center text-sm text-muted-foreground/50">
+                No positive balances
               </div>
-            </>
-          )}
+            ) : (
+              <>
+                <div className="relative">
+                  <ResponsiveContainer width="100%" height={155}>
+                    <PieChart>
+                      <Pie data={pieData} dataKey="value" cx="50%" cy="50%"
+                        innerRadius={48} outerRadius={72} paddingAngle={3}
+                        strokeWidth={0}
+                      >
+                        {pieData.map((entry, i) => (
+                          <Cell key={`cell-${i}`} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        formatter={(value: any, name: any) => [fmt(value), name]}
+                        contentStyle={{
+                          background: 'hsl(var(--card))',
+                          border: '1px solid hsl(var(--border))',
+                          borderRadius: 14,
+                          fontSize: 11,
+                          boxShadow: '0 8px 30px rgba(0,0,0,0.12)',
+                        }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  {/* Center label */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <p className="text-base font-black tabular-nums text-foreground">
+                      {fmt(pieData.reduce((s, d) => s + d.value, 0))}
+                    </p>
+                    <p className="text-[9px] text-muted-foreground font-semibold">Net Funds</p>
+                  </div>
+                </div>
+                <div className="space-y-2.5 mt-2">
+                  {pieData.map((d) => {
+                    const total = pieData.reduce((s, x) => s + x.value, 0);
+                    const pct = total > 0 ? Math.round((d.value / total) * 100) : 0;
+                    return (
+                      <div key={d.name}>
+                        <div className="flex items-center justify-between text-[11px] mb-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: d.color }} />
+                            <span className="text-muted-foreground/90 truncate max-w-[80px] font-medium">{d.name}</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold font-mono">{fmt(d.value)}</span>
+                            <span className="text-muted-foreground text-[10px] w-7 text-right">{pct}%</span>
+                          </div>
+                        </div>
+                        <div className="h-1 rounded-full bg-muted/60 overflow-hidden">
+                          <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, backgroundColor: d.color }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
         </motion.div>
       </div>
 
@@ -850,304 +1242,26 @@ export default function Accounts() {
         </AnimatePresence>
       </motion.div>
 
-      {/* ── Modal: Add Account ── */}
-      <AnimatePresence>
-        {showAddAccount && (
-          <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          >
-            <motion.div className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setShowAddAccount(false)}
-            />
-            <motion.div
-              className="relative bg-card rounded-2xl border border-border/60 shadow-2xl w-full max-w-md overflow-hidden"
-              initial={{ scale: 0.95, opacity: 0, y: 16 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 8 }}
-              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-            >
-              <div className="bg-emerald-500/5 border-b border-emerald-500/15 px-5 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/25 flex items-center justify-center">
-                    <Plus size={15} className="text-emerald-500" />
-                  </div>
-                  <p className="font-semibold text-sm">New Account</p>
-                </div>
-                <button onClick={() => setShowAddAccount(false)} className="w-7 h-7 rounded-lg hover:bg-muted/60 flex items-center justify-center text-muted-foreground">
-                  <X size={15} />
-                </button>
-              </div>
-              <form onSubmit={handleAddAccount}>
-                <div className="p-5 space-y-4">
-                  {/* Account type toggle */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Account Type</label>
-                    <div className="flex gap-2">
-                      {[{ v: 'cash', label: 'Cash in Hand', icon: Banknote }, { v: 'bank', label: 'Bank Account', icon: Landmark }].map(t => (
-                        <button key={t.v} type="button"
-                          onClick={() => setAccType(t.v as any)}
-                          className={cn(
-                            'flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-medium transition-all',
-                            accType === t.v
-                              ? t.v === 'cash'
-                                ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
-                                : 'bg-blue-500/10 border-blue-500/40 text-blue-600 dark:text-blue-400'
-                              : 'border-border/50 text-muted-foreground hover:border-border',
-                          )}
-                        >
-                          <t.icon size={15} /> {t.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5 col-span-2">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        Account Name <span className="text-rose-500">*</span>
-                      </label>
-                      <Input required value={accName} onChange={e => setAccName(e.target.value)}
-                        placeholder={accType === 'bank' ? 'e.g. Meezan Savings' : 'e.g. Shop Cash'} className="h-10"
-                      />
-                    </div>
-                    <div className="space-y-1.5 col-span-2 sm:col-span-1">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Opening Balance</label>
-                      <Input type="number" value={accOpenBal} onChange={e => setAccOpenBal(e.target.value)}
-                        placeholder="0" className="h-10 font-mono"
-                      />
-                    </div>
-                    {accType === 'bank' && (
-                      <>
-                        <div className="space-y-1.5 col-span-2 sm:col-span-1">
-                          <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Bank Name</label>
-                          <Input value={accBankName} onChange={e => setAccBankName(e.target.value)}
-                            placeholder="e.g. Meezan Bank" className="h-10"
-                          />
-                        </div>
-                        <div className="space-y-1.5 col-span-2">
-                          <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Account Number</label>
-                          <Input value={accAccNum} onChange={e => setAccAccNum(e.target.value)}
-                            placeholder="e.g. 0123-0123456789-01" className="h-10 font-mono"
-                          />
-                        </div>
-                      </>
-                    )}
-                    <div className="space-y-1.5 col-span-2">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Notes</label>
-                      <Input value={accNotes} onChange={e => setAccNotes(e.target.value)}
-                        placeholder="Optional description" className="h-10"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div className="px-5 py-4 border-t border-border/60 bg-muted/20 flex justify-end gap-3">
-                  <Button type="button" variant="outline" size="sm" onClick={() => setShowAddAccount(false)}>Cancel</Button>
-                  <Button type="submit" size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5">
-                    <Plus size={14} /> Create Account
-                  </Button>
-                </div>
-              </form>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── Modal: Add Transaction ── */}
-      <AnimatePresence>
-        {showAddTxn && (
-          <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          >
-            <motion.div className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-              onClick={() => { setShowAddTxn(false); setPrefillAccount(null); }}
-            />
-            <motion.div
-              className="relative bg-card rounded-2xl border border-border/60 shadow-2xl w-full max-w-md overflow-hidden"
-              initial={{ scale: 0.95, opacity: 0, y: 16 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 8 }}
-              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-            >
-              <div className="bg-violet-500/5 border-b border-violet-500/15 px-5 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-violet-500/15 border border-violet-500/25 flex items-center justify-center">
-                    <DollarSign size={15} className="text-violet-500" />
-                  </div>
-                  <p className="font-semibold text-sm">
-                    {prefillAccount ? `Add Entry — ${prefillAccount.name}` : 'Add Transaction Entry'}
-                  </p>
-                </div>
-                <button onClick={() => { setShowAddTxn(false); setPrefillAccount(null); }}
-                  className="w-7 h-7 rounded-lg hover:bg-muted/60 flex items-center justify-center text-muted-foreground">
-                  <X size={15} />
-                </button>
-              </div>
-              <form onSubmit={handleAddTxn}>
-                <div className="p-5 space-y-4">
-                  {/* In / Out toggle */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Type</label>
-                    <div className="flex gap-2">
-                      {[
-                        { v: 'in',  label: 'Money In',  icon: ArrowUpCircle,   cls: 'bg-emerald-500/10 border-emerald-500/40 text-emerald-600 dark:text-emerald-400' },
-                        { v: 'out', label: 'Money Out', icon: ArrowDownCircle, cls: 'bg-rose-500/10 border-rose-500/40 text-rose-600 dark:text-rose-400' },
-                      ].map(t => (
-                        <button key={t.v} type="button" onClick={() => { setTxnType(t.v as any); setTxnCategory(''); }}
-                          className={cn(
-                            'flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-medium transition-all',
-                            txnType === t.v ? t.cls : 'border-border/50 text-muted-foreground hover:border-border',
-                          )}
-                        >
-                          <t.icon size={14} /> {t.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Account dropdown */}
-                  {!prefillAccount && (
-                    <div className="space-y-1.5">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Account <span className="text-rose-500">*</span></label>
-                      <select required value={txnAccount}
-                        onChange={e => setTxnAccount(Number(e.target.value))}
-                        className="w-full h-10 rounded-lg border border-border/60 bg-background text-sm px-3 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-                      >
-                        <option value="">Select account…</option>
-                        {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                      </select>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5 col-span-2 sm:col-span-1">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Amount (PKR) <span className="text-rose-500">*</span></label>
-                      <Input required type="number" value={txnAmount} onChange={e => setTxnAmount(e.target.value)}
-                        placeholder="0" className="h-10 font-mono"
-                      />
-                    </div>
-                    <div className="space-y-1.5 col-span-2 sm:col-span-1">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Category</label>
-                      <Input value={txnCategory} onChange={e => setTxnCategory(e.target.value)}
-                        placeholder={txnType === 'in' ? 'e.g. Sale Income' : 'e.g. Expense'}
-                        className="h-10" list="cat-suggestions"
-                      />
-                      <datalist id="cat-suggestions">
-                        {(txnType === 'in' ? QUICK_CATEGORIES_IN : QUICK_CATEGORIES_OUT).map(c => <option key={c} value={c} />)}
-                      </datalist>
-                    </div>
-                    <div className="col-span-2 flex flex-wrap gap-1.5">
-                      {(txnType === 'in' ? QUICK_CATEGORIES_IN : QUICK_CATEGORIES_OUT).slice(0, 4).map(c => (
-                        <button key={c} type="button" onClick={() => setTxnCategory(c)}
-                          className={cn(
-                            'px-2.5 py-0.5 rounded-full text-[11px] font-medium border transition-all',
-                            txnCategory === c ? 'bg-foreground text-background border-foreground' : 'bg-muted/60 text-muted-foreground border-border/50 hover:border-border',
-                          )}
-                        >
-                          {c}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="space-y-1.5 col-span-2">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Note</label>
-                      <Input value={txnNote} onChange={e => setTxnNote(e.target.value)}
-                        placeholder="Optional description" className="h-10"
-                      />
-                    </div>
-                  </div>
-                </div>
-                <div className="px-5 py-4 border-t border-border/60 bg-muted/20 flex justify-end gap-3">
-                  <Button type="button" variant="outline" size="sm" onClick={() => { setShowAddTxn(false); setPrefillAccount(null); }}>Cancel</Button>
-                  <Button type="submit" size="sm" className={cn(
-                    'gap-1.5 text-white',
-                    txnType === 'in' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700',
-                  )}>
-                    {txnType === 'in' ? <ArrowUpCircle size={14} /> : <ArrowDownCircle size={14} />}
-                    Record {txnType === 'in' ? 'Income' : 'Expense'}
-                  </Button>
-                </div>
-              </form>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── Modal: Transfer ── */}
-      <AnimatePresence>
-        {showTransfer && (
-          <motion.div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-          >
-            <motion.div className="absolute inset-0 bg-black/50 backdrop-blur-sm"
-              onClick={() => setShowTransfer(false)}
-            />
-            <motion.div
-              className="relative bg-card rounded-2xl border border-border/60 shadow-2xl w-full max-w-sm overflow-hidden"
-              initial={{ scale: 0.95, opacity: 0, y: 16 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 8 }}
-              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-            >
-              <div className="bg-blue-500/5 border-b border-blue-500/15 px-5 py-4 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-blue-500/15 border border-blue-500/25 flex items-center justify-center">
-                    <ArrowLeftRight size={15} className="text-blue-500" />
-                  </div>
-                  <p className="font-semibold text-sm">Transfer Between Accounts</p>
-                </div>
-                <button onClick={() => setShowTransfer(false)} className="w-7 h-7 rounded-lg hover:bg-muted/60 flex items-center justify-center text-muted-foreground">
-                  <X size={15} />
-                </button>
-              </div>
-              <form onSubmit={handleTransfer}>
-                <div className="p-5 space-y-4">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">From Account <span className="text-rose-500">*</span></label>
-                    <select required value={trFromAcc} onChange={e => setTrFromAcc(Number(e.target.value))}
-                      className="w-full h-10 rounded-lg border border-border/60 bg-background text-sm px-3 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-                    >
-                      <option value="">Select account…</option>
-                      {accounts.map(a => <option key={a.id} value={a.id}>{a.name} ({fmt(Number(a.current_balance))})</option>)}
-                    </select>
-                  </div>
-                  <div className="flex justify-center">
-                    <div className="w-8 h-8 rounded-full border border-border/60 bg-muted/40 flex items-center justify-center">
-                      <ArrowDownCircle size={14} className="text-muted-foreground" />
-                    </div>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">To Account <span className="text-rose-500">*</span></label>
-                    <select required value={trToAcc} onChange={e => setTrToAcc(Number(e.target.value))}
-                      className="w-full h-10 rounded-lg border border-border/60 bg-background text-sm px-3 text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-                    >
-                      <option value="">Select account…</option>
-                      {accounts.filter(a => a.id !== trFromAcc).map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-                    </select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Amount (PKR) <span className="text-rose-500">*</span></label>
-                    <Input required type="number" value={trAmount} onChange={e => setTrAmount(e.target.value)}
-                      placeholder="0" className="h-10 font-mono"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Note</label>
-                    <Input value={trNote} onChange={e => setTrNote(e.target.value)}
-                      placeholder="Optional note" className="h-10"
-                    />
-                  </div>
-                </div>
-                <div className="px-5 py-4 border-t border-border/60 bg-muted/20 flex justify-end gap-3">
-                  <Button type="button" variant="outline" size="sm" onClick={() => setShowTransfer(false)}>Cancel</Button>
-                  <Button type="submit" size="sm" className="bg-blue-600 hover:bg-blue-700 text-white gap-1.5">
-                    <ArrowLeftRight size={14} /> Transfer
-                  </Button>
-                </div>
-              </form>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* ── Modals (isolated components — form state doesn't re-render this page) ── */}
+      <AddAccountModal
+        isOpen={showAddAccount}
+        onClose={() => setShowAddAccount(false)}
+        onSaved={loadAccounts}
+      />
+      <AddTxnModal
+        isOpen={showAddTxn}
+        accounts={accounts}
+        prefillAccount={prefillAccount}
+        onClose={() => { setShowAddTxn(false); setPrefillAccount(null); }}
+        onSaved={async () => { await loadAccounts(); await loadTxns(); }}
+      />
+      <TransferModal
+        isOpen={showTransfer}
+        accounts={accounts}
+        initialFromId={initialTransferFrom}
+        onClose={() => setShowTransfer(false)}
+        onSaved={async () => { await loadAccounts(); await loadTxns(); }}
+      />
 
     </div>
   );

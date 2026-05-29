@@ -484,7 +484,44 @@ export default function Activation({ onActivated }: ActivationProps) {
                       <KeyRound size={13} color="#fbbf24" style={{ flexShrink: 0, marginTop: 1 }} />
                       <p style={{ margin: 0, fontSize: 11, color: T.sub, lineHeight: 1.5 }}>
                         A license key is <strong style={{ color: T.heading }}>required</strong>. Contact OsaTech at{' '}
-                        <strong style={{ color: '#25d366' }}>+923298748232</strong> (WhatsApp) with your mobile number and fingerprint above.
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (fingerprint) {
+                              try { await navigator.clipboard.writeText(fingerprint); } catch {}
+                            }
+                            const msg = encodeURIComponent(
+                              `Hi OsaTech! I need a license key for my POS system.\n\nDevice Fingerprint:\n${fingerprint || 'Loading...'}`
+                            );
+                            (window.api as any).openExternalUrl(`https://wa.me/923298748232?text=${msg}`);
+                          }}
+                          style={{
+                            color: '#25d366',
+                            background: 'transparent',
+                            border: '1px solid rgba(37,211,102,0.35)',
+                            borderRadius: 5,
+                            padding: '1px 7px',
+                            cursor: 'pointer',
+                            fontWeight: 700,
+                            fontSize: 11,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 3,
+                            verticalAlign: 'middle',
+                            transition: 'all 0.15s',
+                          }}
+                          onMouseEnter={e => {
+                            (e.currentTarget as HTMLButtonElement).style.background = 'rgba(37,211,102,0.12)';
+                            (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(37,211,102,0.6)';
+                          }}
+                          onMouseLeave={e => {
+                            (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+                            (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(37,211,102,0.35)';
+                          }}
+                        >
+                          +923298748232 ↗
+                        </button>{' '}
+                        (WhatsApp) — clicking will copy your fingerprint &amp; open a pre-filled message.
                       </p>
                     </div>
 

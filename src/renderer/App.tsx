@@ -39,8 +39,24 @@ import { ModulesProvider } from './contexts/ModulesContext';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { initPosSync, checkInstanceStatus } from './services/api/posSync';
+import { browserApi } from './browserApiShim';
+
+// ─── Browser API shim ─────────────────────────────────────────────────────────
+// When the app is opened in a plain browser (e.g. via Cloudflare tunnel for
+// testing) the Electron preload script never runs, so window.api is undefined.
+// Inject the fetch-based shim at module-load time so every window.api.* call
+// below is routed to Electron's HTTP bridge on port 3001 via Vite's proxy.
+if (typeof window !== 'undefined' && !(window as any).api) {
+  (window as any).api = browserApi;
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  return <ElectronApp />;
+}
+
+/** All existing app logic — only rendered when window.api is present (Electron). */
+function ElectronApp() {
   const [isUnlocked, setIsUnlocked] = useState<boolean>(
     () => sessionStorage.getItem('pos_unlocked') === 'true'
   );
@@ -62,16 +78,21 @@ export default function App() {
     initPosSync().catch(() => {});
 
     // Ctrl+Shift+L → toggle the hidden license issuer panel
-    const unsubLicenseIssuer = window.api.onToggleLicenseIssuer?.(() => {
+    const unsubLicenseIssuer = window.api?.onToggleLicenseIssuer?.(() => {
       setShowLicenseIssuer(prev => !prev);
     });
 
 
-    // When posSync detects a block (403 or status poll), update the UI immediately
+    // pos-blocked = hard block (license revoked) → triggers full BlockedScreen
     const onBlocked = () => checkActivation();
     window.addEventListener('pos-blocked', onBlocked);
 
-    // When posSync detects the block has been lifted, re-run activation check
+    // pos-cloud-blocked = soft block (cloud services only) → re-reads settings
+    // so the Settings page banner updates; the app itself keeps running
+    const onCloudBlocked = () => checkActivation();
+    window.addEventListener('pos-cloud-blocked', onCloudBlocked);
+
+    // pos-approved = block lifted → re-run activation check
     const onApproved = () => checkActivation();
     window.addEventListener('pos-approved', onApproved);
 
@@ -88,6 +109,7 @@ export default function App() {
 
     return () => {
       window.removeEventListener('pos-blocked', onBlocked);
+      window.removeEventListener('pos-cloud-blocked', onCloudBlocked);
       window.removeEventListener('pos-approved', onApproved);
       window.removeEventListener('pos-notification', onNotification);
       unsubLicenseIssuer?.();
@@ -107,12 +129,15 @@ export default function App() {
         const status = s?.approval_status || 'approved';
         setLicenseMode(mode);
         setBlockReason(s?.block_reason || '');
-        // 'blocked' is always honoured regardless of mode (covers license revocation).
-        // 'pending' only gates users who opted into online mode.
-        if (status === 'blocked') {
+
+        // Only show full BlockedScreen when the license itself was REVOKED by admin.
+        // A cloud-services-only block (approval_status='blocked' without license_revoked)
+        // lets the app keep running — the Settings page shows a cloud-blocked banner.
+        const licenseRevoked = !!(s?.license_revoked);
+        if (licenseRevoked) {
           setApprovalStatus('blocked');
-        } else if (mode === 'online') {
-          setApprovalStatus(status);
+        } else if (mode === 'online' && status === 'pending') {
+          setApprovalStatus('pending');
         } else {
           setApprovalStatus('approved');
         }
@@ -227,6 +252,10 @@ export default function App() {
             <NotificationProvider>
               <Activation onActivated={() => checkActivation()} />
               <Toaster position="top-right" richColors closeButton />
+              {/* Allow Ctrl+Shift+L to open the license issuer even from the activation screen */}
+              {showLicenseIssuer && (
+                <LicenseIssuer onClose={() => setShowLicenseIssuer(false)} />
+              )}
             </NotificationProvider>
           </LanguageProvider>
         </ThemeProvider>
