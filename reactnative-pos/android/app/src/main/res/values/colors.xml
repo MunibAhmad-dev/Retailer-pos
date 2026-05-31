@@ -1,0 +1,5 @@
+<resources>
+    <!-- OsaTech POS brand colors -->
+    <color name="splashBackground">#0a0a0f</color>
+    <color name="primary">#6366f1</color>
+</resources>

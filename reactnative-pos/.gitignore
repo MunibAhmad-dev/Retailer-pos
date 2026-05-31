@@ -1,0 +1,81 @@
+# OSX
+#
+.DS_Store
+
+# Xcode
+#
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata
+*.xccheckout
+*.moved-to-trash
+*.xcuserstate
+*.xcscmblueprint
+ios/Pods/
+ios/build/
+ios/*.xcworkspace
+ios/Podfile.lock
+
+# Android/IntelliJ
+#
+android/build/
+android/app/build/
+android/.gradle/
+android/captures/
+android/local.properties
+android/.idea/
+*.iml
+
+# node.js
+#
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Temporary files created by Metro to check the health of the file watcher
+.metro-health-check*
+
+# Testing
+/coverage
+
+# Env files — never commit secrets
+.env
+.env.*
+!.env.example
+
+# Android keystore & signing files
+*.keystore
+*.jks
+android/app/release/
+android/app/*.keystore
+
+# Build artifacts
+dist/
+*.apk
+*.aab
+*.ipa
+
+# Misc
+.buckversion
+.flowconfig
+.watchmanconfig
+__pycache__/
+.python-version
+
+# Yarn
+.yarn/
+.pnp.*
+yarn.lock
+
+# MMKV
+android/app/src/main/jniLibs/
+
+# Reanimated cache
+.reanimated/

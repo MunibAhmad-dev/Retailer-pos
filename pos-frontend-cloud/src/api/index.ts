@@ -1,6 +1,36 @@
 import client from './client';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Shared param shapes ───────────────────────────────────────────────────────
+
+export interface PaginationParams {
+  limit?: number;
+  offset?: number;
+}
+
+export interface DateRangeParams {
+  date_from?: string;
+  date_to?: string;
+}
+
+export interface InstancesParams extends PaginationParams, DateRangeParams {
+  status?: string;
+  search?: string;
+}
+
+export interface ApproveBody {
+  plan?: string;
+  duration_days?: number;
+  notes?: string;
+}
+
+export interface CreateLicenseBody {
+  plan: string;
+  duration_days?: number;
+  notes?: string;
+  instance_id?: string | null;
+}
+
+// ─── Domain types ──────────────────────────────────────────────────────────────
 
 export interface Instance {
   id: number;
@@ -15,7 +45,8 @@ export interface Instance {
   license_expiry?: string;
   license_key?: string;
   approval_status: 'pending' | 'approved' | 'blocked';
-  license_revoked?: number;   // 1 = revoked, 0 = active
+  /** 1 = revoked, 0 = active */
+  license_revoked?: number;
   branch_name?: string;
   block_reason?: string;
   last_seen?: string;
@@ -29,19 +60,23 @@ export interface Instance {
   updated_at: string;
 }
 
+export interface InstanceEvent {
+  id: number;
+  entity_type: string;
+  operation: string;
+  received_at: string;
+}
+
+export interface InstanceSalesStats {
+  total_synced_sales: number;
+  synced_revenue: number;
+  last_sale_date?: string;
+}
+
 export interface InstanceDetail {
   instance: Instance;
-  recentEvents: Array<{
-    id: number;
-    entity_type: string;
-    operation: string;
-    received_at: string;
-  }>;
-  salesStats: {
-    total_synced_sales: number;
-    synced_revenue: number;
-    last_sale_date?: string;
-  };
+  recentEvents: InstanceEvent[];
+  salesStats: InstanceSalesStats;
 }
 
 export interface LicenseKey {
@@ -96,206 +131,331 @@ export interface DashboardStats {
   expired: ExpiringInstance[];
 }
 
-// ─── Auth ─────────────────────────────────────────────────────────────────────
+export interface RevenueByInstance {
+  instance_id: string;
+  store_name: string;
+  owner_mobile: string;
+  total_revenue: number;
+  total_sales: number;
+  total_customers: number;
+  total_products: number;
+}
+
+export interface SalesByDay {
+  day: string;
+  sales_count: number;
+  revenue: number;
+  active_stores: number;
+}
+
+export interface ProfitLossEntry {
+  month: string;
+  revenue: number;
+  expenses: number;
+  profit: number;
+}
+
+export interface RegistrationTrendEntry {
+  month: string;
+  newStores: number;
+  total: number;
+}
+
+export interface AccountStats {
+  typeDist: Array<{ account_type: string; count: number; total_balance: number }>;
+  txnVolume: Array<{ txn_type: string; count: number; total_amount: number }>;
+  totalBalance: number;
+  totalTxns: number;
+}
+
+export interface AnalyticsTotals {
+  total_customers: number;
+  total_products: number;
+  total_sales: number;
+  total_revenue: number;
+  total_vendors: number;
+}
+
+export interface AnalyticsData {
+  revenueByInstance: RevenueByInstance[];
+  activityDistribution: Array<{ period: string; count: number }>;
+  planDistribution: Array<{ plan: string; count: number }>;
+  statusDistribution: Array<{ status: string; count: number }>;
+  salesByDay: SalesByDay[];
+  topEntityTypes: Array<{ entity_type: string; event_count: number }>;
+  topProducts: Array<{ name: string; qty: number }>;
+  totals: AnalyticsTotals;
+  profitLossData: ProfitLossEntry[];
+  registrationsTrend: RegistrationTrendEntry[];
+  accountStats: AccountStats;
+}
+
+export interface LoanData {
+  customerLoans: Array<{
+    customer_name?: string;
+    customer_id?: number;
+    total_amount?: number;
+    paid_amount?: number;
+    balance?: number;
+    [key: string]: unknown;
+  }>;
+  vendorLoans: Array<{
+    vendor_name?: string;
+    vendor_id?: number;
+    total_amount?: number;
+    paid_amount?: number;
+    balance?: number;
+    [key: string]: unknown;
+  }>;
+  totalReceivable: number;
+  totalPayable: number;
+}
+
+export interface PaginatedResponse<T> {
+  success: boolean;
+  data: T[];
+  total: number;
+}
+
+// ─── Dashboard stats ───────────────────────────────────────────────────────────
+
+export async function getStats(): Promise<DashboardStats> {
+  const { data } = await client.get('/admin/stats');
+  return data.data as DashboardStats;
+}
+
+// ─── Analytics ────────────────────────────────────────────────────────────────
+
+export async function getAnalytics(params?: DateRangeParams): Promise<AnalyticsData> {
+  const { data } = await client.get('/admin/analytics', { params });
+  return data.data as AnalyticsData;
+}
+
+// ─── Instances ────────────────────────────────────────────────────────────────
+
+export async function getInstances(
+  params: InstancesParams
+): Promise<{ data: Instance[]; total: number }> {
+  const { data } = await client.get('/admin/instances', { params });
+  return { data: data.data as Instance[], total: data.total as number };
+}
+
+export async function getInstance(id: string): Promise<InstanceDetail> {
+  const { data } = await client.get(`/admin/instances/${id}`);
+  return data.data as InstanceDetail;
+}
+
+export async function approveInstance(id: string, body: ApproveBody = {}): Promise<{
+  success: boolean;
+  licenseKey?: string;
+  plan?: string;
+  expiresAt?: string;
+}> {
+  const { data } = await client.post(`/admin/instances/${id}/approve`, body);
+  return data;
+}
+
+export async function blockInstance(id: string, reason?: string): Promise<unknown> {
+  const { data } = await client.post(`/admin/instances/${id}/block`, { reason });
+  return data;
+}
+
+export async function blockLicense(id: string, reason?: string): Promise<unknown> {
+  const { data } = await client.post(`/admin/instances/${id}/block-license`, { reason });
+  return data;
+}
+
+export async function unblockLicense(id: string): Promise<unknown> {
+  const { data } = await client.post(`/admin/instances/${id}/unblock-license`);
+  return data;
+}
+
+export async function getInstanceSales(
+  id: string,
+  params?: PaginationParams & DateRangeParams
+): Promise<{ data: unknown[]; total: number }> {
+  const { data } = await client.get(`/admin/instances/${id}/sales`, { params });
+  return { data: data.data, total: data.total };
+}
+
+export async function getInstanceProducts(id: string): Promise<unknown[]> {
+  const { data } = await client.get(`/admin/instances/${id}/products`);
+  return data.data;
+}
+
+export async function getInstanceCustomers(id: string): Promise<unknown[]> {
+  const { data } = await client.get(`/admin/instances/${id}/customers`);
+  return data.data;
+}
+
+export async function getInstanceVendors(id: string): Promise<unknown[]> {
+  const { data } = await client.get(`/admin/instances/${id}/vendors`);
+  return data.data;
+}
+
+export async function getInstancePurchases(id: string): Promise<unknown[]> {
+  const { data } = await client.get(`/admin/instances/${id}/purchases`);
+  return data.data;
+}
+
+export async function getInstanceExpenses(id: string): Promise<unknown[]> {
+  const { data } = await client.get(`/admin/instances/${id}/expenses`);
+  return data.data;
+}
+
+export async function getInstanceLoans(id: string): Promise<LoanData> {
+  const { data } = await client.get(`/admin/instances/${id}/loans`);
+  return data.data as LoanData;
+}
+
+export async function exportInstance(id: string): Promise<unknown> {
+  const { data } = await client.get(`/admin/instances/${id}/export`);
+  return data;
+}
+
+export async function exportAll(status?: string): Promise<unknown> {
+  const { data } = await client.get('/admin/export-all', {
+    params: status ? { status } : undefined,
+  });
+  return data;
+}
+
+// ─── Licenses ─────────────────────────────────────────────────────────────────
+
+export async function getLicenses(): Promise<LicenseKey[]> {
+  const { data } = await client.get('/admin/licenses');
+  return data.data as LicenseKey[];
+}
+
+export async function createLicense(body: CreateLicenseBody): Promise<LicenseKey> {
+  const { data } = await client.post('/admin/licenses', body);
+  return data.data as LicenseKey;
+}
+
+export async function assignLicense(key: string, instanceId: string): Promise<unknown> {
+  const { data } = await client.post(`/admin/licenses/${key}/assign`, {
+    instance_id: instanceId,
+  });
+  return data;
+}
+
+export async function deleteLicense(key: string): Promise<unknown> {
+  const { data } = await client.delete(`/admin/licenses/${key}`);
+  return data;
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+export async function getNotifications(): Promise<AdminNotification[]> {
+  const { data } = await client.get('/admin/notifications');
+  return data.data as AdminNotification[];
+}
+
+export async function createNotification(body: {
+  title: string;
+  body: string;
+  instance_id?: string | null;
+}): Promise<AdminNotification> {
+  const { data } = await client.post('/admin/notifications', body);
+  return data.data as AdminNotification;
+}
+
+export async function deleteNotification(id: number): Promise<unknown> {
+  const { data } = await client.delete(`/admin/notifications/${id}`);
+  return data;
+}
+
+// ─── Dev / seeding ────────────────────────────────────────────────────────────
+
+export async function seedDemo(): Promise<unknown> {
+  const { data } = await client.post('/admin/seed-demo');
+  return data;
+}
+
+// ─── Releases (Software Update management) ────────────────────────────────────
+
+export interface AppRelease {
+  id: number;
+  version: string;
+  channel: string;
+  changelog: string;
+  download_url: string;
+  file_size: number;
+  is_mandatory: boolean;
+  published: boolean;
+  created_at: string;
+  published_by: string;
+}
+
+export async function getReleases(): Promise<AppRelease[]> {
+  const { data } = await client.get('/admin/releases');
+  return (data.data ?? []) as AppRelease[];
+}
+
+export async function createRelease(body: Partial<AppRelease>): Promise<AppRelease> {
+  const { data } = await client.post('/admin/releases', body);
+  return data.data as AppRelease;
+}
+
+export async function updateRelease(id: number, body: Partial<AppRelease>): Promise<AppRelease> {
+  const { data } = await client.patch(`/admin/releases/${id}`, body);
+  return data.data as AppRelease;
+}
+
+export async function deleteRelease(id: number): Promise<void> {
+  await client.delete(`/admin/releases/${id}`);
+}
+
+// ─── Auth (convenience re-export used by Login page) ──────────────────────────
 
 export const authApi = {
-  login: async (username: string, password: string) => {
+  login: async (username: string, password: string): Promise<{ success: boolean; token: string }> => {
     const { data } = await client.post('/auth/login', { username, password });
     return data as { success: boolean; token: string };
   },
-  me: async () => {
+  me: async (): Promise<unknown> => {
     const { data } = await client.get('/auth/me');
     return data;
   },
 };
 
-// ─── Admin Stats ──────────────────────────────────────────────────────────────
+// ─── Namespace objects (for pages that prefer grouped imports) ─────────────────
 
 export const statsApi = {
-  get: async (): Promise<DashboardStats> => {
-    const { data } = await client.get('/admin/stats');
-    return data.data as DashboardStats;
-  },
+  get: getStats,
 };
-
-// ─── Instances ────────────────────────────────────────────────────────────────
-
-export const instancesApi = {
-  list: async (params?: {
-    status?: string;
-    search?: string;
-    limit?: number;
-    offset?: number;
-    date_from?: string;
-    date_to?: string;
-  }) => {
-    const { data } = await client.get('/admin/instances', { params });
-    return data as { success: boolean; data: Instance[]; total: number };
-  },
-
-  get: async (instanceId: string): Promise<InstanceDetail> => {
-    const { data } = await client.get(`/admin/instances/${instanceId}`);
-    return data.data as InstanceDetail;
-  },
-
-  approve: async (instanceId: string, payload?: { plan?: string; duration_days?: number; notes?: string }) => {
-    const { data } = await client.post(`/admin/instances/${instanceId}/approve`, payload ?? {});
-    return data as { success: boolean; licenseKey?: string; plan?: string; expiresAt?: string };
-  },
-
-  block: async (instanceId: string, reason?: string) => {
-    const { data } = await client.post(`/admin/instances/${instanceId}/block`, { reason });
-    return data;
-  },
-
-  blockLicense: async (instanceId: string, reason?: string) => {
-    const { data } = await client.post(`/admin/instances/${instanceId}/block-license`, { reason });
-    return data;
-  },
-
-  unblockLicense: async (instanceId: string) => {
-    const { data } = await client.post(`/admin/instances/${instanceId}/unblock-license`);
-    return data;
-  },
-
-  sales: async (instanceId: string, params?: { limit?: number; offset?: number; date_from?: string; date_to?: string }) => {
-    const { data } = await client.get(`/admin/instances/${instanceId}/sales`, { params });
-    return data as { success: boolean; data: any[]; total: number };
-  },
-
-  products: async (instanceId: string) => {
-    const { data } = await client.get(`/admin/instances/${instanceId}/products`);
-    return data as { success: boolean; data: any[]; total: number };
-  },
-
-  customers: async (instanceId: string) => {
-    const { data } = await client.get(`/admin/instances/${instanceId}/customers`);
-    return data as { success: boolean; data: any[]; total: number };
-  },
-
-  vendors: async (instanceId: string) => {
-    const { data } = await client.get(`/admin/instances/${instanceId}/vendors`);
-    return data as { success: boolean; data: any[]; total: number };
-  },
-
-  purchases: async (instanceId: string) => {
-    const { data } = await client.get(`/admin/instances/${instanceId}/purchases`);
-    return data as { success: boolean; data: any[]; total: number };
-  },
-
-  expenses: async (instanceId: string) => {
-    const { data } = await client.get(`/admin/instances/${instanceId}/expenses`);
-    return data as { success: boolean; data: any[]; total: number };
-  },
-
-  loans: async (instanceId: string) => {
-    const { data } = await client.get(`/admin/instances/${instanceId}/loans`);
-    return data as {
-      success: boolean;
-      data: {
-        customerLoans: any[];
-        vendorLoans: any[];
-        totalReceivable: number;
-        totalPayable: number;
-      };
-    };
-  },
-
-  export: async (instanceId: string, entity?: string) => {
-    const { data } = await client.get(`/admin/instances/${instanceId}/export`, {
-      params: entity ? { entity } : undefined,
-    });
-    return data;
-  },
-
-  exportAll: async (params?: { status?: string }) => {
-    const { data } = await client.get('/admin/export-all', { params });
-    return data;
-  },
-};
-
-// ─── Analytics ────────────────────────────────────────────────────────────────
-
-export interface AnalyticsData {
-  revenueByInstance: Array<{
-    instance_id: string; store_name: string; owner_mobile: string;
-    total_revenue: number; total_sales: number; total_customers: number; total_products: number;
-  }>;
-  activityDistribution: Array<{ period: string; count: number }>;
-  planDistribution: Array<{ plan: string; count: number }>;
-  statusDistribution: Array<{ status: string; count: number }>;
-  salesByDay: Array<{ day: string; sales_count: number; revenue: number; active_stores: number }>;
-  topEntityTypes: Array<{ entity_type: string; event_count: number }>;
-  topProducts: Array<{ name: string; qty: number }>;
-  totals: {
-    total_customers: number;
-    total_products: number;
-    total_sales: number;
-    total_revenue: number;
-    total_vendors: number;
-  };
-  // New chart data
-  profitLossData: Array<{ month: string; revenue: number; expenses: number; profit: number }>;
-  registrationsTrend: Array<{ month: string; newStores: number; total: number }>;
-  accountStats: {
-    typeDist: Array<{ account_type: string; count: number; total_balance: number }>;
-    txnVolume: Array<{ txn_type: string; count: number; total_amount: number }>;
-    totalBalance: number;
-    totalTxns: number;
-  };
-}
 
 export const analyticsApi = {
-  get: async (params?: { date_from?: string; date_to?: string }): Promise<AnalyticsData> => {
-    const { data } = await client.get('/admin/analytics', { params });
-    return data.data as AnalyticsData;
-  },
+  get: getAnalytics,
 };
 
-// ─── Licenses ─────────────────────────────────────────────────────────────────
+export const instancesApi = {
+  list: getInstances,
+  get: getInstance,
+  approve: approveInstance,
+  block: blockInstance,
+  blockLicense,
+  unblockLicense,
+  sales: getInstanceSales,
+  products: getInstanceProducts,
+  customers: getInstanceCustomers,
+  vendors: getInstanceVendors,
+  purchases: getInstancePurchases,
+  expenses: getInstanceExpenses,
+  loans: getInstanceLoans,
+  export: exportInstance,
+  exportAll,
+};
 
 export const licensesApi = {
-  list: async () => {
-    const { data } = await client.get('/admin/licenses');
-    return data.data as LicenseKey[];
-  },
-
-  create: async (payload: {
-    plan: string;
-    duration_days?: number;
-    notes?: string;
-    instance_id?: string;
-  }) => {
-    const { data } = await client.post('/admin/licenses', payload);
-    return data.data;
-  },
-
-  assign: async (key: string, instance_id: string) => {
-    const { data } = await client.post(`/admin/licenses/${key}/assign`, { instance_id });
-    return data;
-  },
-
-  deactivate: async (key: string) => {
-    const { data } = await client.delete(`/admin/licenses/${key}`);
-    return data;
-  },
+  list: getLicenses,
+  create: createLicense,
+  assign: assignLicense,
+  deactivate: deleteLicense,
 };
 
-// ─── Notifications ─────────────────────────────────────────────────────────────
-
 export const notificationsApi = {
-  list: async () => {
-    const { data } = await client.get('/admin/notifications');
-    return data.data as AdminNotification[];
-  },
-
-  create: async (payload: { title: string; body: string; instance_id?: string }) => {
-    const { data } = await client.post('/admin/notifications', payload);
-    return data as { success: boolean; data: AdminNotification };
-  },
-
-  delete: async (id: number) => {
-    const { data } = await client.delete(`/admin/notifications/${id}`);
-    return data;
-  },
+  list: getNotifications,
+  create: createNotification,
+  delete: deleteNotification,
 };

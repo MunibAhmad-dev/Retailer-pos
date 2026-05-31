@@ -12,6 +12,21 @@
         if (t !== 'light') document.documentElement.classList.add('dark');
       })();
     </script>
+    <!-- Restore path after GitHub Pages 404 redirect (not used on Vercel) -->
+    <script>
+      (function () {
+        var search = window.location.search;
+        var match = search.match(/[?&]p=([^#]*)/);
+        if (!match) return;
+        // Decode once — stop if it would produce another ?p= (loop detection)
+        var decoded = decodeURIComponent(match[1]);
+        if (decoded.indexOf('%') !== -1) return; // double-encoded — something went wrong, bail
+        var parts = decoded.split('&');
+        var pathname = '/' + parts[0];
+        var query = parts.length > 1 ? '?' + parts.slice(1).join('&') : '';
+        window.history.replaceState(null, null, pathname + query);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

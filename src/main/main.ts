@@ -745,6 +745,24 @@ function migrate(database: Database.Database) {
       logger.info('[migrate] Migration 29 done — employees table created.');
     }
 
+    // ── Migration 30: stock_source column on products ─────────────────
+    if (ver < 30) {
+      try {
+        database.exec(`ALTER TABLE products ADD COLUMN stock_source TEXT DEFAULT 'unknown'`);
+        logger.info('[migrate] Migration 30 done — stock_source added to products.');
+      } catch { /* column may already exist */ }
+      database.exec('PRAGMA user_version = 30');
+    }
+
+    // ── Migration 31: receipt_printer preference in settings ───────────
+    if (ver < 31) {
+      try {
+        database.exec(`ALTER TABLE settings ADD COLUMN receipt_printer TEXT DEFAULT ''`);
+        logger.info('[migrate] Migration 31 done — receipt_printer added to settings.');
+      } catch { /* column may already exist */ }
+      database.exec('PRAGMA user_version = 31');
+    }
+
     logger.info(`Database migration completed. Current version: ${database.pragma('user_version', { simple: true })}`);
   } catch (error) {
     logger.error('Migration system failed:', error);
@@ -1641,7 +1659,10 @@ ipcMain.handle('get-products', async () => {
   }
 });
 
-ipcMain.handle('add-product', async (_, product: { name: string; price: number; category?: string; purchase_price?: number; stock?: number; barcode?: string; unit?: string }) => {
+ipcMain.handle('add-product', async (_, product: {
+  name: string; price: number; category?: string; purchase_price?: number; stock?: number;
+  barcode?: string; unit?: string; [key: string]: any;
+}) => {
   try {
     if (!db) throw new Error('Database not initialized');
 
@@ -1653,36 +1674,79 @@ ipcMain.handle('add-product', async (_, product: { name: string; price: number; 
     const existing = db.prepare('SELECT id FROM products WHERE name = ?').get(product.name.trim());
     if (existing) throw new Error(`Product "${product.name}" already exists`);
 
-    const stmt = db.prepare(`
-      INSERT INTO products (name, price, category, purchase_price, stock, barcode, unit, product_type, metadata,
-        is_bakery, production_date, expiry_date, weight_value, unit_type, price_per_kg, auto_price_by_weight,
-        vendor_id, purchase_status,
-        created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (datetime('now', 'localtime')), (datetime('now', 'localtime')))
-    `);
-    const info = stmt.run(
-      product.name.trim(),
-      price,
-      product.category?.trim() || '',
-      product.purchase_price || 0,
-      product.stock || 0,
-      product.barcode?.trim() || '',
-      product.unit?.trim() || '',
-      (product as any).product_type || 'general',
-      typeof (product as any).metadata === 'object' ? JSON.stringify((product as any).metadata) : ((product as any).metadata || '{}'),
-      (product as any).is_bakery ? 1 : 0,
-      (product as any).production_date || null,
-      (product as any).expiry_date || null,
-      (product as any).weight_value != null ? Number((product as any).weight_value) : null,
-      (product as any).unit_type || 'piece',
-      (product as any).price_per_kg != null ? Number((product as any).price_per_kg) : null,
-      (product as any).auto_price_by_weight ? 1 : 0,
-      (product as any).vendor_id ? Number((product as any).vendor_id) : null,
-      (product as any).purchase_status || 'available',
-    );
+    const openingStock   = Number(product.stock) || 0;
+    const purchasePrice  = Number(product.purchase_price) || 0;
+    const stockSource    = (product.stock_source as string) || 'unknown';
+    const accountId      = product.account_id ? Number(product.account_id) : null;
 
-    const newProduct = db.prepare('SELECT * FROM products WHERE id = ?').get(info.lastInsertRowid);
-    logger.info(`Product added: ${product.name} (ID: ${info.lastInsertRowid})`);
+    const insertProduct = db.transaction(() => {
+      const stmt = db!.prepare(`
+        INSERT INTO products (name, price, category, purchase_price, stock, barcode, unit, product_type, metadata,
+          is_bakery, production_date, expiry_date, weight_value, unit_type, price_per_kg, auto_price_by_weight,
+          vendor_id, purchase_status, stock_source,
+          created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (datetime('now', 'localtime')), (datetime('now', 'localtime')))
+      `);
+      const info = stmt.run(
+        product.name.trim(),
+        price,
+        (product.category || '').trim(),
+        purchasePrice,
+        openingStock,
+        (product.barcode || '').trim(),
+        (product.unit || '').trim(),
+        product.product_type || 'general',
+        typeof product.metadata === 'object' ? JSON.stringify(product.metadata) : (product.metadata || '{}'),
+        product.is_bakery ? 1 : 0,
+        product.production_date || null,
+        product.expiry_date || null,
+        product.weight_value != null ? Number(product.weight_value) : null,
+        product.unit_type || 'piece',
+        product.price_per_kg != null ? Number(product.price_per_kg) : null,
+        product.auto_price_by_weight ? 1 : 0,
+        product.vendor_id ? Number(product.vendor_id) : null,
+        product.purchase_status || 'available',
+        stockSource,
+      );
+
+      const newId = Number(info.lastInsertRowid);
+
+      // ── Always create an inventory batch for opening stock ─────────────
+      // (was missing before — sales FIFO deduction needs batch entries)
+      if (openingStock > 0) {
+        db!.prepare(`
+          INSERT INTO inventory_batches (product_id, quantity_added, quantity_remaining, purchase_price, date_added)
+          VALUES (?, ?, ?, ?, datetime('now', 'localtime'))
+        `).run(newId, openingStock, openingStock, purchasePrice);
+      }
+
+      // ── If "purchased": deduct cost from selected account ──────────────
+      if (stockSource === 'purchased' && accountId && openingStock > 0 && purchasePrice > 0) {
+        const totalCost = purchasePrice * openingStock;
+        const acc = db!.prepare('SELECT id FROM accounts WHERE id = ?').get(accountId);
+        if (acc) {
+          // Record as financial transaction
+          db!.prepare(`
+            INSERT INTO financial_transactions (type, category, amount, description, date_created)
+            VALUES ('Expense', 'Inventory Purchase', ?, ?, datetime('now', 'localtime'))
+          `).run(totalCost, `Opening stock purchase: ${product.name.trim()} (${openingStock} units × Rs.${purchasePrice})`);
+
+          // Debit the account
+          db!.prepare(`
+            INSERT INTO account_txns (account_id, type, amount, category, note, date_created)
+            VALUES (?, 'out', ?, 'Inventory Purchase', ?, datetime('now', 'localtime'))
+          `).run(accountId, totalCost, `Opening stock: ${product.name.trim()} ×${openingStock}`);
+
+          recomputeAccountBalance(db!, accountId);
+          logger.info(`[add-product] Deducted Rs.${totalCost} from account #${accountId} for "${product.name}" opening stock.`);
+        }
+      }
+
+      return db!.prepare('SELECT * FROM products WHERE id = ?').get(newId);
+    });
+
+    const newProduct = insertProduct();
+    logger.info(`Product added: ${product.name} (ID: ${(newProduct as any)?.id}), source: ${stockSource}`);
 
     // Enqueue for cloud sync
     try {
@@ -1715,7 +1779,7 @@ ipcMain.handle('update-product', async (_, id: number, product: { name: string; 
       UPDATE products
       SET name = ?, price = ?, category = ?, purchase_price = ?, stock = ?, barcode = ?, unit = ?, product_type = ?, metadata = ?,
           is_bakery = ?, production_date = ?, expiry_date = ?, weight_value = ?, unit_type = ?, price_per_kg = ?, auto_price_by_weight = ?,
-          vendor_id = ?, purchase_status = ?,
+          vendor_id = ?, purchase_status = ?, stock_source = ?,
           updated_at = (datetime('now', 'localtime'))
       WHERE id = ?
     `);
@@ -1738,6 +1802,7 @@ ipcMain.handle('update-product', async (_, id: number, product: { name: string; 
       (product as any).auto_price_by_weight ? 1 : 0,
       (product as any).vendor_id ? Number((product as any).vendor_id) : null,
       (product as any).purchase_status || 'available',
+      (product as any).stock_source || 'unknown',
       id
     );
 
@@ -1874,7 +1939,8 @@ ipcMain.handle('update-settings', async (_, settings: any) => {
           cloud_registered_at = ?,
           cloud_request_note = ?,
           block_reason = ?,
-          license_revoked = ?
+          license_revoked = ?,
+          receipt_printer = ?
       WHERE id = 1
     `);
 
@@ -1910,7 +1976,8 @@ ipcMain.handle('update-settings', async (_, settings: any) => {
       settings.cloud_registered_at ?? existing?.cloud_registered_at ?? '',
       settings.cloud_request_note ?? existing?.cloud_request_note ?? '',
       settings.block_reason ?? existing?.block_reason ?? '',
-      settings.license_revoked !== undefined ? (settings.license_revoked ? 1 : 0) : (existing?.license_revoked ?? 0)
+      settings.license_revoked !== undefined ? (settings.license_revoked ? 1 : 0) : (existing?.license_revoked ?? 0),
+      settings.receipt_printer ?? existing?.receipt_printer ?? ''
     );
 
     // Save module flags separately (optional booleans, not in the main settings form)
@@ -3113,32 +3180,42 @@ async function loadHtmlWindow(html: string, width: number): Promise<BrowserWindo
   const tmpFile = path.join(app.getPath('temp'), `receipt_${Date.now()}.html`);
   fs.writeFileSync(tmpFile, html, 'utf-8');
 
-  // Position the window off the visible area so it can be "shown" (required for
-  // the system print dialog to surface) without the user seeing the raw HTML.
+  // Use a small but valid position so the OS compositor actually registers
+  // the window. Placing at x:-99999 causes Windows print spooler to accept
+  // the job but the driver never gets a render surface → "stuck in queue".
+  // We keep it off the primary monitor but still within the virtual desktop.
+  const displays = require('electron').screen.getAllDisplays();
+  const primary  = displays[0]?.bounds ?? { x: 0, y: 0, width: 1920, height: 1080 };
+
   const win = new BrowserWindow({
-    show: false,
-    x: -99999,
-    y: -99999,
+    show:         false,
+    x:            primary.x + primary.width + 10,  // just off the right edge
+    y:            primary.y,
     width,
-    height: 1200,
+    height:       1200,
     useContentSize: true,
-    skipTaskbar: true,
+    skipTaskbar:  true,
+    focusable:    true,   // must be focusable for print dialog to surface
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-      backgroundThrottling: false,
+      nodeIntegration:       false,
+      contextIsolation:      true,
+      backgroundThrottling:  false,
     },
   });
 
   await new Promise<void>((resolve, reject) => {
-    win.webContents.once('did-finish-load', () => resolve());
-    win.webContents.once('did-fail-load', (_e, code, desc) =>
-      reject(new Error(`Failed to load receipt: ${code} ${desc}`))
-    );
+    const timeout = setTimeout(() => reject(new Error('Receipt window timed out after 15 s')), 15_000);
+    win.webContents.once('did-finish-load', () => { clearTimeout(timeout); resolve(); });
+    win.webContents.once('did-fail-load', (_e, code, desc) => {
+      clearTimeout(timeout);
+      reject(new Error(`Failed to load receipt: ${code} ${desc}`));
+    });
     win.loadFile(tmpFile);
   });
 
-  await new Promise(resolve => setTimeout(resolve, 800));
+  // Wait longer for images/fonts to render — logos and complex layouts need extra time.
+  // Using dom-ready is not enough; we need the paint cycle to complete.
+  await new Promise(resolve => setTimeout(resolve, 1200));
   try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
   return win;
 }
@@ -3214,6 +3291,25 @@ function buildReceiptPdfHtml(content: string): string {
 </html>`;
 }
 
+// ─── List installed printers (called from Settings → Printer Setup) ──────────
+ipcMain.handle('get-printers', async () => {
+  try {
+    if (!mainWindow) return { success: false, error: 'No main window' };
+    const printers = await mainWindow.webContents.getPrintersAsync();
+    return {
+      success: true,
+      data: printers.map((p: any) => ({
+        name:        p.name,
+        displayName: p.displayName || p.name,
+        isDefault:   p.isDefault  ?? false,
+        status:      p.status     ?? 0,
+      })),
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
 // ============= PRINTING HANDLERS =============
 ipcMain.handle('print-invoice', async (_, htmlContent: string) => {
   try {
@@ -3221,8 +3317,9 @@ ipcMain.handle('print-invoice', async (_, htmlContent: string) => {
     if (typeof htmlContent !== 'string' || htmlContent.length === 0) {
       throw new Error('Invalid print payload');
     }
-    if (htmlContent.length > 500_000) {
-      throw new Error('Print payload too large');
+    // Raised from 500 KB to 8 MB — base64 logos can be 300–800 KB alone
+    if (htmlContent.length > 8_000_000) {
+      throw new Error('Print payload too large (> 8 MB)');
     }
 
     let receiptSize = 'thermal';
@@ -3263,9 +3360,75 @@ ipcMain.handle('print-invoice', async (_, htmlContent: string) => {
 
     const printWindow = await loadHtmlWindow(buildReceiptHtml(htmlContent), winWidth);
 
-    let printOptions: any = {
-      silent: false,
+    // ── Read saved receipt printer from settings ──────────────────────────────
+    let receiptPrinter: string = '';
+    if (db) {
+      try {
+        const s = db.prepare('SELECT receipt_printer FROM settings LIMIT 1').get() as any;
+        receiptPrinter = (s?.receipt_printer || '').trim();
+      } catch { /* non-critical */ }
+    }
+
+    // ── Virtual / PDF-only printer names to skip ──────────────────────────────
+    // These show a "Save File" dialog instead of printing and must never be
+    // auto-selected as the default.
+    const VIRTUAL_PRINTERS = [
+      'Microsoft Print to PDF',
+      'Microsoft XPS Document Writer',
+      'OneNote',
+      'Fax',
+      'Send to OneNote',
+      'Adobe PDF',
+      'PDF',
+    ];
+
+    const isVirtual = (name: string) =>
+      VIRTUAL_PRINTERS.some(v => name.toLowerCase().includes(v.toLowerCase()));
+
+    // If no printer configured, try to auto-detect the first real printer
+    if (!receiptPrinter) {
+      try {
+        const printers = await printWindow.webContents.getPrintersAsync() as any[];
+        // Prefer idle/ready printers (status 0), skip virtual PDF printers
+        const realPrinter = printers
+          .filter((p: any) => !isVirtual(p.name))
+          .sort((a: any, b: any) => (a.isDefault ? -1 : b.isDefault ? 1 : 0))[0];
+
+        if (realPrinter) {
+          receiptPrinter = realPrinter.name;
+          logger.info(`[print] No printer saved in settings — auto-selected: "${receiptPrinter}"`);
+        } else {
+          // Every installed printer is virtual (PDF) — fall back to browser print
+          logger.warn('[print] Only virtual/PDF printers found. Opening browser fallback.');
+          printWindow.close();
+          // Write to temp and open in browser with auto-print script
+          const tmp = require('path').join(app.getPath('temp'), `osatech_invoice_${Date.now()}.html`);
+          require('fs').writeFileSync(tmp, buildReceiptPdfHtml(htmlContent), 'utf-8');
+          const err = await shell.openPath(tmp);
+          if (err) throw new Error(err);
+          setTimeout(() => { try { require('fs').unlinkSync(tmp); } catch {} }, 60_000);
+          return { success: true, fallback: 'browser', message: 'No physical printer found — opened in browser. Press Ctrl+P to print.' };
+        }
+      } catch (e: any) {
+        logger.warn('[print] Could not list printers:', e.message);
+      }
+    } else if (isVirtual(receiptPrinter)) {
+      // User explicitly saved a virtual printer — warn them and use browser fallback
+      logger.warn(`[print] Configured printer "${receiptPrinter}" is a virtual PDF printer. Using browser fallback.`);
+      printWindow.close();
+      const tmp = require('path').join(app.getPath('temp'), `osatech_invoice_${Date.now()}.html`);
+      require('fs').writeFileSync(tmp, buildReceiptPdfHtml(htmlContent), 'utf-8');
+      await shell.openPath(tmp);
+      setTimeout(() => { try { require('fs').unlinkSync(tmp); } catch {} }, 60_000);
+      return { success: false, error: 'virtual_printer', message: `"${receiptPrinter}" is a PDF printer, not a real one. Go to Settings → Printer Setup and select your actual receipt printer.` };
+    }
+
+    // ── Build print options ───────────────────────────────────────────────────
+    // silent: true  = no dialog → job goes directly to the printer.
+    const printOptions: any = {
+      silent:          true,
       printBackground: true,
+      ...(receiptPrinter ? { deviceName: receiptPrinter } : {}),
     };
 
     if (targetSize === 'thermal') {
@@ -3274,37 +3437,36 @@ ipcMain.handle('print-invoice', async (_, htmlContent: string) => {
       );
       const heightMicrons = Math.ceil(contentHeightPx * PX_TO_MICRONS) + 2000;
       printOptions.pageSize = { width: RECEIPT_WIDTH_MICRONS, height: heightMicrons };
-      printOptions.margins = { marginType: 'custom', top: 0, bottom: 0, left: 0, right: 0 };
+      printOptions.margins  = { marginType: 'custom', top: 0, bottom: 0, left: 0, right: 0 };
       printOptions.scaleFactor = 100;
     } else if (targetSize === 'a5') {
       printOptions.pageSize = 'A5';
-      printOptions.margins = { marginType: 'default' };
+      printOptions.margins  = { marginType: 'default' };
     } else {
       printOptions.pageSize = 'A4';
-      printOptions.margins = { marginType: 'default' };
+      printOptions.margins  = { marginType: 'default' };
     }
 
-    // Show the window briefly so the system print dialog surfaces on top of
-    // the main window — without this, on some machines the dialog appears
-    // behind the app or in the background taskbar entry.
-    printWindow.setAlwaysOnTop(true, 'screen-saver');
+    // Show + focus the window so the OS compositor registers a render surface.
+    // Even with silent:true some drivers need this to start the data transfer.
     printWindow.show();
+    printWindow.focus();
+    await new Promise(resolve => setTimeout(resolve, 150));
 
     return new Promise((resolve) => {
-      printWindow.webContents.print(
-        printOptions,
-        (success, reason) => {
-          printWindow.setAlwaysOnTop(false);
-          printWindow.close();
-          if (success) {
-            logger.info('Invoice printed successfully');
-            resolve({ success: true });
-          } else {
-            logger.error('Print failed:', reason);
-            resolve({ success: false, error: reason });
-          }
+      printWindow.webContents.print(printOptions, (success, reason) => {
+        // Keep window alive briefly so the driver can finish reading
+        setTimeout(() => { try { printWindow.close(); } catch {} }, 2000);
+
+        if (success) {
+          logger.info(`Invoice sent to printer "${receiptPrinter || 'default'}"`);
+          resolve({ success: true });
+        } else {
+          logger.error(`Print failed (printer: "${receiptPrinter || 'default'}"): ${reason}`);
+          // Return the error so the frontend can offer the browser fallback
+          resolve({ success: false, error: reason || 'print_failed', printerUsed: receiptPrinter });
         }
-      );
+      });
     });
   } catch (error: any) {
     logger.error('Failed to print invoice:', error);
@@ -3312,14 +3474,15 @@ ipcMain.handle('print-invoice', async (_, htmlContent: string) => {
   }
 });
 
-// â”€â”€ Save receipt as A4 PDF â”€â”€
+// ── Save receipt as PDF ──────────────────────────────────────────────────────
 ipcMain.handle('save-invoice-pdf', async (_, htmlContent: string) => {
   try {
     if (typeof htmlContent !== 'string' || htmlContent.length === 0) {
       throw new Error('Invalid PDF payload');
     }
-    if (htmlContent.length > 500_000) {
-      throw new Error('PDF payload too large');
+    // Raised from 500 KB to 8 MB — base64 store logos can be hundreds of KB
+    if (htmlContent.length > 8_000_000) {
+      throw new Error('PDF payload too large (> 8 MB). Try removing the store logo or reducing its size.');
     }
     const isStatement = htmlContent.includes('ACCOUNT STATEMENT');
 
@@ -3606,6 +3769,22 @@ ipcMain.handle('import-data', async (_, data: any) => {
       logger.warn('Failed to create pre-import backup:', e);
     }
 
+    // ── Preserve license & cloud settings before wiping ──────────────────────
+    // These must survive any import — they belong to THIS device's activation,
+    // not to the backup file.
+    const PRESERVED_COLS = [
+      'activation_key', 'license_mode', 'approval_status', 'license_revoked',
+      'block_reason', 'cloud_backend_url', 'cloud_backend_token', 'cloud_connected',
+      'cloud_last_sync', 'cloud_registered_at', 'cloud_service_requested',
+      'cloud_instance_id', 'setup_completed', 'owner_mobile',
+    ] as const;
+    let preservedSettings: Record<string, any> | null = null;
+    try {
+      preservedSettings = db.prepare(
+        `SELECT ${PRESERVED_COLS.join(', ')} FROM settings WHERE id = 1`
+      ).get() as Record<string, any> | null;
+    } catch { /* settings row may not exist yet */ }
+
     // PRAGMA foreign_keys must be set OUTSIDE any transaction —
     // SQLite silently ignores it inside a BEGIN/COMMIT block.
     db.prepare('PRAGMA foreign_keys = OFF').run();
@@ -3694,14 +3873,29 @@ ipcMain.handle('import-data', async (_, data: any) => {
         db!.prepare(`
           UPDATE settings
           SET
-            store_name = COALESCE(NULLIF(store_name, ''), 'Retailer Shop'),
-            store_phone = COALESCE(store_phone, ''),
+            store_name    = COALESCE(NULLIF(store_name, ''), 'Retailer Shop'),
+            store_phone   = COALESCE(store_phone, ''),
             store_address = COALESCE(store_address, ''),
-            store_logo = COALESCE(store_logo, ''),
+            store_logo    = COALESCE(store_logo, ''),
             receipt_footer = COALESCE(NULLIF(receipt_footer, ''), 'Thank you for visiting!'),
-            pos_password = COALESCE(NULLIF(pos_password, ''), '1234')
+            pos_password  = COALESCE(NULLIF(pos_password, ''), '1234')
           WHERE id = 1
         `).run();
+
+        // ── Restore preserved license / cloud columns ────────────────────────
+        // These are device-specific and must never be overwritten by an import.
+        if (preservedSettings) {
+          const updates = PRESERVED_COLS
+            .filter(col => preservedSettings![col] !== undefined && preservedSettings![col] !== null)
+            .map(col => `"${col}" = ?`);
+          const values = PRESERVED_COLS
+            .filter(col => preservedSettings![col] !== undefined && preservedSettings![col] !== null)
+            .map(col => preservedSettings![col]);
+          if (updates.length > 0) {
+            db!.prepare(`UPDATE settings SET ${updates.join(', ')} WHERE id = 1`).run(...values);
+            logger.info(`[import] Restored ${updates.length} license/cloud settings after import.`);
+          }
+        }
       }
 
     })();
@@ -4620,11 +4814,192 @@ ipcMain.handle('delete-employee', async (_, id: number) => {
   }
 });
 
+// ── Software Auto-Update ─────────────────────────────────────────────────────
+
+/** Check backend for a newer version */
+ipcMain.handle('check-for-update', async () => {
+  try {
+    const currentVersion = app.getVersion();
+    const backendUrl = (() => {
+      if (!db) return 'https://osatechcloud.cloud';
+      try {
+        const s = db.prepare('SELECT cloud_backend_url FROM settings LIMIT 1').get() as any;
+        return (s?.cloud_backend_url || 'https://osatechcloud.cloud').replace(/\/$/, '');
+      } catch { return 'https://osatechcloud.cloud'; }
+    })();
+
+    const response = await fetch(
+      `${backendUrl}/api/updates/latest?channel=stable&version=${encodeURIComponent(currentVersion)}`,
+      { signal: AbortSignal.timeout(10_000) },
+    );
+    if (!response.ok) throw new Error(`Server returned ${response.status}`);
+    const data = await response.json() as any;
+    return { success: true, current: currentVersion, ...data };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
+/** Download the update installer to the system temp folder with progress events */
+ipcMain.handle('download-update', async (_, downloadUrl: string, fileName: string) => {
+  const { https: httpsModule } = await import('https');
+  const { http: httpModule }   = await import('http');
+  const destPath = path.join(app.getPath('temp'), fileName || 'OsaTechPOS-Update.exe');
+
+  return new Promise((resolve) => {
+    try {
+      const mod = downloadUrl.startsWith('https') ? httpsModule : httpModule;
+      const req = mod.get(downloadUrl, { headers: { 'User-Agent': 'OsaTech-POS-Updater/1.0' } }, (res) => {
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          // Follow redirect
+          ipcMain.emit('download-update', null, res.headers.location || downloadUrl, fileName);
+          return;
+        }
+        if (res.statusCode !== 200) {
+          resolve({ success: false, error: `Download failed: HTTP ${res.statusCode}` });
+          return;
+        }
+
+        const total = parseInt(res.headers['content-length'] || '0', 10);
+        let downloaded = 0;
+        const outStream = fs.createWriteStream(destPath);
+
+        res.on('data', (chunk: Buffer) => {
+          downloaded += chunk.length;
+          const percent = total > 0 ? Math.round((downloaded / total) * 100) : 0;
+          mainWindow?.webContents.send('update-download-progress', { percent, downloaded, total });
+        });
+
+        res.pipe(outStream);
+
+        outStream.on('finish', () => {
+          outStream.close();
+          logger.info(`[update] Downloaded to ${destPath}`);
+          resolve({ success: true, filePath: destPath });
+        });
+        outStream.on('error', (err) => {
+          fs.unlink(destPath, () => {});
+          resolve({ success: false, error: err.message });
+        });
+      });
+
+      req.on('error', (err) => resolve({ success: false, error: err.message }));
+      req.setTimeout(120_000, () => { req.destroy(); resolve({ success: false, error: 'Download timed out' }); });
+    } catch (err: any) {
+      resolve({ success: false, error: err.message });
+    }
+  });
+});
+
+/** Run the downloaded installer — Windows will close the old app and install the new one */
+ipcMain.handle('install-update', async (_, filePath: string) => {
+  try {
+    if (!fs.existsSync(filePath)) throw new Error('Installer file not found');
+    await shell.openPath(filePath);
+    // Give the installer a moment to start, then quit the app
+    setTimeout(() => app.quit(), 2000);
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+});
+
+/** Get the current app version */
+ipcMain.handle('get-app-version', () => ({ version: app.getVersion() }));
+
 ipcMain.handle('open-external-url', async (_, url: string) => {
   try {
     await shell.openExternal(url);
     return { success: true };
   } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+// ── Browser-print fallback ────────────────────────────────────────────────────
+// Opens the invoice HTML in the system default browser so users can print with
+// Ctrl+P. Bypasses Electron's printer stack entirely — reliable on every machine.
+ipcMain.handle('print-via-browser', async (_, htmlContent: string) => {
+  try {
+    if (typeof htmlContent !== 'string' || htmlContent.length === 0) {
+      throw new Error('Invalid payload');
+    }
+
+    // ── Inject browser-view styles + floating print button + auto-print ─────
+    const BROWSER_INJECTION = `
+<style>
+  /* Visible only in browser — hidden from print output */
+  @media screen {
+    .__osa_print_btn {
+      position: fixed !important;
+      top: 14px !important;
+      right: 14px !important;
+      z-index: 99999 !important;
+      background: #cc0000 !important;
+      color: #fff !important;
+      border: none !important;
+      padding: 10px 22px !important;
+      border-radius: 8px !important;
+      font: bold 14px/1 Arial, sans-serif !important;
+      cursor: pointer !important;
+      box-shadow: 0 3px 12px rgba(0,0,0,0.35) !important;
+      letter-spacing: 0.3px !important;
+    }
+    .__osa_print_btn:hover { background: #aa0000 !important; }
+  }
+  @media print {
+    .__osa_print_btn { display: none !important; }
+  }
+</style>
+<script>
+  (function() {
+    function addBtn() {
+      var b = document.createElement('button');
+      b.className = '__osa_print_btn';
+      b.innerHTML = '&#128438; Print Invoice';
+      b.onclick   = function() { window.print(); };
+      document.body.appendChild(b);
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', addBtn);
+    } else {
+      addBtn();
+    }
+    // Auto-open print dialog after 800 ms (after render settles)
+    setTimeout(function() { window.print(); }, 800);
+  })();
+</script>`;
+
+    let fullHtml: string;
+    if (htmlContent.trim().toLowerCase().startsWith('<!doctype html')) {
+      // Full HTML doc — inject before </body> so button goes on top of content
+      fullHtml = htmlContent.replace(/(<\/body>)/i, BROWSER_INJECTION + '$1');
+      if (!fullHtml.includes(BROWSER_INJECTION)) {
+        // </body> not found — append to end
+        fullHtml = htmlContent + BROWSER_INJECTION;
+      }
+    } else {
+      // Receipt fragment — wrap in a minimal full page
+      fullHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Courier New', Courier, monospace; font-size: 12px; background: #f5f5f5; padding: 20px; }
+  @media print { body { background: white; padding: 0; } @page { margin: 0; size: 72mm auto; } }
+</style></head><body>${htmlContent}${BROWSER_INJECTION}</body></html>`;
+    }
+
+    const tmpFile = path.join(app.getPath('temp'), `osatech_invoice_${Date.now()}.html`);
+    fs.writeFileSync(tmpFile, fullHtml, 'utf-8');
+
+    // shell.openPath opens with the OS default for .html — usually the browser
+    const err = await shell.openPath(tmpFile);
+    if (err) throw new Error(`shell.openPath failed: ${err}`);
+
+    // Clean up after 2 minutes
+    setTimeout(() => { try { fs.unlinkSync(tmpFile); } catch {} }, 120_000);
+    return { success: true };
+  } catch (error: any) {
+    logger.error('Browser print fallback failed:', error);
     return { success: false, error: error.message };
   }
 });

@@ -1,7 +1,14 @@
 import axios from 'axios';
 
+// Priority: VITE_API_URL env var (baked in at build time)
+//   → production hardcoded URL (always works even if Secret wasn't set)
+//   → '/api' dev proxy (localhost only)
+const BASE_URL =
+  (import.meta.env.VITE_API_URL as string | undefined) ||
+  'https://osatechcloud.cloud/api';
+
 const client = axios.create({
-  baseURL: '/api',
+  baseURL: BASE_URL,
   headers: { 'Content-Type': 'application/json' },
   timeout: 15000,
 });

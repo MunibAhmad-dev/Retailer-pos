@@ -5,7 +5,9 @@ import {
   KeyRound, Loader2, Lock, Mail, MapPin, Phone, Printer, Puzzle,
   RefreshCw, Save, ShieldCheck, Store, Trash2, Upload, User,
   Zap, Upload as UploadIcon, Languages, HardDrive, Settings2, GitBranch,
+  Barcode, Smartphone, Copy,
 } from 'lucide-react';
+import BarcodeStudio from '../components/BarcodeStudio';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -26,6 +28,7 @@ import {
   sendHeartbeat,
   checkInstanceStatus,
   fetchNotifications,
+  DEFAULT_CLOUD_URL,
 } from '../services/api/posSync';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -35,6 +38,7 @@ interface SettingsData {
   owner_full_name: string; owner_mobile: string; owner_email: string;
   owner_username: string; owner_password: string;
   receipt_footer: string; receipt_size: string; invoice_style: string; invoice_notes: string;
+  receipt_printer: string;
   pos_password: string; low_stock_threshold: number;
   auto_export_path: string; auto_export_enabled: boolean;
   cloud_backend_url: string; cloud_backend_token: string;
@@ -55,6 +59,7 @@ const defaultSettings: SettingsData = {
   owner_username: 'admin', owner_password: '',
   receipt_footer: 'Thank you for visiting!',
   receipt_size: 'thermal', invoice_style: 'thermal', invoice_notes: '',
+  receipt_printer: '',
   pos_password: '1234', low_stock_threshold: 10,
   auto_export_path: '', auto_export_enabled: false,
   cloud_backend_url: '', cloud_backend_token: '',
@@ -91,15 +96,16 @@ function formatSize(bytes: number) {
 
 // ─── Tabs config ──────────────────────────────────────────────────────────────
 
-type Tab = 'general' | 'receipt' | 'security' | 'backup' | 'license' | 'modules';
+type Tab = 'general' | 'receipt' | 'security' | 'backup' | 'license' | 'modules' | 'barcode';
 
 const TABS: { id: Tab; label: string; icon: React.ElementType; desc: string }[] = [
-  { id: 'general',  label: 'General',       icon: Building2,   desc: 'Business & branding'  },
-  { id: 'receipt',  label: 'Print & Receipt',icon: Printer,     desc: 'Paper & invoice style'},
-  { id: 'security', label: 'Security',       icon: ShieldCheck, desc: 'PIN & thresholds'     },
-  { id: 'backup',   label: 'Backup & Data',  icon: Database,    desc: 'Cloud & exports'      },
-  { id: 'license',  label: 'License',        icon: KeyRound,    desc: 'Activation & API'     },
-  { id: 'modules',  label: 'Modules',         icon: Puzzle,      desc: 'Optional features'   },
+  { id: 'general',  label: 'General',        icon: Building2,   desc: 'Business & branding'   },
+  { id: 'receipt',  label: 'Print & Receipt', icon: Printer,     desc: 'Paper & invoice style' },
+  { id: 'security', label: 'Security',        icon: ShieldCheck, desc: 'PIN & thresholds'      },
+  { id: 'backup',   label: 'Backup & Data',   icon: Database,    desc: 'Cloud & exports'       },
+  { id: 'license',  label: 'License',         icon: KeyRound,    desc: 'Activation & API'      },
+  { id: 'modules',  label: 'Modules',          icon: Puzzle,      desc: 'Optional features'    },
+  { id: 'barcode',  label: 'Barcode Studio',  icon: Barcode,     desc: 'Generate & print labels'},
 ];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -161,6 +167,11 @@ export default function Settings() {
   const [validating, setValidating] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('general');
 
+  // ── Printer state ─────────────────────────────────────────────────────────
+  const [availablePrinters, setAvailablePrinters] = useState<{ name: string; displayName: string; isDefault: boolean }[]>([]);
+  const [loadingPrinters, setLoadingPrinters]     = useState(false);
+  const [testPrinting,    setTestPrinting]         = useState(false);
+
   const [driveStatus, setDriveStatus] = useState<{ connected: boolean; lastBackup: string | null }>({ connected: false, lastBackup: null });
   const [subscriptionInfo, setSubscriptionInfo] = useState<any>(null);
   const [isBackingUp, setIsBackingUp] = useState(false);
@@ -181,6 +192,20 @@ export default function Settings() {
   const [sendingDetails, setSendingDetails] = useState(false);
   const [cloudRequestError, setCloudRequestError] = useState('');
   const [cloudRequestSuccess, setCloudRequestSuccess] = useState(false);
+
+  // ── Mobile App Access ────────────────────────────────────────────────────
+  const [mobileToken, setMobileToken]       = useState<string>('');
+  const [fetchingMobileToken, setFetchingMobileToken] = useState(false);
+  const [mobileTokenCopied, setMobileTokenCopied]     = useState(false);
+
+  // ── Software Update ───────────────────────────────────────────────────────
+  const [currentVersion, setCurrentVersion] = useState('');
+  const [updateInfo,    setUpdateInfo]      = useState<any>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [downloading,   setDownloading]     = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadedPath,   setDownloadedPath]   = useState('');
+  const [updateError,      setUpdateError]      = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { addNotification } = useNotifications();
@@ -217,13 +242,21 @@ export default function Settings() {
       const res = await window.api.getSettings();
       if (res?.success && res.data) {
         const d = res.data as any;
+        // Always ensure cloud_backend_url is the baked-in production URL.
+        // This silently migrates old installs that had localhost or Railway URLs stored.
+        const effectiveBackendUrl = DEFAULT_CLOUD_URL;
+        if (d.cloud_backend_url !== effectiveBackendUrl) {
+          window.api.updateSettings({ cloud_backend_url: effectiveBackendUrl } as any).catch(() => {});
+        }
         setSettings({
           ...defaultSettings, ...d,
+          cloud_backend_url: effectiveBackendUrl, // always override — never let user change this
           pos_password: d.pos_password || '1234',
           low_stock_threshold: d.low_stock_threshold ?? 10,
           receipt_size: d.receipt_size || 'thermal',
           invoice_style: d.invoice_style || 'thermal',
-          invoice_notes: d.invoice_notes || '',
+          invoice_notes:    d.invoice_notes || '',
+          receipt_printer:  d.receipt_printer || '',
           auto_export_path: d.auto_export_path || '',
           auto_export_enabled: !!d.auto_export_enabled,
           owner_mobile: d.owner_mobile || d.store_phone || '',
@@ -248,6 +281,33 @@ export default function Settings() {
   const loadSyncStatus = async () => {
     const res = await window.api.getSyncStatus?.();
     if (res?.success && res.data) setSyncStatus(res.data);
+  };
+
+  const loadPrinters = async () => {
+    setLoadingPrinters(true);
+    try {
+      const res = await (window.api as any).getPrinters?.();
+      if (res?.success && Array.isArray(res.data)) {
+        setAvailablePrinters(res.data);
+      }
+    } catch { /* non-critical */ }
+    finally { setLoadingPrinters(false); }
+  };
+
+  const handleTestPrint = async () => {
+    setTestPrinting(true);
+    try {
+      const testHtml = `<h2 style="font-family:monospace;text-align:center">OsaTech POS</h2>
+<p style="font-family:monospace;text-align:center">Printer Test — OK</p>
+<p style="font-family:monospace;text-align:center">${settings.store_name || 'Your Store'}</p>
+<p style="font-family:monospace;text-align:center">Printer: ${settings.receipt_printer || 'Default'}</p>`;
+      const result = await window.api.printInvoice(testHtml);
+      if ((result as any)?.success) {
+        addNotification('Test print sent', `Job sent to "${settings.receipt_printer || 'default printer'}". Check your printer.`, 'success');
+      } else {
+        addNotification('Test print failed', (result as any)?.error || 'Could not reach printer.', 'error');
+      }
+    } finally { setTestPrinting(false); }
   };
 
   const update = <K extends keyof SettingsData>(key: K, value: SettingsData[K]) =>
@@ -531,16 +591,10 @@ export default function Settings() {
   };
 
   const handleRequestCloudServices = async () => {
-    if (!settings.cloud_backend_url.trim()) {
-      setCloudRequestError('Enter the Admin Panel URL above before sending a request.');
-      return;
-    }
     setRequestingCloud(true);
     setCloudRequestError('');
     setCloudRequestSuccess(false);
     try {
-      // Save the URL first so posSync functions can read it from settings
-      await window.api.updateSettings({ cloud_backend_url: settings.cloud_backend_url.trim() } as any);
       const res = await requestCloudServices(cloudRequestNote.trim());
       if (res.success) {
         setCloudRequestSuccess(true);
@@ -559,15 +613,6 @@ export default function Settings() {
   };
 
   const handleSendDetailsManually = async () => {
-    // Guard: must have a backend URL configured (either in settings or DEFAULT_CLOUD_URL)
-    if (!settings.cloud_backend_url.trim()) {
-      addNotification(
-        'No Admin URL',
-        'Enter your OsaTech Admin Panel URL in the Cloud Services section below, then save settings before sending.',
-        'warning'
-      );
-      return;
-    }
     setSendingDetails(true);
     try {
       await notifyLicenseActivated();
@@ -581,6 +626,113 @@ export default function Settings() {
       addNotification('Failed', err.message || 'Could not send details. Check your internet connection.', 'error');
     } finally {
       setSendingDetails(false);
+    }
+  };
+
+  // ── Mobile App Token ────────────────────────────────────────────────────────
+  const handleGetMobileToken = async () => {
+    const backendUrl = (settings as any).cloud_backend_url || DEFAULT_CLOUD_URL;
+    const apiKey     = (settings as any).cloud_backend_token || '';
+    if (!apiKey) {
+      addNotification('Not connected', 'Connect to OsaTech Cloud first.', 'warning');
+      return;
+    }
+    setFetchingMobileToken(true);
+    try {
+      const res = await fetch(`${backendUrl.replace(/\/$/, '')}/api/instances/mobile-token`, {
+        method:  'POST',
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      const data = await res.json();
+      if (data.success && data.mobile_token) {
+        setMobileToken(data.mobile_token);
+        // Persist the token so the mobile app UI can display it even after restart
+        await window.api.updateSettings({ mobile_token: data.mobile_token } as any);
+        addNotification('Mobile token ready', 'Your mobile app credentials are ready. Copy and paste into the mobile app.', 'success');
+      } else if (res.status === 403) {
+        addNotification(
+          'Mobile access not enabled',
+          data.error || 'Ask your OsaTech admin to enable mobile access for your store first.',
+          'warning',
+        );
+      } else {
+        addNotification('Failed', data.error || 'Could not generate mobile token.', 'error');
+      }
+    } catch (err: any) {
+      addNotification('Network error', err.message, 'error');
+    } finally {
+      setFetchingMobileToken(false);
+    }
+  };
+
+  // ── Software Update ───────────────────────────────────────────────────────
+  useEffect(() => {
+    (window.api as any).getAppVersion?.().then((r: any) => {
+      if (r?.version) setCurrentVersion(r.version);
+    }).catch(() => {});
+  }, []);
+
+  const handleCheckForUpdate = async () => {
+    setCheckingUpdate(true);
+    setUpdateError('');
+    setUpdateInfo(null);
+    try {
+      const result = await (window.api as any).checkForUpdate?.();
+      if (result?.success) {
+        if (result.update_available) {
+          setUpdateInfo(result.latest);
+        } else {
+          addNotification('Up to date ✓', `You're running the latest version (${result.current}).`, 'success');
+        }
+      } else {
+        setUpdateError(result?.error || 'Could not check for updates. Check your internet connection.');
+      }
+    } catch (err: any) {
+      setUpdateError(err.message || 'Unexpected error');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const handleDownloadUpdate = async () => {
+    if (!updateInfo?.download_url) return;
+    setDownloading(true);
+    setDownloadProgress(0);
+    setUpdateError('');
+    setDownloadedPath('');
+
+    // Listen to progress events
+    const cleanupProgress = (window.api as any).onUpdateProgress?.((data: any) => {
+      setDownloadProgress(data.percent || 0);
+    });
+
+    try {
+      const fileName = updateInfo.download_url.split('/').pop() || 'OsaTechPOS-Update.exe';
+      const result = await (window.api as any).downloadUpdate?.(updateInfo.download_url, fileName);
+      if (result?.success) {
+        setDownloadedPath(result.filePath);
+        setDownloadProgress(100);
+        addNotification('Download complete', 'Click "Install Now" to update the app.', 'success');
+      } else {
+        setUpdateError(result?.error || 'Download failed');
+      }
+    } catch (err: any) {
+      setUpdateError(err.message);
+    } finally {
+      setDownloading(false);
+      cleanupProgress?.();
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    if (!downloadedPath) return;
+    const confirmed = window.confirm(
+      'The app will close and the installer will start. Continue?'
+    );
+    if (!confirmed) return;
+    const result = await (window.api as any).installUpdate?.(downloadedPath);
+    if (!result?.success) {
+      setUpdateError(result?.error || 'Could not start installer');
     }
   };
 
@@ -764,6 +916,100 @@ export default function Settings() {
 
                 <SectionCard title="Print & Receipt Settings" desc="Choose paper size and invoice layout" icon={Printer}>
                   <div className="space-y-6">
+
+                    {/* ── Printer Setup ── */}
+                    <div className="space-y-3 pb-5 border-b border-border/50">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                            Receipt Printer
+                          </Label>
+                          <p className="text-[11px] text-muted-foreground mt-0.5">
+                            Select your receipt / invoice printer. Prints silently — no dialog popup.
+                          </p>
+                        </div>
+                        <Button
+                          type="button" variant="outline" size="sm"
+                          className="h-8 gap-1.5 text-xs shrink-0"
+                          onClick={loadPrinters}
+                          disabled={loadingPrinters}
+                        >
+                          {loadingPrinters
+                            ? <><Loader2 size={13} className="animate-spin" /> Scanning…</>
+                            : <><RefreshCw size={13} /> Detect Printers</>}
+                        </Button>
+                      </div>
+
+                      {availablePrinters.length === 0 && !loadingPrinters && (
+                        <p className="text-xs text-muted-foreground/60 italic">
+                          Click "Detect Printers" to load available printers.
+                        </p>
+                      )}
+
+                      {availablePrinters.length > 0 && (
+                        <div className="grid grid-cols-1 gap-2 max-h-52 overflow-y-auto pr-1">
+                          {/* "Default printer" option */}
+                          <button
+                            type="button"
+                            onClick={() => update('receipt_printer', '')}
+                            className={cn(
+                              'flex items-center justify-between p-3 rounded-xl border-2 text-left transition-all',
+                              !settings.receipt_printer
+                                ? 'border-primary bg-primary/5'
+                                : 'border-border/40 hover:border-primary/30 hover:bg-muted/20',
+                            )}
+                          >
+                            <div>
+                              <p className="text-xs font-semibold">System Default Printer</p>
+                              <p className="text-[10px] text-muted-foreground">Uses whatever is set as default in Windows</p>
+                            </div>
+                            {!settings.receipt_printer && (
+                              <CheckCircle2 size={16} className="text-primary shrink-0" />
+                            )}
+                          </button>
+
+                          {availablePrinters.map(p => (
+                            <button
+                              key={p.name}
+                              type="button"
+                              onClick={() => update('receipt_printer', p.name)}
+                              className={cn(
+                                'flex items-center justify-between p-3 rounded-xl border-2 text-left transition-all',
+                                settings.receipt_printer === p.name
+                                  ? 'border-primary bg-primary/5'
+                                  : 'border-border/40 hover:border-primary/30 hover:bg-muted/20',
+                              )}
+                            >
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold truncate">{p.displayName}</p>
+                                <p className="text-[10px] text-muted-foreground truncate">{p.name}</p>
+                                {p.isDefault && (
+                                  <span className="text-[9px] font-bold text-emerald-600 bg-emerald-500/10 px-1.5 py-0.5 rounded-full mt-0.5 inline-block">
+                                    Windows Default
+                                  </span>
+                                )}
+                              </div>
+                              {settings.receipt_printer === p.name && (
+                                <CheckCircle2 size={16} className="text-primary shrink-0 ml-2" />
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Test print button */}
+                      <Button
+                        type="button" variant="outline" size="sm"
+                        className="h-8 gap-1.5 text-xs w-full"
+                        onClick={handleTestPrint}
+                        disabled={testPrinting}
+                      >
+                        {testPrinting
+                          ? <><Loader2 size={13} className="animate-spin" /> Sending test print…</>
+                          : <><Printer size={13} /> Send Test Print to "{settings.receipt_printer || 'Default Printer'}"</>}
+                      </Button>
+                    </div>
+
                     {/* Paper size */}
                     <div className="space-y-3">
                       <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Default Paper Size</Label>
@@ -904,6 +1150,122 @@ export default function Settings() {
             {/* ══ BACKUP ═════════════════════════════════════════════════════ */}
             {activeTab === 'backup' && (
               <>
+                {/* ── Software Update ── */}
+                <SectionCard title="Software Update" desc="Check for and install new versions of OsaTech POS" icon={RefreshCw} accent="linear-gradient(90deg,#6366f1,#8b5cf6)">
+                  <div className="space-y-4">
+                    {/* Current version + check button */}
+                    <div className="flex items-center justify-between gap-4 p-3 rounded-xl bg-muted/30 border border-border/50">
+                      <div>
+                        <p className="text-xs font-semibold text-foreground">Current Version</p>
+                        <p className="text-lg font-black text-primary font-mono">v{currentVersion || '—'}</p>
+                      </div>
+                      <Button type="button" size="sm" variant="outline" onClick={handleCheckForUpdate}
+                        disabled={checkingUpdate} className="h-9 gap-1.5 shrink-0">
+                        {checkingUpdate
+                          ? <><Loader2 size={13} className="animate-spin" /> Checking…</>
+                          : <><RefreshCw size={13} /> Check for Updates</>}
+                      </Button>
+                    </div>
+
+                    {/* Error */}
+                    {updateError && (
+                      <div className="flex items-start gap-2 p-3 rounded-xl bg-destructive/8 border border-destructive/20 text-destructive text-xs">
+                        <AlertCircle size={13} className="shrink-0 mt-0.5" />
+                        <span>{updateError}</span>
+                      </div>
+                    )}
+
+                    {/* Update available */}
+                    {updateInfo && (
+                      <div className="rounded-xl border border-primary/30 bg-primary/5 overflow-hidden">
+                        {/* Header */}
+                        <div className="flex items-center justify-between px-4 py-3 border-b border-primary/20 bg-primary/8">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center shrink-0">
+                              <ArrowUpRight size={14} className="text-white" />
+                            </div>
+                            <div>
+                              <p className="text-sm font-black text-foreground">
+                                v{updateInfo.version} is available
+                              </p>
+                              <p className="text-[10px] text-muted-foreground">
+                                Released {updateInfo.published_at
+                                  ? new Date(updateInfo.published_at).toLocaleDateString('en-PK', { day: 'numeric', month: 'short', year: 'numeric' })
+                                  : '—'}
+                                {updateInfo.is_mandatory && (
+                                  <span className="ml-2 px-1.5 py-0.5 rounded-full bg-destructive/15 text-destructive text-[9px] font-black uppercase">Required</span>
+                                )}
+                              </p>
+                            </div>
+                          </div>
+                          {updateInfo.file_size > 0 && (
+                            <span className="text-[10px] text-muted-foreground font-mono shrink-0">
+                              {(updateInfo.file_size / 1024 / 1024).toFixed(1)} MB
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Changelog */}
+                        {updateInfo.changelog && (
+                          <div className="px-4 py-3 border-b border-primary/10">
+                            <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground mb-1.5">What's New</p>
+                            <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line">
+                              {updateInfo.changelog}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Download progress */}
+                        {downloading && (
+                          <div className="px-4 py-3 border-b border-primary/10 space-y-1.5">
+                            <div className="flex justify-between text-[10px] font-semibold">
+                              <span className="text-muted-foreground">Downloading update…</span>
+                              <span className="text-primary">{downloadProgress}%</span>
+                            </div>
+                            <div className="h-2 bg-muted/50 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-primary rounded-full transition-all duration-300"
+                                style={{ width: `${downloadProgress}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Actions */}
+                        <div className="px-4 py-3 flex gap-2">
+                          {!downloadedPath ? (
+                            <Button type="button" size="sm" onClick={handleDownloadUpdate}
+                              disabled={downloading}
+                              className="h-9 gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground">
+                              {downloading
+                                ? <><Loader2 size={13} className="animate-spin" /> Downloading {downloadProgress}%</>
+                                : <><Download size={13} /> Download Update</>}
+                            </Button>
+                          ) : (
+                            <Button type="button" size="sm" onClick={handleInstallUpdate}
+                              className="h-9 gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white">
+                              <CheckCircle2 size={13} /> Install Now &amp; Restart
+                            </Button>
+                          )}
+                          {!updateInfo.is_mandatory && (
+                            <Button type="button" size="sm" variant="ghost" onClick={() => setUpdateInfo(null)}
+                              className="h-9 text-xs text-muted-foreground">
+                              Remind Later
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* No update */}
+                    {!updateInfo && !checkingUpdate && currentVersion && (
+                      <p className="text-[11px] text-muted-foreground/60 text-center py-1">
+                        OsaTech POS v{currentVersion} · Click "Check for Updates" to see if a newer version is available
+                      </p>
+                    )}
+                  </div>
+                </SectionCard>
+
                 {/* Auto JSON backup */}
                 <SectionCard title="Automated JSON Backup" desc="Auto-save to a local folder every 5 hours" icon={HardDrive}>
                   <div className="space-y-4">
@@ -1340,31 +1702,14 @@ export default function Settings() {
                           )}
                         </p>
 
-                        {/* ── Admin Panel URL ── required for any registration to work ── */}
-                        <div className="space-y-1.5">
-                          <label className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                            <Globe size={10} />
-                            Admin Panel URL <span className="text-red-500">*</span>
-                          </label>
-                          <div className="relative">
-                            <Globe className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/50" size={12} />
-                            <Input
-                              className={cn(
-                                'pl-7 h-8 text-xs font-mono',
-                                !settings.cloud_backend_url && 'border-amber-500/50 focus-visible:ring-amber-500/30'
-                              )}
-                              placeholder="https://admin.yourserver.com"
-                              value={settings.cloud_backend_url}
-                              onChange={e => update('cloud_backend_url', e.target.value)}
-                            />
+                        {/* ── Server (read-only — baked into the build) ── */}
+                        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/30 border border-border/50">
+                          <Globe size={11} className="text-muted-foreground/50 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/50">Server</p>
+                            <p className="text-[11px] font-mono text-muted-foreground truncate">{DEFAULT_CLOUD_URL}</p>
                           </div>
-                          {!settings.cloud_backend_url && (
-                            <p className="text-[10px] text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                              <AlertCircle size={10} />
-                              Enter your OsaTech admin panel URL to enable registration &amp; cloud services.
-                              <span className="ml-1 text-muted-foreground">(Save settings after entering)</span>
-                            </p>
-                          )}
+                          <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />
                         </div>
 
                         {(!settings.cloud_service_requested || settings.approval_status !== 'pending') && (
@@ -1396,9 +1741,8 @@ export default function Settings() {
                             <Button
                               type="button"
                               onClick={handleRequestCloudServices}
-                              disabled={requestingCloud || !settings.cloud_backend_url.trim()}
+                              disabled={requestingCloud}
                               className="w-full h-9 text-xs gap-2"
-                              title={!settings.cloud_backend_url.trim() ? 'Enter the Admin Panel URL above first' : ''}
                             >
                               {requestingCloud
                                 ? <><Loader2 size={12} className="animate-spin" />Sending Request…</>
@@ -1552,6 +1896,74 @@ export default function Settings() {
                           </div>
                         </div>
 
+                        {/* ── Mobile App Access ──────────────────────────── */}
+                        <div className="p-3 rounded-xl border border-violet-500/25 bg-violet-500/5 space-y-3">
+                          <div className="flex items-start gap-2.5">
+                            <div className="w-7 h-7 rounded-lg bg-violet-500/15 flex items-center justify-center shrink-0 mt-0.5">
+                              <Smartphone size={13} className="text-violet-500" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold text-foreground">OsaTech Mobile App</p>
+                              <p className="text-[10px] text-muted-foreground mt-0.5 leading-relaxed">
+                                Get a sign-in token for the OsaTech mobile monitoring app.
+                                Your admin must first enable mobile access for your store.
+                              </p>
+                            </div>
+                          </div>
+
+                          {mobileToken ? (
+                            <div className="space-y-2">
+                              <p className="text-[10px] font-semibold text-violet-600 dark:text-violet-400 uppercase tracking-wider">
+                                Mobile Sign-In Token (valid 90 days)
+                              </p>
+                              <div className="flex items-center gap-2 p-2 rounded-lg bg-background border border-border/60">
+                                <p className="flex-1 text-[10px] font-mono text-muted-foreground truncate">
+                                  {mobileToken.slice(0, 40)}…
+                                </p>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 gap-1 text-xs shrink-0"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(mobileToken);
+                                    setMobileTokenCopied(true);
+                                    setTimeout(() => setMobileTokenCopied(false), 2000);
+                                  }}
+                                >
+                                  {mobileTokenCopied ? <><CheckCircle2 size={12} /> Copied!</> : <><Copy size={12} /> Copy</>}
+                                </Button>
+                              </div>
+                              <p className="text-[10px] text-muted-foreground/70">
+                                Open the OsaTech mobile app → tap "Sign in with Store Token" → paste this token.
+                              </p>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs gap-1.5 border-violet-500/30 text-violet-600 dark:text-violet-400"
+                                onClick={handleGetMobileToken}
+                                disabled={fetchingMobileToken}
+                              >
+                                {fetchingMobileToken ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                                Regenerate Token
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="w-full h-9 gap-2 bg-violet-600 hover:bg-violet-700 text-white text-xs"
+                              onClick={handleGetMobileToken}
+                              disabled={fetchingMobileToken}
+                            >
+                              {fetchingMobileToken
+                                ? <><Loader2 size={13} className="animate-spin" /> Getting token…</>
+                                : <><Smartphone size={13} /> Get Mobile App Token</>}
+                            </Button>
+                          )}
+                        </div>
+
                         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                           <StatusPill label="Cloud" value="Connected" tone="success" />
                           <StatusPill
@@ -1563,12 +1975,6 @@ export default function Settings() {
                           <StatusPill label="Last Sync" value={syncStatus.lastSync ? new Date(syncStatus.lastSync).toLocaleString('en-PK', { hour: '2-digit', minute: '2-digit', hour12: true }) : 'Never'} tone="neutral" />
                         </div>
 
-                        {settings.cloud_backend_url && (
-                          <div className="flex items-center gap-2 p-2.5 rounded-lg bg-muted/30 border border-border/50">
-                            <Globe size={12} className="text-muted-foreground/60 shrink-0" />
-                            <p className="text-[10px] font-mono text-muted-foreground truncate">{settings.cloud_backend_url}</p>
-                          </div>
-                        )}
                       </>
                     )}
                   </div>
@@ -1697,6 +2103,11 @@ export default function Settings() {
                 {isSaving ? <><RefreshCw size={15} className="animate-spin" />Saving...</> : <><Save size={15} />Save Settings</>}
               </Button>
             </div>
+            {/* ══ BARCODE STUDIO ══════════════════════════════════════════ */}
+            {activeTab === 'barcode' && (
+              <BarcodeStudio />
+            )}
+
           </form>
         </div>
       </div>

@@ -2,12 +2,17 @@ import { createContext, useContext, useEffect, useState } from 'react';
 
 type Theme = 'dark' | 'light';
 
-const ThemeCtx = createContext<{ theme: Theme; toggle: () => void }>({
+interface ThemeContextValue {
+  theme: Theme;
+  toggle: () => void;
+}
+
+const ThemeCtx = createContext<ThemeContextValue>({
   theme: 'dark',
   toggle: () => {},
 });
 
-export function useTheme() {
+export function useTheme(): ThemeContextValue {
   return useContext(ThemeCtx);
 }
 

@@ -11,7 +11,7 @@ import { submitRegistration, checkApprovalStatus } from '../services/api/authApi
 
 const DEFAULT_BACKEND_URL: string =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_CLOUD_BACKEND_URL) ||
-  'http://localhost:4000';
+  'https://osatechcloud.cloud';
 
 interface SetupProps { onComplete: () => void; }
 
@@ -82,12 +82,14 @@ export default function Setup({ onComplete }: SetupProps) {
   const [signInLoading, setSignInLoading] = useState(false);
 
   // waiting-phase state
-  const [regMobile, setRegMobile]   = useState('');
-  const [regApiKey, setRegApiKey]   = useState('');
-  const [pollCount, setPollCount]   = useState(0);
+  const [regMobile, setRegMobile]     = useState('');
+  const [regApiKey, setRegApiKey]     = useState('');
+  const [pollCount, setPollCount]     = useState(0);
+  const [pollFails, setPollFails]     = useState(0);  // consecutive failures
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
-  const [pollError, setPollError]   = useState('');
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [pollError, setPollError]     = useState('');
+  const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const firstTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [form, setForm] = useState({
     store_name: '', owner_full_name: '', store_phone: '',
@@ -114,39 +116,58 @@ export default function Setup({ onComplete }: SetupProps) {
 
     const poll = async () => {
       try {
-        // Use UUID instance_id when available (new multi-branch flow), else fall back to mobile
         const result = await checkApprovalStatus(regMobile, DEFAULT_BACKEND_URL, cloudInstanceId || undefined);
         setLastChecked(new Date());
         setPollCount(c => c + 1);
+        setPollFails(0);   // reset consecutive-failure counter on success
         setPollError('');
 
         if (result.status === 'approved') {
-          // Activate cloud-issued license key locally so Subscription page shows countdown
-          if (result.licenseKey) {
-            await window.api.activateAppV2(result.licenseKey).catch(() => {});
-            await window.api.updateSettings({ activation_key: result.licenseKey } as any);
-          }
-          // Save approval status + api_key locally
+          // Stop polling immediately
+          if (pollRef.current)    clearInterval(pollRef.current);
+          if (firstTimer.current) clearTimeout(firstTimer.current);
+
+          // Save approval to DB FIRST — Ctrl+R always works after this line
           await window.api.updateSettings({
-            approval_status: 'approved',
+            approval_status:     'approved',
             cloud_backend_token: regApiKey || '',
-            cloud_connected: 1,
+            cloud_connected:     1,
           } as any);
-          if (pollRef.current) clearInterval(pollRef.current);
+
+          // Activate license non-blocking (don't let this stall the transition)
+          if (result.licenseKey) {
+            window.api.activateAppV2(result.licenseKey).catch(() => {});
+            window.api.updateSettings({ activation_key: result.licenseKey } as any).catch(() => {});
+          }
+
           setPhase('approved');
-          // Brief "approved" flash, then complete
-          setTimeout(() => onComplete(), 2000);
+          setTimeout(() => onComplete(), 1200);
         }
-      } catch {
+      } catch (err: any) {
         setPollCount(c => c + 1);
-        setPollError('Could not reach server — will retry automatically.');
+        setPollFails(f => {
+          const next = f + 1;
+          // Only show error after 2 consecutive failures — suppresses first-attempt noise
+          // that happens when Electron's network stack isn't fully warmed up yet.
+          if (next >= 2) {
+            const status = err?.response?.status;
+            const msg = status
+              ? `Server error ${status} — ${err?.response?.data?.error || 'check VPS logs'}`
+              : `Cannot reach server — check internet connection`;
+            setPollError(`${msg}. Retrying automatically.`);
+          }
+          return next;
+        });
+        console.error('[PosSync] Status poll failed:', err?.message, err?.response?.data);
       }
     };
 
-    poll(); // immediate first check
-    pollRef.current = setInterval(poll, 5000);
+    // Delay the first poll by 2 s so the connection from registration can settle.
+    firstTimer.current = setTimeout(poll, 2000);
+    pollRef.current    = setInterval(poll, 3000); // 3 s for snappy detection
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (firstTimer.current) clearTimeout(firstTimer.current);
+      if (pollRef.current)    clearInterval(pollRef.current);
     };
   }, [phase, regMobile, regApiKey, cloudInstanceId]);
 
@@ -156,9 +177,8 @@ export default function Setup({ onComplete }: SetupProps) {
       if (!navigator.onLine) return;
       const settingsRes = await window.api.getSettings().catch(() => null);
       const s = settingsRes?.data;
-      // Only auto-push if setup done, license_mode is offline but cloud_backend_url set
-      // and NOT already registered (no cloud_backend_token)
-      if (!s?.setup_completed || s.cloud_backend_token || !s.cloud_backend_url) return;
+      // Only auto-push if setup done and NOT already registered (no cloud_backend_token)
+      if (!s?.setup_completed || s.cloud_backend_token) return;
       if (!s.owner_mobile) return;
       try {
         const result = await submitRegistration({
@@ -167,7 +187,7 @@ export default function Setup({ onComplete }: SetupProps) {
           mobile: s.owner_mobile,
           email: s.owner_email || undefined,
           address: s.store_address || undefined,
-        }, s.cloud_backend_url);
+        }, DEFAULT_BACKEND_URL); // always use baked-in URL
         if (result.success && result.api_key) {
           await window.api.updateSettings({
             cloud_backend_token: result.api_key,
@@ -228,15 +248,27 @@ export default function Setup({ onComplete }: SetupProps) {
           branchName:   form.branch_name.trim() || 'Main Branch',
         }, backendUrl);
 
-        // 3. Store api_key + instance_id (UUID) for multi-branch polling
+        // 3. Store api_key + instance_id + approval_status
         if (result.api_key) {
+          const alreadyApproved = result.approval_status === 'approved';
           await window.api.updateSettings({
             cloud_backend_token: result.api_key,
             cloud_instance_id:   result.instance_id || mobile,
-            cloud_connected: 1,
+            cloud_connected:     1,
+            // Save the server-reported approval status immediately
+            approval_status: alreadyApproved ? 'approved' : 'pending',
           } as any);
           setRegApiKey(result.api_key);
           if (result.instance_id) setCloudInstanceId(result.instance_id);
+
+          // If the server already has this instance as approved (re-registration),
+          // skip the waiting screen and complete immediately.
+          if (alreadyApproved) {
+            setSaving(false);
+            setPhase('approved');
+            setTimeout(() => onComplete(), 800);
+            return;
+          }
         }
       } catch {
         addNotification('Offline', 'Could not reach server — will auto-register when connected.', 'warning');

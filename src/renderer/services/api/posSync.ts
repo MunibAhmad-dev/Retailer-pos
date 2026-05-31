@@ -18,7 +18,7 @@ import axios from 'axios';
 // Default cloud backend URL — set this to your admin panel domain.
 // End users never need to configure this; it's baked into the build.
 // Falls back to whatever cloud_backend_url is in Settings if this is left blank.
-export const DEFAULT_CLOUD_URL = 'http://localhost:4000'; // e.g. 'https://admin.osatech.pk'
+export const DEFAULT_CLOUD_URL = 'https://osatechcloud.cloud';
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 

@@ -9,29 +9,43 @@ import authRoutes      from './routes/auth';
 import instanceRoutes  from './routes/instances';
 import syncRoutes      from './routes/sync';
 import adminRoutes     from './routes/admin';
-import businessRoutes from './routes/businesses';   // ← add this
+import businessRoutes  from './routes/businesses';
+import updateRoutes    from './routes/updates';
 
-// Bootstrap DB (creates tables on first run)
-import './db';
+// Prisma client is lazily initialized on first use — no explicit bootstrap needed.
 
 const app  = express();
-const PORT = Number(process.env.PORT) || 4000;
+const PORT = Number(process.env.PORT) || 5000;
 
-// ─── Security ────────────────────────────────────────────────────────────────
-app.use(helmet());
+// ─── CORS (must come BEFORE helmet) ──────────────────────────────────────────
+// Supports '*' in ALLOWED_ORIGINS to permit all origins (useful for Railway).
+const allowedOrigins = (
+  process.env.ALLOWED_ORIGINS ||
+  'http://localhost:3001,http://localhost:5173, https://munibahmad-dev.github.io/pos-frontend-cloud/'
+).split(',').map(o => o.trim()).filter(Boolean);
 
-// CORS — allow the admin dashboard origin(s) plus the Electron app (file://)
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3001,http://localhost:5173')
-  .split(',')
-  .map(o => o.trim());
-app.use(cors({
+const corsOptions: cors.CorsOptions = {
   origin: (origin, cb) => {
-    // Allow Electron (no origin header) and listed web origins
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
-    cb(new Error(`CORS: ${origin} is not allowed`));
+    // No origin = same-origin or Electron (file://) — always allow
+    if (!origin) return cb(null, true);
+    // Wildcard in list = allow everything
+    if (allowedOrigins.includes('*')) return cb(null, true);
+    // Exact match
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    // Reject — use null false, NOT an Error, so CORS headers are still sent
+    cb(null, false);
   },
   credentials: true,
-}));
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-setup-key'],
+};
+
+// Handle all preflight requests before any other middleware
+app.options('*', cors(corsOptions));
+app.use(cors(corsOptions));
+
+// ─── Security (after CORS so headers aren't overwritten) ─────────────────────
+app.use(helmet({ crossOriginResourcePolicy: false }));
 
 // ─── Body parsing ────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '2mb' }));
@@ -60,10 +74,8 @@ app.use('/api/auth',       authLimiter,  authRoutes);
 app.use('/api/instances',  syncLimiter,  instanceRoutes);
 app.use('/api/sync',       syncLimiter,  syncRoutes);
 app.use('/api/admin',                   adminRoutes);
-//besiness
-
-// inside the routes section:
-app.use('/api', businessRoutes);                    // ← add this
+app.use('/api/updates',                 updateRoutes);  // public — no auth
+app.use('/api',                         businessRoutes);
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'pos-backend-cloud', timestamp: new Date().toISOString() });

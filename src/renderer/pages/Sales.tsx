@@ -33,18 +33,27 @@ interface CartItem {
   stock?: number;
   metadata?: any;
   product_type?: string;
+  unit_type?: string;         // 'kg' | 'gram' | 'piece' | 'tray'
+  price_per_kg?: number;      // for auto-price weight items
+  auto_price_by_weight?: number; // 1 = dynamic price = qty × price_per_kg
 }
 
 interface Product {
   id: number;
   name: string;
   price: number;
+  purchase_price?: number;   // shown on hover — staff-only cost visibility
   category: string;
   stock?: number;
   unit?: string;
   metadata?: any;
   product_type?: string;
   barcode?: string;
+  unit_type?: string;
+  price_per_kg?: number;
+  auto_price_by_weight?: number;
+  weight_value?: number;
+  is_bakery?: number;
 }
 
 interface Customer {
@@ -77,7 +86,13 @@ interface ReceiptData {
 
 import RegisterManager from '../components/RegisterManager';
 
-const fmtPKR = (n: number) => 'PKR ' + Math.round(n).toLocaleString('en-PK');
+// Manual formatter — en-PK locale is not available on all Windows builds
+// and gives inconsistent results (sometimes adds extra digits).
+const fmtPKR = (n: number) => {
+  const s = Math.round(n).toString();
+  const formatted = s.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return 'PKR ' + formatted;
+};
 
 // ─── Receipt Modal (unchanged logic) ─────────────────────────────────────────
 function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
@@ -88,9 +103,70 @@ function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
 
   const handlePrint = async () => {
     setIsPrinting(true);
-    await onPrint();
-    setIsPrinting(false);
-    addNotification("Printed successfully", "The receipt was queued to the printer.", "success");
+    try {
+      const result: any = await onPrint();
+
+      if (!result || result?.success) {
+        if (result?.fallback === 'browser') {
+          // No physical printer found — browser was opened automatically
+          addNotification(
+            'Opening in browser',
+            result.message || 'No physical printer detected. Press Ctrl+P in the browser to print.',
+            'info',
+          );
+        } else {
+          addNotification('Sent to printer ✓', `Receipt sent to "${result?.printerUsed || 'printer'}" successfully.`, 'success');
+        }
+      } else if (result?.error === 'virtual_printer') {
+        // User has a PDF/virtual printer saved — tell them to fix it
+        addNotification(
+          '⚠ PDF printer detected',
+          result.message || 'Go to Settings → Print & Receipt → Detect Printers → select your real printer.',
+          'warning',
+        );
+      } else if (result?.error && result.error !== 'cancelled') {
+        // Real print failure — auto browser fallback
+        addNotification(
+          'Printer issue — opening browser',
+          'Could not reach the printer. Opening in browser — press Ctrl+P to print.',
+          'warning',
+        );
+        let freshSettings = data.settings;
+        try { const r = await window.api.getSettings(); if (r?.success && r.data) freshSettings = r.data; } catch {}
+        await (window.api as any).printViaBrowser?.(buildInvoiceHtml({ ...data, settings: freshSettings }));
+      }
+    } catch {
+      addNotification('Print Error', 'Could not print. Try the Alt. Print button.', 'error');
+    } finally {
+      setIsPrinting(false);
+    }
+  };
+
+  const handleBrowserPrint = async () => {
+    setIsPrinting(true);
+    try {
+      const printFn = (window.api as any).printViaBrowser;
+      if (typeof printFn !== 'function') {
+        addNotification('Not available', 'Please rebuild the app to enable browser print.', 'warning');
+        return;
+      }
+      let freshSettings = data.settings;
+      try { const r = await window.api.getSettings(); if (r?.success && r.data) freshSettings = r.data; } catch {}
+      const result = await printFn(buildInvoiceHtml({ ...data, settings: freshSettings }));
+      if (result?.success) {
+        addNotification(
+          'Opened in browser',
+          'The print dialog will open automatically. If it doesn\'t, press Ctrl+P.',
+          'info',
+        );
+      } else if (result?.error) {
+        addNotification('Browser print error', result.error, 'error');
+      }
+    } catch (err: any) {
+      addNotification('Error', err?.message || 'Could not open browser print.', 'error');
+    } finally {
+      setIsPrinting(false);
+    }
   };
 
   const handleSavePdf = async () => {
@@ -203,6 +279,11 @@ function ReceiptModal({ data, onPrint, onSavePdf, onClose }: {
             <Button variant="secondary" onClick={handleSavePdf} disabled={isPrinting} className="flex-1 gap-2 text-xs">
               Save as PDF
             </Button>
+            <Button variant="outline" onClick={handleBrowserPrint} disabled={isPrinting} className="flex-1 gap-2 text-xs" title="Open in browser and print with Ctrl+P — works when direct print fails">
+              🌐 Alt. Print
+            </Button>
+          </div>
+          <div className="flex gap-3 w-full">
             {data.customerPhone && (
               <Button onClick={handleWhatsApp} className="flex-1 gap-2 text-xs bg-green-600 hover:bg-green-700 text-white border-transparent">
                 <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
@@ -285,8 +366,17 @@ function buildFormalInvoiceHtml(data: ReceiptData) {
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   @page{size:A4;margin:0}
-  html,body{width:210mm;background:#fff;color:#1a1a1a;font-family:Arial,Helvetica,sans-serif;font-size:10pt}
-  .page{width:210mm;min-height:297mm;padding:10mm 12mm 8mm;display:flex;flex-direction:column}
+  html,body{background:#fff;color:#1a1a1a;font-family:Arial,Helvetica,sans-serif;font-size:10pt}
+  .page{width:210mm;min-height:297mm;padding:10mm 12mm 8mm;display:flex;flex-direction:column;background:#fff}
+  /* Browser viewing — center the A4 page with document-style appearance */
+  @media screen {
+    html,body{background:#e8e8e8;display:flex;flex-direction:column;align-items:center;padding:24px 0 40px;min-height:100vh}
+    .page{box-shadow:0 4px 24px rgba(0,0,0,0.18);border-radius:2px}
+  }
+  @media print {
+    html,body{background:#fff;display:block;padding:0}
+    .page{box-shadow:none}
+  }
 
   /* Header */
   .hdr{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:7px;border-bottom:3px solid #cc0000;margin-bottom:7px}
@@ -539,19 +629,44 @@ export default function Sales() {
 
   const categories = useMemo(() => Array.from(new Set(products.map(p => p.category).filter(Boolean))), [products]);
 
+  const isWeightBased = (p: Product | CartItem) =>
+    (p.unit_type === 'kg' || p.unit_type === 'gram') && (p as any).auto_price_by_weight;
+
   const addProductToCart = (product: Product) => {
     const key = String(product.id);
     const existing = cart.find((i) => i.id === key);
+    const weightBased = isWeightBased(product);
+    const step = product.unit_type === 'gram' ? 100 : product.unit_type === 'kg' ? 0.5 : 1;
+
     if (existing) {
-      if (product.stock !== undefined && existing.quantity + 1 > product.stock) {
-        addNotification("Stock Limit", `Only ${product.stock} units available.`, "warning"); return;
+      // Warn on low/zero stock but DO allow the sale (negative stock is permitted)
+      const newQty = +(existing.quantity + step).toFixed(3);
+      if (product.stock !== undefined && newQty > (product.stock ?? 0)) {
+        addNotification("Low Stock", `⚠ Only ${product.stock}${product.unit_type === 'kg' ? ' kg' : product.unit_type === 'gram' ? ' g' : ''} in stock — selling into negative.`, "warning");
       }
-      setCart(cart.map((i) => i.id === key ? { ...i, quantity: i.quantity + 1 } : i));
+      const newPrice = weightBased && product.price_per_kg
+        ? +(product.price_per_kg * newQty).toFixed(2)
+        : existing.price;
+      setCart(cart.map((i) => i.id === key ? { ...i, quantity: newQty, price: weightBased ? newPrice : i.price } : i));
     } else {
+      // Warn on zero/negative stock but allow adding to cart
       if (product.stock !== undefined && product.stock <= 0) {
-        addNotification("Out of Stock", `${product.name} is out of stock.`, "error"); return;
+        addNotification("Zero Stock", `⚠ ${product.name} has no stock recorded — selling into negative.`, "warning");
       }
-      setCart([...cart, { id: key, product_id: product.id, name: product.name, price: product.price, quantity: 1, is_custom: false, stock: product.stock, metadata: product.metadata, product_type: product.product_type }]);
+      // Default quantity: weight_value (the default sell portion) for weight items, else 1
+      const initQty = weightBased && product.weight_value ? product.weight_value : 1;
+      const initPrice = weightBased && product.price_per_kg
+        ? +(product.price_per_kg * initQty).toFixed(2)
+        : product.price;
+      setCart([...cart, {
+        id: key, product_id: product.id, name: product.name,
+        price: initPrice, quantity: initQty, is_custom: false,
+        stock: product.stock, metadata: product.metadata,
+        product_type: product.product_type,
+        unit_type: product.unit_type,
+        price_per_kg: product.price_per_kg,
+        auto_price_by_weight: product.auto_price_by_weight,
+      }]);
     }
   };
 
@@ -565,13 +680,23 @@ export default function Sales() {
   };
 
   const updateQty = (id: string, rawValue: string) => {
-    const qty = parseInt(rawValue.replace(/[^0-9]/g, '')) || 0;
     const item = cart.find(i => i.id === id);
-    if (item && item.stock !== undefined && qty > item.stock) {
-      addNotification("Stock Limit", `Only ${item.stock} units available.`, "warning");
-      setCart(cart.map((i) => i.id === id ? { ...i, quantity: item.stock } : i)); return;
+    if (!item) return;
+    const wb = isWeightBased(item);
+    // Allow decimals for weight-based items
+    const qty = wb
+      ? +(parseFloat(rawValue) || 0).toFixed(3)
+      : (parseInt(rawValue.replace(/[^0-9]/g, '')) || 0);
+    if (qty < 0) return;
+    // Warn on exceeding stock but DO NOT block (negative stock allowed)
+    if (item.stock !== undefined && qty > (item.stock ?? 0) && (item.stock ?? 0) >= 0) {
+      addNotification("Low Stock", `⚠ Only ${item.stock}${item.unit_type === 'kg' ? ' kg' : ''} in stock.`, "warning");
     }
-    setCart(cart.map((i) => i.id === id ? { ...i, quantity: qty } : i));
+    // Auto-recalculate price for weight-based items
+    const newPrice = (wb && item.price_per_kg)
+      ? +(item.price_per_kg * qty).toFixed(2)
+      : item.price;
+    setCart(cart.map((i) => i.id === id ? { ...i, quantity: qty, price: wb ? newPrice : i.price } : i));
   };
 
   const updatePrice = (id: string, rawValue: string) => {
@@ -758,125 +883,138 @@ export default function Sales() {
             <span />
           </div>
 
-          {/* Product list */}
-          <AnimatedList
-            items={visibleProducts}
-            className="flex-1"
-            maxHeight="none"
-            renderItem={(product: any) => {
-              const isOutOfStock = (product.stock ?? 999) <= 0;
-              const lowStock = !isOutOfStock && (product.stock ?? 999) < 10;
-              const colors = colorForProduct(product);
-              const inCart = cart.find(i => i.id === String(product.id));
+          {/* Product list — plain scrollable div (AnimatedList grew the whole page) */}
+          <div className="flex-1 overflow-y-auto min-h-0">
+            {visibleProducts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground h-full">
+                <Package size={40} className="opacity-10 mb-3" />
+                <p className="text-sm font-medium">No products found</p>
+                <p className="text-xs opacity-60 mt-1">Try adjusting your search or category</p>
+              </div>
+            ) : (
+              <>
+                {visibleProducts.map((product: any) => {
+                  const stockVal       = product.stock ?? 999;
+                  const isNegative     = stockVal < 0;
+                  const isZero         = stockVal === 0;
+                  const isLow          = !isZero && !isNegative && stockVal < 10;
+                  const colors         = colorForProduct(product);
+                  const inCart         = cart.find(i => i.id === String(product.id));
+                  const isKg           = product.unit_type === 'kg';
+                  const isGram         = product.unit_type === 'gram';
+                  const hasPurchasePrice = (product.purchase_price ?? 0) > 0;
 
-              return (
-                <div className={cn(
-                  'grid grid-cols-[1fr_80px_68px_90px_36px] items-center px-4 py-3 border-b border-border/20 transition-all duration-150',
-                  isOutOfStock
-                    ? 'opacity-50 bg-muted/5'
-                    : 'hover:bg-primary/[0.03] cursor-pointer',
-                  inCart && !isOutOfStock && 'bg-primary/[0.05] border-primary/10',
-                )}>
-                  {/* Product info */}
-                  <div className="min-w-0 flex items-center gap-2.5">
-                    {/* Color dot / initial */}
+                  // Format stock label (no trailing .0 for whole numbers)
+                  const stockLabel = (() => {
+                    if (isZero) return 'OUT';
+                    if (isNegative) return (isKg || isGram) ? stockVal.toFixed(1) : String(stockVal);
+                    if (isKg || isGram) return stockVal % 1 === 0 ? String(stockVal) : stockVal.toFixed(1);
+                    return String(stockVal);
+                  })();
+
+                  const stockUnit = isKg ? 'kg' : isGram ? 'g' : '';
+
+                  return (
                     <div
-                      className="w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black flex-shrink-0 shadow-sm"
-                      style={{ background: `linear-gradient(135deg, ${colors.from}, ${colors.to})`, color: colors.text }}
+                      key={product.id}
+                      className={cn(
+                        'grid grid-cols-[1fr_80px_60px_88px_36px] items-center px-4 py-2.5 border-b border-border/20 transition-colors duration-100 hover:bg-primary/[0.03] cursor-pointer group/row',
+                        inCart && 'bg-primary/[0.05]',
+                      )}
+                      onClick={() => addProductToCart(product)}
                     >
-                      {product.name[0]?.toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <p className={cn('text-sm font-semibold truncate', inCart ? 'text-primary' : 'text-foreground')}>
-                        {product.name}
-                        {inCart && <span className="ml-1.5 text-[10px] font-bold bg-primary/15 text-primary px-1.5 py-0.5 rounded-full">×{inCart.quantity}</span>}
-                      </p>
-                      <div className="flex items-center gap-1.5 mt-0.5 overflow-hidden">
-                        {product.barcode && (
-                          <span className="text-[9px] text-muted-foreground font-mono bg-muted/60 px-1 rounded shrink-0">{product.barcode}</span>
+                      {/* Product info */}
+                      <div className="min-w-0 flex items-center gap-2.5">
+                        <div
+                          className="w-8 h-8 rounded-xl flex items-center justify-center text-[11px] font-black flex-shrink-0 shadow-sm"
+                          style={{ background: `linear-gradient(135deg, ${colors.from}, ${colors.to})`, color: colors.text }}
+                        >
+                          {product.name[0]?.toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className={cn('text-sm font-semibold truncate leading-tight', inCart ? 'text-primary' : 'text-foreground')}>
+                            {product.name}
+                            {inCart && <span className="ml-1.5 text-[10px] font-bold bg-primary/15 text-primary px-1.5 py-0.5 rounded-full">×{inCart.quantity}</span>}
+                          </p>
+                          <div className="flex items-center gap-1.5 mt-0.5 overflow-hidden">
+                            {/* Purchase price — dims to visible on hover, no layout shift */}
+                            {hasPurchasePrice && (
+                              <span className="text-[9px] font-semibold text-muted-foreground/30 group-hover/row:text-muted-foreground/70 transition-colors shrink-0">
+                                Cost: {fmtPKR(product.purchase_price)}
+                              </span>
+                            )}
+                            {!hasPurchasePrice && product.barcode && (
+                              <span className="text-[9px] text-muted-foreground font-mono bg-muted/60 px-1 rounded shrink-0">{product.barcode}</span>
+                            )}
+                            {product.unit && (
+                              <span className="text-[9px] text-primary/70 font-bold shrink-0">{product.unit}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Category */}
+                      <div className="flex justify-center">
+                        <span className="text-[10px] font-semibold text-muted-foreground bg-muted/60 px-2 py-0.5 rounded-md truncate max-w-[70px]">
+                          {product.category || '—'}
+                        </span>
+                      </div>
+
+                      {/* Stock — solid badge, always readable */}
+                      <div className="flex justify-center">
+                        <div className={cn(
+                          'h-7 px-2.5 rounded-full flex items-center justify-center gap-0.5 text-[11px] font-black text-white min-w-[40px]',
+                          isNegative ? 'bg-red-500'
+                            : isZero  ? 'bg-slate-400 dark:bg-slate-600'
+                              : isLow ? 'bg-amber-500'
+                                : 'bg-emerald-500',
+                        )}>
+                          {stockLabel}
+                          {stockUnit && <span className="text-[7px] font-semibold opacity-80 ml-0.5">{stockUnit}</span>}
+                        </div>
+                      </div>
+
+                      {/* Price */}
+                      <div className="text-right">
+                        <span className="text-sm font-black text-foreground">{fmtPKR(product.price)}</span>
+                        {product.auto_price_by_weight && product.price_per_kg && (
+                          <p className="text-[9px] text-orange-500 font-semibold leading-none mt-0.5">
+                            {fmtPKR(product.price_per_kg)}/kg
+                          </p>
                         )}
-                        {product.unit && (
-                          <span className="text-[9px] text-primary/70 font-bold shrink-0">{product.unit}</span>
-                        )}
-                        {(() => {
-                          const entries = product.metadata ? Object.entries(product.metadata).filter(([k, v]: any) => k !== 'tags' && v).map(([k, v]: any) => `${k.replace('_',' ')}: ${v}`) : [];
-                          const tags = product.metadata?.tags && Array.isArray(product.metadata.tags) ? product.metadata.tags : [];
-                          const str = [...entries, ...tags].join(' • ');
-                          if (!str) return null;
-                          return <span className="text-[9px] text-muted-foreground truncate capitalize">{str}</span>;
-                        })()}
+                      </div>
+
+                      {/* Add button */}
+                      <div className="flex justify-end">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); addProductToCart(product); }}
+                          className="w-7 h-7 rounded-full flex items-center justify-center transition-all bg-primary text-primary-foreground hover:scale-110 shadow-sm hover:shadow-md hover:shadow-primary/25"
+                        >
+                          <Plus size={14} />
+                        </button>
                       </div>
                     </div>
+                  );
+                })}
+
+                {/* Load more — inside the scroll area so it's always reachable */}
+                {hasMore && (
+                  <div className="flex items-center justify-center py-3 border-t border-border/20">
+                    <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); loadMore(); }}
+                      className="h-7 text-xs gap-1.5 font-semibold">
+                      <RefreshCw size={12} /> Load more ({prodTotal - prodShowing} remaining)
+                    </Button>
                   </div>
+                )}
+              </>
+            )}
+          </div>
 
-                  {/* Category */}
-                  <div className="flex justify-center">
-                    <span className="text-[10px] font-semibold text-muted-foreground bg-muted/60 px-2 py-0.5 rounded-md truncate max-w-[70px]">
-                      {product.category || 'General'}
-                    </span>
-                  </div>
-
-                  {/* Stock */}
-                  <div className="flex justify-center">
-                    <div className={cn(
-                      'w-12 h-8 rounded-lg flex flex-col items-center justify-center border',
-                      isOutOfStock ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-600 dark:text-red-400'
-                        : lowStock ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400'
-                          : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400'
-                    )}>
-                      <span className="text-[11px] font-black leading-none">{isOutOfStock ? 'OUT' : product.stock}</span>
-                      {!isOutOfStock && <span className="text-[7px] uppercase font-semibold opacity-60 leading-none mt-0.5">units</span>}
-                    </div>
-                  </div>
-
-                  {/* Price */}
-                  <div className="text-right pr-1">
-                    <span className="text-sm font-black text-foreground">{fmtPKR(product.price)}</span>
-                  </div>
-
-                  {/* Add button */}
-                  <div className="flex justify-end">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); if (!isOutOfStock) addProductToCart(product); }}
-                      disabled={isOutOfStock}
-                      className={cn(
-                        'w-7 h-7 rounded-full flex items-center justify-center transition-all',
-                        isOutOfStock
-                          ? 'bg-muted text-muted-foreground cursor-not-allowed'
-                          : 'bg-primary text-primary-foreground hover:scale-110 shadow-sm hover:shadow-md hover:shadow-primary/25'
-                      )}
-                    >
-                      <Plus size={14} />
-                    </button>
-                  </div>
-                </div>
-              );
-            }}
-            onItemSelect={(product) => {
-              if ((product.stock ?? 999) > 0) addProductToCart(product);
-              else addNotification("Out of Stock", "This item is currently unavailable.", "error");
-            }}
-          />
-
-          {visibleProducts.length === 0 && (
-            <div className="flex-1 flex flex-col items-center justify-center py-16 text-muted-foreground">
-              <Package size={40} className="opacity-10 mb-3" />
-              <p className="text-sm font-medium">No products found</p>
-              <p className="text-xs opacity-60 mt-1">Try adjusting your search or category</p>
-            </div>
-          )}
-
-          {/* Footer */}
-          <div className="px-4 py-2.5 border-t border-border/30 bg-muted/10 flex items-center justify-between shrink-0">
+          {/* Footer — count only, no duplicate load-more */}
+          <div className="px-4 py-2 border-t border-border/30 bg-muted/10 shrink-0">
             <span className="text-xs text-muted-foreground">
               Showing <strong className="text-foreground">{prodShowing}</strong> of <strong className="text-foreground">{prodTotal}</strong>
             </span>
-            {hasMore && (
-              <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); loadMore(); }}
-                className="h-7 text-xs gap-1.5 font-semibold">
-                <RefreshCw size={12} /> Load more
-              </Button>
-            )}
           </div>
         </div>
 
@@ -955,21 +1093,35 @@ export default function Sales() {
                   <div className="flex items-center justify-between gap-2">
                     {/* Qty control */}
                     <div className="flex items-center bg-muted/60 rounded-lg overflow-hidden border border-border/40">
-                      <button onClick={() => updateQty(item.id, String(item.quantity - 1))}
-                        className="w-6 h-6 flex items-center justify-center hover:bg-muted transition-colors">
-                        <Minus size={10} className="text-muted-foreground" />
-                      </button>
-                      <input
-                        type="text"
-                        value={item.quantity || ''}
-                        onChange={(e) => updateQty(item.id, e.target.value)}
-                        onFocus={(e) => e.target.select()}
-                        className="w-8 text-center text-xs font-bold bg-transparent outline-none"
-                      />
-                      <button onClick={() => updateQty(item.id, String(item.quantity + 1))}
-                        className="w-6 h-6 flex items-center justify-center hover:bg-muted transition-colors">
-                        <Plus size={10} className="text-muted-foreground" />
-                      </button>
+                      {(() => {
+                        const wb = isWeightBased(item);
+                        const step = item.unit_type === 'gram' ? 100 : item.unit_type === 'kg' ? 0.5 : 1;
+                        return (
+                          <>
+                            <button onClick={() => updateQty(item.id, String(+(item.quantity - step).toFixed(3)))}
+                              className="w-6 h-6 flex items-center justify-center hover:bg-muted transition-colors">
+                              <Minus size={10} className="text-muted-foreground" />
+                            </button>
+                            <input
+                              type={wb ? 'number' : 'text'}
+                              step={wb ? step : undefined}
+                              value={item.quantity || ''}
+                              onChange={(e) => updateQty(item.id, e.target.value)}
+                              onFocus={(e) => e.target.select()}
+                              className={cn('text-center text-xs font-bold bg-transparent outline-none', wb ? 'w-12' : 'w-8')}
+                            />
+                            {wb && (
+                              <span className="text-[9px] text-orange-500 font-bold -ml-1 mr-0.5">
+                                {item.unit_type === 'gram' ? 'g' : 'kg'}
+                              </span>
+                            )}
+                            <button onClick={() => updateQty(item.id, String(+(item.quantity + step).toFixed(3)))}
+                              className="w-6 h-6 flex items-center justify-center hover:bg-muted transition-colors">
+                              <Plus size={10} className="text-muted-foreground" />
+                            </button>
+                          </>
+                        );
+                      })()}
                     </div>
 
                     {/* Price input */}

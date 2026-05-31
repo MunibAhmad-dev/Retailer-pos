@@ -1,0 +1,151 @@
+const en = {
+  nav: {
+    dashboard: 'Dashboard',
+    inventory: 'Inventory',
+    crm: 'CRM',
+    reports: 'Reports',
+    settings: 'Settings',
+    customers: 'Customers',
+    vendors: 'Vendors',
+    loans: 'Loans',
+  },
+
+  auth: {
+    login: 'Login',
+    username: 'Username',
+    password: 'Password',
+    signIn: 'Sign In',
+    forgotPassword: 'Forgot Password?',
+    logout: 'Logout',
+  },
+
+  dashboard: {
+    title: 'Dashboard',
+    todayRevenue: "Today's Revenue",
+    monthlyRevenue: 'Monthly Revenue',
+    profit: 'Profit',
+    expenses: 'Expenses',
+    netProfit: 'Net Profit',
+    outstanding: 'Outstanding',
+    receivables: 'Receivables',
+    payables: 'Payables',
+    totalProducts: 'Total Products',
+    outOfStock: 'Out of Stock',
+    lowStock: 'Low Stock',
+    topProducts: 'Top Products',
+    recentSales: 'Recent Sales',
+    alerts: 'Alerts',
+    noAlerts: 'No Alerts',
+    allGood: 'All good! Everything is running smoothly.',
+  },
+
+  inventory: {
+    title: 'Inventory',
+    search: 'Search products...',
+    filter: 'Filter',
+    products: 'Products',
+    categories: 'Categories',
+    stock: 'Stock',
+    price: 'Price',
+    costPrice: 'Cost Price',
+    salePrice: 'Sale Price',
+    outOfStock: 'Out of Stock',
+    lowStock: 'Low Stock',
+    inStock: 'In Stock',
+  },
+
+  customers: {
+    title: 'Customers',
+    search: 'Search customers...',
+    balance: 'Balance',
+    lastPurchase: 'Last Purchase',
+    callCustomer: 'Call Customer',
+    whatsapp: 'WhatsApp',
+    sms: 'SMS',
+    sendReminder: 'Send Reminder',
+    purchaseHistory: 'Purchase History',
+  },
+
+  vendors: {
+    title: 'Vendors',
+    search: 'Search vendors...',
+    outstanding: 'Outstanding',
+    purchaseHistory: 'Purchase History',
+    paymentHistory: 'Payment History',
+  },
+
+  loans: {
+    title: 'Loans',
+    receivables: 'Receivables',
+    payables: 'Payables',
+    overdue: 'Overdue',
+    thisWeek: 'This Week',
+    thisMonth: 'This Month',
+  },
+
+  reports: {
+    title: 'Reports',
+    sales: 'Sales',
+    profit: 'Profit',
+    expenses: 'Expenses',
+    products: 'Products',
+    export: 'Export',
+    download: 'Download',
+    share: 'Share',
+  },
+
+  notifications: {
+    title: 'Notifications',
+    markAllRead: 'Mark All as Read',
+    noNotifications: 'No notifications yet',
+  },
+
+  settings: {
+    title: 'Settings',
+    profile: 'Profile',
+    business: 'Business',
+    theme: 'Theme',
+    language: 'Language',
+    security: 'Security',
+    notifications: 'Notifications',
+    biometric: 'Biometric',
+    pin: 'PIN',
+    logout: 'Logout',
+    darkMode: 'Dark Mode',
+    lightMode: 'Light Mode',
+    systemMode: 'System Default',
+    english: 'English',
+    urdu: 'Urdu',
+    backendUrl: 'Backend URL',
+    appVersion: 'App Version',
+    about: 'About',
+  },
+
+  messages: {
+    balanceReminder:
+      'Hello, you have an outstanding balance of {{amount}} PKR. Please make the payment at your earliest convenience. Thank you.',
+    paymentReminder:
+      'Hello, your payment of {{amount}} PKR is pending. Please contact us. Thank you.',
+    send: 'Send',
+    cancel: 'Cancel',
+    amount: 'Amount',
+    dueDate: 'Due Date',
+  },
+
+  common: {
+    loading: 'Loading...',
+    error: 'Something went wrong',
+    retry: 'Retry',
+    cancel: 'Cancel',
+    ok: 'OK',
+    save: 'Save',
+    back: 'Back',
+    search: 'Search',
+    filter: 'Filter',
+    noData: 'No data available',
+    refresh: 'Refresh',
+    seeAll: 'See All',
+  },
+} as const;
+
+export default en;

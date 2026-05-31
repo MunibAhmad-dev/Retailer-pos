@@ -1,0 +1,151 @@
+const ur = {
+  nav: {
+    dashboard: 'ڈیش بورڈ',
+    inventory: 'انوینٹری',
+    crm: 'رابطے',
+    reports: 'رپورٹس',
+    settings: 'ترتیبات',
+    customers: 'گاہک',
+    vendors: 'سپلائرز',
+    loans: 'قرضے',
+  },
+
+  auth: {
+    login: 'لاگ ان',
+    username: 'صارف نام',
+    password: 'پاس ورڈ',
+    signIn: 'داخل ہوں',
+    forgotPassword: 'پاس ورڈ بھول گئے؟',
+    logout: 'لاگ آؤٹ',
+  },
+
+  dashboard: {
+    title: 'ڈیش بورڈ',
+    todayRevenue: 'آج کی آمدن',
+    monthlyRevenue: 'ماہانہ آمدن',
+    profit: 'منافع',
+    expenses: 'اخراجات',
+    netProfit: 'خالص منافع',
+    outstanding: 'واجب الادا',
+    receivables: 'وصولیاں',
+    payables: 'ادائیگیاں',
+    totalProducts: 'کل مصنوعات',
+    outOfStock: 'ختم شدہ اسٹاک',
+    lowStock: 'کم اسٹاک',
+    topProducts: 'اعلی مصنوعات',
+    recentSales: 'حالیہ فروخت',
+    alerts: 'انتباہات',
+    noAlerts: 'کوئی انتباہ نہیں',
+    allGood: 'سب ٹھیک ہے! سب کچھ آسانی سے چل رہا ہے۔',
+  },
+
+  inventory: {
+    title: 'انوینٹری',
+    search: 'مصنوعات تلاش کریں...',
+    filter: 'فلٹر',
+    products: 'مصنوعات',
+    categories: 'زمرہ جات',
+    stock: 'اسٹاک',
+    price: 'قیمت',
+    costPrice: 'لاگت قیمت',
+    salePrice: 'فروخت قیمت',
+    outOfStock: 'ختم شدہ',
+    lowStock: 'کم اسٹاک',
+    inStock: 'دستیاب',
+  },
+
+  customers: {
+    title: 'گاہک',
+    search: 'گاہک تلاش کریں...',
+    balance: 'بقایا',
+    lastPurchase: 'آخری خریداری',
+    callCustomer: 'گاہک کو کال کریں',
+    whatsapp: 'واٹس ایپ',
+    sms: 'ایس ایم ایس',
+    sendReminder: 'یاددہانی بھیجیں',
+    purchaseHistory: 'خریداری کی تاریخ',
+  },
+
+  vendors: {
+    title: 'سپلائرز',
+    search: 'سپلائر تلاش کریں...',
+    outstanding: 'واجب الادا',
+    purchaseHistory: 'خریداری کی تاریخ',
+    paymentHistory: 'ادائیگی کی تاریخ',
+  },
+
+  loans: {
+    title: 'قرضے',
+    receivables: 'وصولیاں',
+    payables: 'ادائیگیاں',
+    overdue: 'میعاد گزشتہ',
+    thisWeek: 'اس ہفتے',
+    thisMonth: 'اس مہینے',
+  },
+
+  reports: {
+    title: 'رپورٹس',
+    sales: 'فروخت',
+    profit: 'منافع',
+    expenses: 'اخراجات',
+    products: 'مصنوعات',
+    export: 'برآمد',
+    download: 'ڈاؤن لوڈ',
+    share: 'شیئر',
+  },
+
+  notifications: {
+    title: 'اطلاعات',
+    markAllRead: 'سب پڑھا ہوا نشان زد کریں',
+    noNotifications: 'ابھی کوئی اطلاع نہیں',
+  },
+
+  settings: {
+    title: 'ترتیبات',
+    profile: 'پروفائل',
+    business: 'کاروبار',
+    theme: 'تھیم',
+    language: 'زبان',
+    security: 'سیکیورٹی',
+    notifications: 'اطلاعات',
+    biometric: 'بایومیٹرک',
+    pin: 'پن',
+    logout: 'لاگ آؤٹ',
+    darkMode: 'ڈارک موڈ',
+    lightMode: 'لائٹ موڈ',
+    systemMode: 'سسٹم ڈیفالٹ',
+    english: 'انگریزی',
+    urdu: 'اردو',
+    backendUrl: 'بیک اینڈ یو آر ایل',
+    appVersion: 'ایپ ورژن',
+    about: 'تعارف',
+  },
+
+  messages: {
+    balanceReminder:
+      'السلام علیکم، آپ کے ذمہ {{amount}} روپے بقایا ہیں۔ براہ کرم جلد ادائیگی کریں۔ شکریہ',
+    paymentReminder:
+      'السلام علیکم، آپ کی ادائیگی {{amount}} روپے زیر التواء ہے۔ براہ کرم رابطہ کریں۔ شکریہ',
+    send: 'بھیجیں',
+    cancel: 'منسوخ',
+    amount: 'رقم',
+    dueDate: 'مقررہ تاریخ',
+  },
+
+  common: {
+    loading: 'لوڈ ہو رہا ہے...',
+    error: 'کچھ غلط ہو گیا',
+    retry: 'دوبارہ کوشش کریں',
+    cancel: 'منسوخ',
+    ok: 'ٹھیک ہے',
+    save: 'محفوظ کریں',
+    back: 'واپس',
+    search: 'تلاش',
+    filter: 'فلٹر',
+    noData: 'کوئی ڈیٹا دستیاب نہیں',
+    refresh: 'تازہ کریں',
+    seeAll: 'سب دیکھیں',
+  },
+} as const;
+
+export default ur;

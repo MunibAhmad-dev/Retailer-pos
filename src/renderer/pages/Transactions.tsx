@@ -300,8 +300,16 @@ export default function Transactions() {
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   @page{size:A4;margin:0}
-  html,body{width:210mm;background:#fff;color:#1a1a1a;font-family:Arial,Helvetica,sans-serif;font-size:10pt}
-  .page{width:210mm;min-height:297mm;padding:10mm 12mm 8mm;display:flex;flex-direction:column}
+  html,body{background:#fff;color:#1a1a1a;font-family:Arial,Helvetica,sans-serif;font-size:10pt}
+  .page{width:210mm;min-height:297mm;padding:10mm 12mm 8mm;display:flex;flex-direction:column;background:#fff}
+  @media screen {
+    html,body{background:#e8e8e8;display:flex;flex-direction:column;align-items:center;padding:24px 0 40px;min-height:100vh}
+    .page{box-shadow:0 4px 24px rgba(0,0,0,0.18);border-radius:2px}
+  }
+  @media print {
+    html,body{background:#fff;display:block;padding:0}
+    .page{box-shadow:none}
+  }
   .hdr{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:7px;border-bottom:3px solid #cc0000;margin-bottom:7px}
   .brand{display:flex;align-items:center;gap:9px}.logo{height:48px;object-fit:contain}
   .store-name{font-size:18pt;font-weight:900;color:#cc0000;line-height:1.1}

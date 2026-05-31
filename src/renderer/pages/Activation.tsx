@@ -14,7 +14,7 @@ interface ActivationProps {
 
 const DEFAULT_BACKEND_URL: string =
   (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_CLOUD_BACKEND_URL) ||
-  'http://localhost:4000';
+  'https://osatechcloud.cloud';
 
 /* ── theme tokens (mirrors Setup.tsx) ───────────────────────────────── */
 const dark = {
@@ -80,9 +80,11 @@ export default function Activation({ onActivated }: ActivationProps) {
   // Online waiting
   const [regApiKey, setRegApiKey]       = useState('');
   const [pollCount, setPollCount]       = useState(0);
+  const [pollFails, setPollFails]       = useState(0);
   const [lastChecked, setLastChecked]   = useState<Date | null>(null);
   const [pollError, setPollError]       = useState('');
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef     = useRef<ReturnType<typeof setInterval> | null>(null);
+  const firstTimer  = useRef<ReturnType<typeof setTimeout>  | null>(null);
 
   const { addNotification } = useNotifications();
 
@@ -104,7 +106,11 @@ export default function Activation({ onActivated }: ActivationProps) {
       setMobile(s.owner_mobile || s.store_phone || '');
       setEmail(s.owner_email || '');
       setAddress(s.store_address || '');
-      if (s.cloud_backend_url) setBackendUrl(s.cloud_backend_url);
+      // Always use the baked-in production URL — never let a stale DB value override it
+      setBackendUrl(DEFAULT_BACKEND_URL);
+      if (s.cloud_backend_url !== DEFAULT_BACKEND_URL) {
+        window.api.updateSettings({ cloud_backend_url: DEFAULT_BACKEND_URL } as any).catch(() => {});
+      }
       // If already registered + pending, jump straight to waiting
       if (s.cloud_backend_token && s.approval_status === 'pending' && (s.owner_mobile || s.store_phone)) {
         setRegApiKey(s.cloud_backend_token);
@@ -125,27 +131,47 @@ export default function Activation({ onActivated }: ActivationProps) {
         const result = await checkApprovalStatus(mobile, backendUrl);
         setLastChecked(new Date());
         setPollCount(c => c + 1);
+        setPollFails(0);
         setPollError('');
 
         if (result.status === 'approved') {
+          if (pollRef.current)    clearInterval(pollRef.current);
+          if (firstTimer.current) clearTimeout(firstTimer.current);
+
+          // Save to DB first — Ctrl+R always works after this
           await window.api.updateSettings({
-            approval_status: 'approved',
+            approval_status:     'approved',
             cloud_backend_token: regApiKey || '',
-            cloud_connected: 1,
+            cloud_connected:     1,
           } as any);
-          if (pollRef.current) clearInterval(pollRef.current);
+
           setPhase('approved');
-          setTimeout(() => onActivated(), 2000);
+          setTimeout(() => onActivated(), 1200);
         }
-      } catch {
+      } catch (err: any) {
         setPollCount(c => c + 1);
-        setPollError('Could not reach server — will retry automatically.');
+        setPollFails(f => {
+          const next = f + 1;
+          if (next >= 2) {
+            const status = err?.response?.status;
+            const msg = status
+              ? `Server error ${status} — ${err?.response?.data?.error || 'check VPS'}`
+              : `Cannot reach server — check internet connection`;
+            setPollError(`${msg} — retrying automatically.`);
+          }
+          return next;
+        });
+        console.error('[Activation] Poll failed:', err?.message, err?.response?.data);
       }
     };
 
-    poll();
-    pollRef.current = setInterval(poll, 5000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    // Delay first poll 2 s so the connection from registration can settle
+    firstTimer.current = setTimeout(poll, 2000);
+    pollRef.current    = setInterval(poll, 3000);
+    return () => {
+      if (firstTimer.current) clearTimeout(firstTimer.current);
+      if (pollRef.current)    clearInterval(pollRef.current);
+    };
   }, [phase, mobile, regApiKey, backendUrl]);
 
   const T = isDark ? dark : light;

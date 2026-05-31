@@ -47,14 +47,27 @@ export async function refreshToken(refreshTokenValue: string) {
 // Returns { success, api_key, approval_status } on success.
 export async function submitRegistration(
   payload: RegisterBusinessPayload,
-  backendUrl: string
+  backendUrl: string,
+  _retries = 3,
 ): Promise<{ success: boolean; instance_id?: string; api_key?: string; approval_status?: string; message?: string }> {
-  const res = await axios.post(
-    `${backendUrl.replace(/\/$/, '')}/api/register-business`,
-    payload,
-    { timeout: 15000, headers: { 'Content-Type': 'application/json' } }
-  );
-  return res.data;
+  const url = `${backendUrl.replace(/\/$/, '')}/api/register-business`;
+  let lastErr: any;
+  for (let attempt = 1; attempt <= _retries; attempt++) {
+    try {
+      const res = await axios.post(url, payload, {
+        timeout: 15000,
+        headers: { 'Content-Type': 'application/json' },
+      });
+      return res.data;
+    } catch (err: any) {
+      lastErr = err;
+      // Don't retry on 4xx client errors (bad request, auth etc.)
+      if (err?.response?.status && err.response.status < 500) throw err;
+      // Wait before retrying (2 s, 4 s)
+      if (attempt < _retries) await new Promise(r => setTimeout(r, attempt * 2000));
+    }
+  }
+  throw lastErr;
 }
 
 // Polls the cloud backend for the approval status.

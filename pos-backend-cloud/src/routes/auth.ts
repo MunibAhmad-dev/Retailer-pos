@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
-import db from '../db';
+import prisma from '../db';
 import { requireAdmin, signAdminToken } from '../middleware/auth';
-import { AdminUser } from '../types';
+import '../types'; // loads Express Request augmentation (req.admin, req.instance)
 
 const router = Router();
 
@@ -10,21 +10,17 @@ const router = Router();
  * POST /api/auth/setup
  * Creates the very first admin account. Protected by the ADMIN_SETUP_KEY
  * environment variable so it can't be called again once an admin exists.
- *
- * Body: { username, password }
- * Header: x-setup-key: <ADMIN_SETUP_KEY>
  */
 router.post('/setup', async (req: Request, res: Response) => {
-  const setupKey = req.headers['x-setup-key'];
-  const expectedKey = process.env.ADMIN_SETUP_KEY || 'setup_osatech_2025';
+  const setupKey  = req.headers['x-setup-key'];
+  const expected  = process.env.ADMIN_SETUP_KEY || 'setup_osatech_2025';
 
-  if (setupKey !== expectedKey) {
+  if (setupKey !== expected) {
     res.status(403).json({ success: false, error: 'Invalid setup key' });
     return;
   }
 
-  // Only allow if no admin exists yet
-  const existing = db.prepare('SELECT id FROM admin_users LIMIT 1').get();
+  const existing = await prisma.adminUser.findFirst();
   if (existing) {
     res.status(409).json({ success: false, error: 'Admin already exists. Use /login instead.' });
     return;
@@ -40,19 +36,17 @@ router.post('/setup', async (req: Request, res: Response) => {
     return;
   }
 
-  const hash = await bcrypt.hash(password, 12);
-  const result = db
-    .prepare("INSERT INTO admin_users (username, password_hash, role) VALUES (?, ?, 'super_admin')")
-    .run(username.trim().toLowerCase(), hash);
+  const hash  = await bcrypt.hash(password, 12);
+  const admin = await prisma.adminUser.create({
+    data: { username: username.trim().toLowerCase(), password_hash: hash, role: 'super_admin' },
+  });
 
-  const token = signAdminToken({ id: Number(result.lastInsertRowid), username, role: 'super_admin' });
+  const token = signAdminToken({ id: admin.id, username: admin.username, role: admin.role });
   res.status(201).json({ success: true, message: 'Admin created', token });
 });
 
 /**
  * POST /api/auth/login
- * Body: { username, password }
- * Returns: { token, expiresIn, admin: { id, username, role } }
  */
 router.post('/login', async (req: Request, res: Response) => {
   const { username, password } = req.body as { username?: string; password?: string };
@@ -61,9 +55,9 @@ router.post('/login', async (req: Request, res: Response) => {
     return;
   }
 
-  const admin = db
-    .prepare('SELECT * FROM admin_users WHERE username = ?')
-    .get(username.trim().toLowerCase()) as AdminUser | undefined;
+  const admin = await prisma.adminUser.findUnique({
+    where: { username: username.trim().toLowerCase() },
+  });
 
   if (!admin) {
     res.status(401).json({ success: false, error: 'Invalid credentials' });
@@ -76,8 +70,8 @@ router.post('/login', async (req: Request, res: Response) => {
     return;
   }
 
-  const payload = { id: admin.id, username: admin.username, role: admin.role };
-  const token = signAdminToken(payload);
+  const payload   = { id: admin.id, username: admin.username, role: admin.role };
+  const token     = signAdminToken(payload);
   const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
 
   res.json({ success: true, token, expiresIn, admin: payload });
@@ -85,7 +79,6 @@ router.post('/login', async (req: Request, res: Response) => {
 
 /**
  * GET /api/auth/me
- * Returns the current admin's info. Requires JWT.
  */
 router.get('/me', requireAdmin, (req: Request, res: Response) => {
   res.json({ success: true, admin: req.admin });

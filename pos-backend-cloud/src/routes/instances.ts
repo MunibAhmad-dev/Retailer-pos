@@ -1,44 +1,21 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import db from '../db';
+import prisma from '../db';
 import { requireInstance } from '../middleware/instanceAuth';
-import { Instance } from '../types';
+import { signMobileToken } from '../middleware/auth';
+import '../types';
 
 const router = Router();
 
 /**
  * POST /api/instances/register
  *
- * Called by the POS app on first launch (or any time it doesn't have a stored api_key).
- * Uses `owner_mobile` as the global unique identifier for the instance.
- *
- * If the instance already exists → returns the existing api_key (idempotent).
- * If new → creates with status 'pending' and returns a fresh api_key.
- *
- * Body:
- *   instance_id   - mobile number (required, used as unique key)
- *   store_name    - shop name
- *   owner_name    - owner's full name
- *   owner_mobile  - mobile number (same as instance_id)
- *   owner_email?  - optional email
- *   store_address?
- *   business_name?
- *   license_key?  - if the user already has a license key, validate it here
- *   app_version?
+ * Idempotent — returns existing api_key if mobile already registered.
  */
-router.post('/register', (req: Request, res: Response) => {
+router.post('/register', async (req: Request, res: Response) => {
   const {
-    instance_id,
-    store_name,
-    owner_name,
-    owner_mobile,
-    owner_email,
-    store_address,
-    business_name,
-    license_key,
-    fingerprint,
-    app_version,
-    branch_name,
+    instance_id, store_name, owner_name, owner_mobile, owner_email,
+    store_address, business_name, license_key, fingerprint, app_version, branch_name,
   } = req.body as Record<string, string>;
 
   if (!instance_id || !owner_mobile) {
@@ -46,89 +23,73 @@ router.post('/register', (req: Request, res: Response) => {
     return;
   }
 
-  // Check if already registered
-  const existing = db
-    .prepare('SELECT * FROM instances WHERE instance_id = ?')
-    .get(instance_id) as Instance | undefined;
+  const existing = await prisma.instance.findUnique({ where: { instance_id } });
 
   if (existing) {
-    // Update store metadata on re-registration (shop may have renamed, etc.)
-    db.prepare(`
-      UPDATE instances SET
-        store_name         = COALESCE(NULLIF(?, ''), store_name),
-        owner_name         = COALESCE(NULLIF(?, ''), owner_name),
-        owner_email        = COALESCE(NULLIF(?, ''), owner_email),
-        store_address      = COALESCE(NULLIF(?, ''), store_address),
-        business_name      = COALESCE(NULLIF(?, ''), business_name),
-        device_fingerprint = COALESCE(NULLIF(?, ''), device_fingerprint),
-        app_version        = COALESCE(NULLIF(?, ''), app_version),
-        branch_name        = COALESCE(NULLIF(?, ''), branch_name),
-        last_seen          = datetime('now'),
-        updated_at         = datetime('now')
-      WHERE instance_id = ?
-    `).run(
-      store_name    || '',
-      owner_name    || '',
-      owner_email   || '',
-      store_address || '',
-      business_name || '',
-      fingerprint   || '',
-      app_version   || '',
-      branch_name   || '',
-      instance_id,
-    );
+    // Update metadata — only overwrite if the incoming value is non-empty
+    await prisma.instance.update({
+      where: { instance_id },
+      data: {
+        store_name:         store_name    || undefined,
+        owner_name:         owner_name    || undefined,
+        owner_email:        owner_email   || undefined,
+        store_address:      store_address || undefined,
+        business_name:      business_name || undefined,
+        device_fingerprint: fingerprint   || undefined,
+        app_version:        app_version   || undefined,
+        branch_name:        branch_name   || undefined,
+        last_seen:          new Date(),
+      },
+    });
 
     return res.json({
       success: true,
-      api_key: existing.api_key,
+      api_key:         existing.api_key,
       approval_status: existing.approval_status,
-      license_plan: existing.license_plan,
-      license_expiry: existing.license_expiry,
+      license_plan:    existing.license_plan,
+      license_expiry:  existing.license_expiry,
       message: 'Instance already registered. api_key returned.',
     });
   }
 
-  // New instance
+  // New instance — resolve license if provided
   const api_key = uuidv4();
-
-  // Resolve license info if a key was provided
-  let license_plan = 'none';
+  let license_plan   = 'none';
   let license_expiry: string | null = null;
+
   if (license_key) {
-    const lic = db
-      .prepare('SELECT * FROM license_keys WHERE license_key = ? AND is_active = 1')
-      .get(license_key) as any;
+    const lic = await prisma.licenseKey.findFirst({
+      where: { license_key, is_active: true },
+    });
     if (lic) {
-      license_plan = lic.plan;
-      license_expiry = lic.expires_at;
-      // Assign license to this instance
-      db.prepare('UPDATE license_keys SET instance_id = ? WHERE license_key = ?')
-        .run(instance_id, license_key);
+      license_plan   = lic.plan;
+      license_expiry = lic.expires_at ?? null;
+      await prisma.licenseKey.update({
+        where: { license_key },
+        data:  { instance_id },
+      });
     }
   }
 
-  db.prepare(`
-    INSERT INTO instances (
-      instance_id, store_name, owner_name, owner_mobile, owner_email,
-      store_address, business_name, api_key, license_key,
-      license_plan, license_expiry, device_fingerprint, app_version, branch_name, approval_status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-  `).run(
-    instance_id,
-    store_name    || '',
-    owner_name    || '',
-    owner_mobile,
-    owner_email   || '',
-    store_address || '',
-    business_name || '',
-    api_key,
-    license_key   || '',
-    license_plan,
-    license_expiry,
-    fingerprint   || '',
-    app_version   || '',
-    branch_name   || 'Main Branch',
-  );
+  await prisma.instance.create({
+    data: {
+      instance_id,
+      store_name:         store_name    || '',
+      owner_name:         owner_name    || '',
+      owner_mobile,
+      owner_email:        owner_email   || '',
+      store_address:      store_address || '',
+      business_name:      business_name || '',
+      api_key,
+      license_key:        license_key   || '',
+      license_plan,
+      license_expiry,
+      device_fingerprint: fingerprint   || '',
+      app_version:        app_version   || '',
+      branch_name:        branch_name   || 'Main Branch',
+      approval_status:    'pending',
+    },
+  });
 
   res.status(201).json({
     success: true,
@@ -142,9 +103,6 @@ router.post('/register', (req: Request, res: Response) => {
 
 /**
  * GET /api/instances/status   [instanceAuth]
- *
- * Polled by the POS every few minutes to get the latest cloud status.
- * Returns approval_status, license info, and any block reason.
  */
 router.get('/status', requireInstance, (req: Request, res: Response) => {
   const inst = req.instance!;
@@ -163,117 +121,89 @@ router.get('/status', requireInstance, (req: Request, res: Response) => {
 
 /**
  * POST /api/instances/heartbeat   [instanceAuth]
- *
- * Sent by POS periodically (every 5 min) to update last_seen and aggregate stats.
- * Also returns the latest approval/license status so the POS can react.
- *
- * Body: { store_name?, total_sales?, total_revenue?, total_customers?, total_products?, app_version? }
  */
-router.post('/heartbeat', requireInstance, (req: Request, res: Response) => {
+router.post('/heartbeat', requireInstance, async (req: Request, res: Response) => {
   const inst = req.instance!;
-  const {
-    store_name,
-    total_sales,
-    total_revenue,
-    total_customers,
-    total_products,
-    app_version,
-  } = req.body as Record<string, any>;
+  const { store_name, total_sales, total_revenue, total_customers, total_products, app_version } = req.body as Record<string, any>;
 
-  db.prepare(`
-    UPDATE instances SET
-      last_seen       = datetime('now'),
-      store_name      = COALESCE(NULLIF(?, ''), store_name),
-      total_sales     = COALESCE(?, total_sales),
-      total_revenue   = COALESCE(?, total_revenue),
-      total_customers = COALESCE(?, total_customers),
-      total_products  = COALESCE(?, total_products),
-      app_version     = COALESCE(NULLIF(?, ''), app_version),
-      updated_at      = datetime('now')
-    WHERE instance_id = ?
-  `).run(
-    store_name || '',
-    total_sales ?? null,
-    total_revenue ?? null,
-    total_customers ?? null,
-    total_products ?? null,
-    app_version || '',
-    inst.instance_id,
-  );
+  await prisma.instance.update({
+    where: { instance_id: inst.instance_id },
+    data: {
+      last_seen:       new Date(),
+      store_name:      store_name    || undefined,
+      total_sales:     total_sales   != null ? Number(total_sales)   : undefined,
+      total_revenue:   total_revenue != null ? Number(total_revenue) : undefined,
+      total_customers: total_customers != null ? Number(total_customers) : undefined,
+      total_products:  total_products  != null ? Number(total_products)  : undefined,
+      app_version:     app_version   || undefined,
+    },
+  });
 
-  // Return latest status so POS can update itself
-  const updated = db
-    .prepare('SELECT approval_status, license_plan, license_expiry, block_reason FROM instances WHERE instance_id = ?')
-    .get(inst.instance_id) as any;
+  const updated = await prisma.instance.findUnique({
+    where:  { instance_id: inst.instance_id },
+    select: { approval_status: true, license_plan: true, license_expiry: true, block_reason: true },
+  });
 
   res.json({
     success: true,
-    approval_status: updated.approval_status,
-    license_plan: updated.license_plan,
-    license_expiry: updated.license_expiry,
-    message: updated.approval_status === 'blocked'
-      ? (updated.block_reason || 'Account blocked')
-      : null,
+    approval_status: updated?.approval_status,
+    license_plan:    updated?.license_plan,
+    license_expiry:  updated?.license_expiry,
+    message: updated?.approval_status === 'blocked' ? (updated.block_reason || 'Account blocked') : null,
   });
 });
 
 /**
  * GET /api/instances/notifications   [instanceAuth]
  *
- * Returns unread notifications for this instance (broadcast or targeted).
- * Automatically marks returned notifications as read so they are delivered once only.
+ * Returns unread notifications and marks them read in one transaction.
  */
-router.get('/notifications', requireInstance, (req: Request, res: Response) => {
+router.get('/notifications', requireInstance, async (req: Request, res: Response) => {
   const instanceId = req.instance!.instance_id;
 
-  const notifications = db.prepare(`
-    SELECT n.id, n.title, n.body, n.sent_at
-    FROM notifications n
-    WHERE n.is_active = 1
-      AND (n.target_instance_id IS NULL OR n.target_instance_id = ?)
-      AND NOT EXISTS (
-        SELECT 1 FROM notification_reads r
-        WHERE r.notification_id = n.id AND r.instance_id = ?
-      )
-    ORDER BY n.sent_at DESC
-    LIMIT 20
-  `).all(instanceId, instanceId) as any[];
+  // Find unread active notifications for this instance
+  const notifications = await prisma.notification.findMany({
+    where: {
+      is_active: true,
+      OR: [{ target_instance_id: null }, { target_instance_id: instanceId }],
+      notification_reads: { none: { instance_id: instanceId } },
+    },
+    orderBy: { sent_at: 'desc' },
+    take:    20,
+    select:  { id: true, title: true, body: true, sent_at: true },
+  });
 
-  // Mark all returned notifications as read for this instance
+  // Mark all as read
   if (notifications.length > 0) {
-    const insertRead = db.prepare(
-      'INSERT OR IGNORE INTO notification_reads (notification_id, instance_id) VALUES (?, ?)'
-    );
-    const markAll = db.transaction((notifs: any[]) => {
-      for (const n of notifs) insertRead.run(n.id, instanceId);
+    await prisma.notificationRead.createMany({
+      data:           notifications.map(n => ({ notification_id: n.id, instance_id: instanceId })),
+      skipDuplicates: true,
     });
-    markAll(notifications);
   }
 
   res.json({ success: true, data: notifications });
 });
 
 /**
- * GET /api/instances/export
- * Self-export — returns ALL synced data for THIS instance.
- * Authenticated with the instance's own Bearer api_key.
- * The response is POS-compatible and can be fed to window.api.importData().
+ * GET /api/instances/export   [instanceAuth]
+ *
+ * Returns all synced data for this instance in POS-compatible format.
  */
-router.get('/export', requireInstance, (req: Request, res: Response) => {
+router.get('/export', requireInstance, async (req: Request, res: Response) => {
   const instanceId = req.instance!.instance_id;
 
-  const rawEvents = db
-    .prepare('SELECT * FROM sync_events WHERE instance_id = ? ORDER BY id ASC')
-    .all(instanceId) as any[];
+  const rawEvents = await prisma.syncEvent.findMany({
+    where:   { instance_id: instanceId },
+    orderBy: { id: 'asc' },
+  });
 
-  // Build a deduplicated entity map (latest state wins, deletes remove the entry)
+  // Deduplicate — latest state wins, deletes remove the entry
   const entityMap: Record<string, Map<string, any>> = {};
   for (const event of rawEvents) {
-    const type = event.entity_type as string;
+    const type = event.entity_type;
     if (!entityMap[type]) entityMap[type] = new Map();
     let payload: any = null;
-    try { payload = typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload; }
-    catch { continue; }
+    try { payload = JSON.parse(event.payload); } catch { continue; }
     if (!payload) continue;
     const key = String(payload?.id ?? payload?.barcode ?? event.id);
     if (event.operation === 'delete') entityMap[type].delete(key);
@@ -285,10 +215,9 @@ router.get('/export', requireInstance, (req: Request, res: Response) => {
     structured[type] = Array.from(items.values());
   }
 
-  // Fallback: if no sale events were synced, pull from instance_sales flat table
-  const fallbackSales = structured.sales?.length
-    ? []
-    : db.prepare('SELECT * FROM instance_sales WHERE instance_id = ? ORDER BY date_created ASC').all(instanceId);
+  // Fallback to instance_sales if no sale events
+  const fallbackSales = structured.sales?.length ? [] :
+    await prisma.instanceSale.findMany({ where: { instance_id: instanceId }, orderBy: { date_created: 'asc' } });
 
   res.json({
     exported_at:       new Date().toISOString(),
@@ -310,6 +239,76 @@ router.get('/export', requireInstance, (req: Request, res: Response) => {
     customer_payments: structured.customer_payments || [],
     raw_events_count:  rawEvents.length,
   });
+});
+
+// ─── Mobile Token Exchange ────────────────────────────────────────────────────
+/**
+ * POST /api/instances/mobile-token   [instanceAuth]
+ *
+ * Called by the POS app (or from the mobile app's "Sign in with store" flow).
+ * Returns a long-lived JWT scoped to this instance for mobile app access.
+ *
+ * Requirements:
+ *  - Instance must be approved
+ *  - Admin must have enabled mobile_access for this instance
+ *
+ * The POS app calls this after the admin enables mobile access, saves the token
+ * to local settings, and shows it to the store owner in the Settings screen.
+ *
+ * The mobile app can then use this token directly as a "sign in with store" credential.
+ */
+router.post('/mobile-token', requireInstance, async (req: Request, res: Response) => {
+  const inst = req.instance!;
+
+  if (inst.approval_status !== 'approved') {
+    res.status(403).json({ success: false, error: 'Instance not yet approved' });
+    return;
+  }
+
+  // Fetch latest mobile_access flag from DB
+  const row = await prisma.instance.findUnique({
+    where: { instance_id: inst.instance_id },
+    select: { mobile_access: true, store_name: true, owner_mobile: true },
+  });
+
+  if (!row?.mobile_access) {
+    res.status(403).json({
+      success: false,
+      error: 'Mobile access not enabled for this store. Ask your admin to enable it.',
+    });
+    return;
+  }
+
+  const token = signMobileToken({
+    instance_id:  inst.instance_id,
+    store_name:   row.store_name   || inst.instance_id,
+    owner_mobile: row.owner_mobile || '',
+    scope:        'mobile',
+  });
+
+  res.json({
+    success: true,
+    mobile_token: token,
+    instance_id:  inst.instance_id,
+    store_name:   row.store_name,
+    // Tell the mobile app what to display on the login screen
+    login_hint:   `Sign in as: ${row.store_name || inst.instance_id}`,
+  });
+});
+
+/**
+ * GET /api/instances/mobile-status   [instanceAuth]
+ *
+ * Lightweight endpoint the POS app polls to check if mobile access was
+ * enabled/disabled since the last check.
+ */
+router.get('/mobile-status', requireInstance, async (req: Request, res: Response) => {
+  const inst = req.instance!;
+  const row = await prisma.instance.findUnique({
+    where:  { instance_id: inst.instance_id },
+    select: { mobile_access: true },
+  });
+  res.json({ success: true, mobile_access: !!row?.mobile_access });
 });
 
 export default router;

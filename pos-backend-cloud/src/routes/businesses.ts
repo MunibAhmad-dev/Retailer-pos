@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import db from '../db';
+import prisma from '../db';
 
 const router = Router();
 
@@ -9,10 +9,9 @@ const router = Router();
  *
  * Called from the POS Setup page when the user chooses "Online Verify".
  * Creates an instance with approval_status = 'pending' and returns the api_key.
- * Uses mobile number as instance_id (same convention as /api/instances/register).
- * Idempotent — returns existing api_key if already registered.
+ * Idempotent — returns existing api_key if already registered (same mobile + branch).
  */
-router.post('/register-business', (req: Request, res: Response) => {
+router.post('/register-business', async (req: Request, res: Response) => {
   const { businessName, ownerName, mobile, email, address, fingerprint, branchName } = req.body as Record<string, string>;
 
   if (!mobile) {
@@ -23,15 +22,18 @@ router.post('/register-business', (req: Request, res: Response) => {
   const branch = (branchName || 'Main Branch').trim();
 
   try {
-    // Check if same mobile + branch already registered (idempotent per branch)
-    const existing = db
-      .prepare('SELECT * FROM instances WHERE owner_mobile = ? AND branch_name = ?')
-      .get(mobile.trim(), branch) as any;
+    // Idempotent — same mobile + branch returns the existing record
+    const existing = await prisma.instance.findFirst({
+      where: { owner_mobile: mobile.trim(), branch_name: branch },
+    });
 
     if (existing) {
+      // Update fingerprint if it changed
       if (fingerprint && fingerprint !== existing.device_fingerprint) {
-        db.prepare("UPDATE instances SET device_fingerprint = ?, updated_at = datetime('now') WHERE instance_id = ?")
-          .run(fingerprint.trim(), existing.instance_id);
+        await prisma.instance.update({
+          where: { instance_id: existing.instance_id },
+          data: { device_fingerprint: fingerprint.trim() },
+        });
       }
       res.json({
         success: true,
@@ -43,31 +45,29 @@ router.post('/register-business', (req: Request, res: Response) => {
       return;
     }
 
-    // New branch — generate a fresh UUID so multiple branches per mobile are possible
+    // New branch — each branch gets its own UUID
     const instance_id = uuidv4();
     const api_key     = uuidv4();
 
-    db.prepare(`
-      INSERT INTO instances
-        (instance_id, api_key, owner_mobile, business_name, owner_name,
-         owner_email, store_address, store_name, device_fingerprint, branch_name, approval_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-    `).run(
-      instance_id,
-      api_key,
-      mobile.trim(),
-      businessName || '',
-      ownerName    || '',
-      email        || '',
-      address      || '',
-      businessName || '',
-      fingerprint  || '',
-      branch,
-    );
+    await prisma.instance.create({
+      data: {
+        instance_id,
+        api_key,
+        owner_mobile:       mobile.trim(),
+        business_name:      businessName   || '',
+        owner_name:         ownerName      || '',
+        owner_email:        email          || '',
+        store_address:      address        || '',
+        store_name:         businessName   || '',
+        device_fingerprint: fingerprint    || '',
+        branch_name:        branch,
+        approval_status:    'pending',
+      },
+    });
 
     res.status(201).json({
       success: true,
-      instance_id,   // ← UUID returned so POS can poll by it
+      instance_id,
       api_key,
       approval_status: 'pending',
       message: 'Registration received. Awaiting admin approval.',
@@ -78,18 +78,11 @@ router.post('/register-business', (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/approval-status?mobile=xxx   (PUBLIC — no auth)
+ * GET /api/approval-status?instance_id=xxx  (PUBLIC — no auth)
  *
- * Polled by the POS Setup "waiting" screen every 5 seconds.
- * Returns { success, status } where status is:
- *   'pending'        — registered, not yet approved
- *   'approved'       — admin approved
- *   'blocked'        — admin blocked
- *   'not_registered' — no record found (safe to keep polling)
+ * Polled by the POS Setup screen every 5 seconds.
  */
-router.get('/approval-status', (req: Request, res: Response) => {
-  // Prefer instance_id (UUID) — returned by register-business for new flow
-  // Fall back to mobile for backward compat with older POS versions
+router.get('/approval-status', async (req: Request, res: Response) => {
   const instanceId = ((req.query.instance_id as string) || '').trim();
   const mobile     = ((req.query.mobile      as string) || '').trim();
 
@@ -99,16 +92,19 @@ router.get('/approval-status', (req: Request, res: Response) => {
   }
 
   try {
-    let row: any;
+    let row: { approval_status: string; license_key: string; block_reason: string } | null = null;
+
     if (instanceId) {
-      row = db.prepare(
-        'SELECT approval_status, license_key, block_reason FROM instances WHERE instance_id = ?'
-      ).get(instanceId);
+      row = await prisma.instance.findUnique({
+        where: { instance_id: instanceId },
+        select: { approval_status: true, license_key: true, block_reason: true },
+      });
     } else {
-      // Mobile-based lookup — returns most recently registered instance for that mobile
-      row = db.prepare(
-        'SELECT approval_status, license_key, block_reason FROM instances WHERE owner_mobile = ? ORDER BY created_at DESC LIMIT 1'
-      ).get(mobile);
+      row = await prisma.instance.findFirst({
+        where: { owner_mobile: mobile },
+        orderBy: { created_at: 'desc' },
+        select: { approval_status: true, license_key: true, block_reason: true },
+      });
     }
 
     if (!row) {
@@ -118,7 +114,7 @@ router.get('/approval-status', (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      status: row.approval_status,
+      status:      row.approval_status,
       licenseKey:  row.license_key  || undefined,
       blockReason: row.block_reason || undefined,
     });

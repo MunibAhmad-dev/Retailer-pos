@@ -2,11 +2,11 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Clock, CheckCircle2, XCircle, RefreshCw, Phone,
-  Store, Wifi, Loader2, AlertCircle, User, Edit2, Check,
+  Store, Wifi, Loader2, AlertCircle, User,
 } from 'lucide-react';
 import { checkApprovalStatus } from '../services/api/authApi';
 
-const FALLBACK_BACKEND_URL = 'http://localhost:4000';
+const FALLBACK_BACKEND_URL = 'https://osatechcloud.cloud';
 
 interface PendingApprovalProps {
   onApproved: () => void;
@@ -19,7 +19,7 @@ const PARTICLES = Array.from({ length: 22 }, (_, i) => ({
   delay: (i * 0.28) % 5, dur: 4 + ((i * 0.47) % 3),
 }));
 
-const POLL_INTERVAL_MS = 30000;
+const POLL_INTERVAL_MS = 5000; // poll every 5 s — was 30 s which made approval feel broken
 
 export default function PendingApproval({ onApproved, onRejected }: PendingApprovalProps) {
   const [isDark] = useState(() => document.documentElement.classList.contains('dark'));
@@ -29,8 +29,6 @@ export default function PendingApproval({ onApproved, onRejected }: PendingAppro
   const [checking, setChecking] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [countdown, setCountdown] = useState(POLL_INTERVAL_MS / 1000);
-  const [editingUrl, setEditingUrl] = useState(false);
-  const [urlInput, setUrlInput] = useState('');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const cdRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const settingsRef = useRef<any>(null);
@@ -39,36 +37,21 @@ export default function PendingApproval({ onApproved, onRejected }: PendingAppro
     window.api.getSettings().then((res: any) => {
       if (res?.success && res.data) {
         const s = res.data;
-        // Fix stale/empty backend URL
-        if (!s.cloud_backend_url || s.cloud_backend_url === 'http://localhost:5000') {
-          s.cloud_backend_url = FALLBACK_BACKEND_URL;
-          window.api.updateSettings({ cloud_backend_url: FALLBACK_BACKEND_URL } as any);
-        }
+        // Always use the baked-in production URL — overwrite any stale DB value
+        s.cloud_backend_url = FALLBACK_BACKEND_URL;
+        window.api.updateSettings({ cloud_backend_url: FALLBACK_BACKEND_URL } as any);
         setSettings(s);
-        setUrlInput(s.cloud_backend_url);
         settingsRef.current = s;
       }
     });
   }, []);
 
-  const saveUrl = async () => {
-    const url = urlInput.trim();
-    if (!url) return;
-    const updated = { ...settingsRef.current, cloud_backend_url: url };
-    settingsRef.current = updated;
-    setSettings(updated);
-    await window.api.updateSettings({ cloud_backend_url: url } as any);
-    setEditingUrl(false);
-    setErrorMsg('');
-    doCheck(updated);
-  };
-
   const doCheck = async (s: any) => {
     if (!s) return;
     const mobile = (s.owner_mobile || s.store_phone || '').trim();
-    const backendUrl = (s.cloud_backend_url || '').trim();
-    if (!mobile || !backendUrl) {
-      setErrorMsg('Mobile number or server URL not configured.');
+    const backendUrl = FALLBACK_BACKEND_URL; // always use baked-in URL
+    if (!mobile) {
+      setErrorMsg('Mobile number not configured in settings.');
       return;
     }
     setChecking(true);
@@ -77,12 +60,15 @@ export default function PendingApproval({ onApproved, onRejected }: PendingAppro
       const result = await checkApprovalStatus(mobile, backendUrl);
       setLastChecked(new Date());
       if (result.status === 'approved') {
-        setStatus('approved');
-        if (result.licenseKey) {
-          await (window as any).api.activateAppV2?.(result.licenseKey);
-        }
+        // Save to DB first — Ctrl+R will always land on main app after this
         await window.api.updateSettings({ approval_status: 'approved' } as any);
-        setTimeout(() => onApproved(), 1800);
+        setStatus('approved');
+        // Activate license non-blocking
+        if (result.licenseKey) {
+          (window as any).api.activateAppV2?.(result.licenseKey).catch(() => {});
+          window.api.updateSettings({ activation_key: result.licenseKey } as any).catch(() => {});
+        }
+        setTimeout(() => onApproved(), 1200);
       } else if (result.status === 'rejected') {
         setStatus('rejected');
         await window.api.updateSettings({ approval_status: 'rejected' } as any);
@@ -91,10 +77,8 @@ export default function PendingApproval({ onApproved, onRejected }: PendingAppro
     } catch (err: any) {
       const detail = err?.response?.status
         ? `Server returned ${err.response.status}`
-        : err?.code === 'ECONNREFUSED' || err?.message?.includes('Network')
-          ? `Cannot connect to ${backendUrl} — is the server running?`
-          : err?.message || 'Unknown error';
-      setErrorMsg(`${detail} — will retry automatically.`);
+        : `Cannot connect to ${FALLBACK_BACKEND_URL} — check your internet connection`;
+      setErrorMsg(`${detail} — retrying every 30s automatically.`);
     } finally {
       setChecking(false);
     }
@@ -269,35 +253,12 @@ export default function PendingApproval({ onApproved, onRejected }: PendingAppro
               </div>
             )}
 
-            {/* Editable server URL */}
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
-                <span style={{ fontSize: 9, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.09em', color: T.sub }}>Server URL</span>
-                {!editingUrl && (
-                  <button onClick={() => setEditingUrl(true)} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3, color: '#3b82f6', fontSize: 10, fontWeight: 700, padding: 0 }}>
-                    <Edit2 size={10} /> Edit
-                  </button>
-                )}
-              </div>
-              {editingUrl ? (
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <input
-                    value={urlInput}
-                    onChange={e => setUrlInput(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && saveUrl()}
-                    style={{ flex: 1, height: 34, padding: '0 10px', background: T.pill, border: `1px solid rgba(59,130,246,0.35)`, borderRadius: 8, color: T.heading, fontSize: 11, fontFamily: 'monospace', outline: 'none' }}
-                    placeholder="http://localhost:4000"
-                    autoFocus
-                  />
-                  <button onClick={saveUrl} style={{ height: 34, padding: '0 12px', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.35)', borderRadius: 8, color: '#3b82f6', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700 }}>
-                    <Check size={12} /> Save
-                  </button>
-                </div>
-              ) : (
-                <p style={{ margin: 0, fontSize: 11, fontFamily: 'monospace', color: T.sub, wordBreak: 'break-all' }}>
-                  {settings?.cloud_backend_url || FALLBACK_BACKEND_URL}
-                </p>
-              )}
+            {/* Server — read-only */}
+            <div style={{ marginBottom: 14, padding: '7px 10px', borderRadius: 8, background: 'rgba(148,163,184,0.07)', border: '1px solid rgba(148,163,184,0.15)', display: 'flex', alignItems: 'center', gap: 7 }}>
+              <span style={{ fontSize: 9, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.09em', color: T.sub, flexShrink: 0 }}>Server</span>
+              <span style={{ fontSize: 11, fontFamily: 'monospace', color: T.sub, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {FALLBACK_BACKEND_URL}
+              </span>
             </div>
 
             {/* Error */}

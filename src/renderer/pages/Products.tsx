@@ -5,7 +5,8 @@ import * as XLSX from 'xlsx';
 import {
   Plus, Pencil, Trash2, Search, Package, Tag, Layers, BarChart2,
   TrendingUp, TrendingDown, AlertCircle, X, Upload, Download,
-  FileSpreadsheet, CheckCircle2, ChevronDown, Boxes, ShoppingCart
+  FileSpreadsheet, CheckCircle2, ChevronDown, Boxes, ShoppingCart,
+  Loader2, Wallet, CreditCard, Archive,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
@@ -37,6 +38,7 @@ interface Product {
   unit_type?: string;
   price_per_kg?: number;
   auto_price_by_weight?: number;
+  stock_source?: 'opening_balance' | 'purchased' | 'unknown'; // accounting tracking
 }
 
 interface ImportRow {
@@ -91,12 +93,25 @@ function ProductFormModal({ isOpen, isEditing, initialProduct, vendors, categori
   const [isSaving, setIsSaving] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
+  // ── Stock accounting state (new-product only, accounting module) ──────────
+  const [stockSource,   setStockSource]   = useState<'opening_balance' | 'purchased'>('opening_balance');
+  const [stockAcctId,   setStockAcctId]   = useState<number | ''>('');
+  const [acctList,      setAcctList]      = useState<{ id: number; name: string; current_balance: number; type: string }[]>([]);
+
   // Reset form state and auto-focus whenever the modal opens
   useEffect(() => {
     if (isOpen) {
       setCurrent({ ...initialProduct });
       setIsSaving(false);
+      setStockSource('opening_balance');
+      setStockAcctId('');
       const t = setTimeout(() => nameRef.current?.focus(), 100);
+      // Load accounts if accounting module is on (for "Just Purchased" option)
+      if (modules.accounting && !isEditing) {
+        window.api.getAccounts().then((res: any) => {
+          if (res?.success && Array.isArray(res.data?.accounts)) setAcctList(res.data.accounts);
+        }).catch(() => {});
+      }
       return () => clearTimeout(t);
     }
   }, [isOpen]); // intentionally exclude initialProduct — it's captured at open time
@@ -115,11 +130,12 @@ function ProductFormModal({ isOpen, isEditing, initialProduct, vendors, categori
     }
     setIsSaving(true);
     try {
-      const productData = {
+      const openingStock = Number(current.stock) || 0;
+      const productData: any = {
         name: current.name.trim(),
         price,
         purchase_price: Number(current.purchase_price) || 0,
-        stock: Number(current.stock) || 0,
+        stock: openingStock,
         category: (current.category || '').trim(),
         barcode: (current.barcode || '').trim(),
         unit: (current.unit || '').trim(),
@@ -134,7 +150,17 @@ function ProductFormModal({ isOpen, isEditing, initialProduct, vendors, categori
         auto_price_by_weight: current.auto_price_by_weight || 0,
         vendor_id: current.vendor_id || null,
         purchase_status: current.purchase_status || 'available',
+        stock_source: current.stock_source || 'unknown',
       };
+
+      // ── Stock accounting (add mode only, accounting module ON) ───────────
+      if (!isEditing && modules.accounting && openingStock > 0) {
+        productData.stock_source = stockSource;
+        if (stockSource === 'purchased' && stockAcctId) {
+          productData.account_id = stockAcctId;
+        }
+      }
+
       const res = isEditing && current.id
         ? await window.api.updateProduct(current.id, productData)
         : await window.api.addProduct(productData);
@@ -280,13 +306,31 @@ function ProductFormModal({ isOpen, isEditing, initialProduct, vendors, categori
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-sm font-semibold">Opening Stock</label>
-                  <Input
-                    type="number" min="0" step="1"
-                    value={current.stock ?? ''}
-                    onChange={e => setCurrent(p => ({ ...p, stock: parseInt(e.target.value) || 0 }))}
-                    placeholder="0" disabled={isSaving}
-                  />
+                  {/* Label and step change based on bakery weight type */}
+                  {(() => {
+                    const isWt = current.is_bakery && (current.unit_type === 'kg' || current.unit_type === 'gram');
+                    const lbl = isWt ? `Opening Stock (${current.unit_type})` : 'Opening Stock';
+                    const stepVal = isWt ? '0.001' : '1';
+                    const parseFn = isWt
+                      ? (v: string) => parseFloat(v) || 0
+                      : (v: string) => parseInt(v) || 0;
+                    return (
+                      <>
+                        <label className="text-sm font-semibold">{lbl}</label>
+                        {isWt && (
+                          <p className="text-[10px] text-orange-500 font-medium -mt-0.5">
+                            Total {current.unit_type} you have right now
+                          </p>
+                        )}
+                        <Input
+                          type="number" min="0" step={stepVal}
+                          value={current.stock ?? ''}
+                          onChange={e => setCurrent(p => ({ ...p, stock: parseFn(e.target.value) }))}
+                          placeholder="0" disabled={isSaving}
+                        />
+                      </>
+                    );
+                  })()}
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-sm font-semibold">Unit of Measure</label>
@@ -311,6 +355,132 @@ function ProductFormModal({ isOpen, isEditing, initialProduct, vendors, categori
                   </select>
                 </div>
               </div>
+
+              {/* ── Stock Accounting Section ── */}
+              {modules.accounting && !isEditing && (Number(current.stock) || 0) > 0 && (
+                <div className="space-y-3 rounded-xl border border-border/60 bg-muted/25 p-4">
+
+                  {/* Header */}
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-6 h-6 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
+                      <Wallet size={12} className="text-primary" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-foreground">Stock Accounting</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        How should this opening stock be recorded?
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Option cards */}
+                  <div className="grid grid-cols-2 gap-2">
+
+                    {/* Opening Balance */}
+                    <button
+                      type="button"
+                      onClick={() => setStockSource('opening_balance')}
+                      disabled={isSaving}
+                      className={cn(
+                        'relative text-left p-3 rounded-xl border-2 transition-all focus:outline-none',
+                        stockSource === 'opening_balance'
+                          ? 'border-primary bg-primary/[0.07]'
+                          : 'border-border/50 bg-background hover:bg-muted/40 hover:border-border',
+                      )}
+                    >
+                      {stockSource === 'opening_balance' && (
+                        <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-primary flex items-center justify-center">
+                          <CheckCircle2 size={10} className="text-primary-foreground" strokeWidth={3} />
+                        </div>
+                      )}
+                      <Archive
+                        size={15}
+                        className={cn('mb-2', stockSource === 'opening_balance' ? 'text-primary' : 'text-muted-foreground')}
+                      />
+                      <p className="text-xs font-bold text-foreground leading-none">Opening Balance</p>
+                      <p className="text-[10px] text-muted-foreground leading-snug mt-1">
+                        Stock existed before this software. No cash account affected.
+                      </p>
+                    </button>
+
+                    {/* Just Purchased */}
+                    <button
+                      type="button"
+                      onClick={() => setStockSource('purchased')}
+                      disabled={isSaving}
+                      className={cn(
+                        'relative text-left p-3 rounded-xl border-2 transition-all focus:outline-none',
+                        stockSource === 'purchased'
+                          ? 'border-emerald-500 bg-emerald-500/[0.07]'
+                          : 'border-border/50 bg-background hover:bg-muted/40 hover:border-border',
+                      )}
+                    >
+                      {stockSource === 'purchased' && (
+                        <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-emerald-500 flex items-center justify-center">
+                          <CheckCircle2 size={10} className="text-white" strokeWidth={3} />
+                        </div>
+                      )}
+                      <CreditCard
+                        size={15}
+                        className={cn('mb-2', stockSource === 'purchased' ? 'text-emerald-500' : 'text-muted-foreground')}
+                      />
+                      <p className="text-xs font-bold text-foreground leading-none">Just Purchased</p>
+                      <p className="text-[10px] text-muted-foreground leading-snug mt-1">
+                        Bought now. Deduct cost from an account.
+                      </p>
+                    </button>
+                  </div>
+
+                  {/* Account selector + cost (purchased only) */}
+                  {stockSource === 'purchased' && (
+                    <div className="space-y-2.5">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-semibold text-foreground">Pay From Account</label>
+                        <select
+                          value={stockAcctId}
+                          onChange={e => setStockAcctId(e.target.value ? Number(e.target.value) : '')}
+                          disabled={isSaving}
+                          className="w-full h-9 px-3 py-2 text-sm rounded-lg border border-border/60 bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50 transition-all"
+                        >
+                          <option value="">— select account —</option>
+                          {acctList.map(a => (
+                            <option key={a.id} value={a.id}>
+                              {a.name} (Rs. {Math.round(a.current_balance).toLocaleString()})
+                            </option>
+                          ))}
+                        </select>
+                        {acctList.length === 0 && (
+                          <p className="text-[10px] text-amber-500 dark:text-amber-400">
+                            No accounts found — add one in the Accounts section first.
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Cost row */}
+                      {(Number(current.purchase_price) || 0) > 0 && (Number(current.stock) || 0) > 0 && (
+                        <div className="flex items-center justify-between rounded-lg border border-border/50 bg-background px-3 py-2.5">
+                          <div>
+                            <p className="text-[10px] font-semibold text-muted-foreground">Cost to deduct</p>
+                            <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                              {Number(current.stock)} × Rs.{Number(current.purchase_price).toLocaleString()}
+                            </p>
+                          </div>
+                          <p className="text-sm font-black text-foreground">
+                            Rs. {Math.round((Number(current.purchase_price) || 0) * (Number(current.stock) || 0)).toLocaleString()}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Tip */}
+                  {stockSource === 'opening_balance' && (
+                    <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
+                      💡 For initial setup. Future stock arrivals use the <strong className="text-foreground/80">Purchases</strong> module.
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
@@ -463,10 +633,30 @@ function ProductFormModal({ isOpen, isEditing, initialProduct, vendors, categori
                       </div>
                     </div>
 
-                    {/* Weight & Unit Type */}
+                    {/* Unit Type (first — drives labels below) */}
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-muted-foreground">Unit Type</label>
+                      <select
+                        className="w-full h-9 px-3 py-2 text-sm rounded-md border bg-background"
+                        value={current.unit_type || 'piece'}
+                        onChange={e => setCurrent(p => ({ ...p, unit_type: e.target.value }))}
+                        disabled={isSaving}
+                      >
+                        <option value="kg">kg — sold by kilogram</option>
+                        <option value="gram">gram — sold by grams</option>
+                        <option value="piece">piece — individual units</option>
+                        <option value="tray">tray — full tray units</option>
+                      </select>
+                    </div>
+
+                    {/* Default Sell Amount + Stock info */}
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1.5">
-                        <label className="text-xs font-semibold text-muted-foreground">Weight Value</label>
+                        <label className="text-xs font-semibold text-muted-foreground">
+                          {(current.unit_type === 'kg' || current.unit_type === 'gram')
+                            ? `Default Sell Qty (${current.unit_type})`
+                            : 'Weight per Unit (kg)'}
+                        </label>
                         <Input
                           type="number" min="0" step="0.001"
                           value={current.weight_value ?? ''}
@@ -480,32 +670,40 @@ function ProductFormModal({ isOpen, isEditing, initialProduct, vendors, categori
                                 : p.price,
                             }));
                           }}
-                          placeholder="e.g. 0.5"
+                          placeholder={current.unit_type === 'gram' ? 'e.g. 250' : 'e.g. 0.5'}
                           disabled={isSaving}
                           className="h-9 text-sm"
                         />
+                        <p className="text-[10px] text-muted-foreground/60">
+                          {(current.unit_type === 'kg' || current.unit_type === 'gram')
+                            ? 'Default portion added to cart'
+                            : 'For info & auto-pricing'}
+                        </p>
                       </div>
-                      <div className="space-y-1.5">
-                        <label className="text-xs font-semibold text-muted-foreground">Unit Type</label>
-                        <select
-                          className="w-full h-9 px-3 py-2 text-sm rounded-md border bg-background"
-                          value={current.unit_type || 'piece'}
-                          onChange={e => setCurrent(p => ({ ...p, unit_type: e.target.value }))}
-                          disabled={isSaving}
-                        >
-                          <option value="kg">kg</option>
-                          <option value="gram">gram</option>
-                          <option value="piece">piece</option>
-                          <option value="tray">tray</option>
-                        </select>
-                      </div>
+
+                      {/* Total stock info panel */}
+                      {(current.unit_type === 'kg' || current.unit_type === 'gram') && (current.stock ?? 0) > 0 && (
+                        <div className="flex flex-col justify-center items-center bg-orange-500/8 border border-orange-500/20 rounded-xl p-2.5 text-center">
+                          <p className="text-[10px] text-orange-600 font-black uppercase tracking-widest">In Stock</p>
+                          <p className="text-lg font-black text-orange-700 dark:text-orange-400 mt-0.5">
+                            {current.stock} {current.unit_type}
+                          </p>
+                          {(current.weight_value ?? 0) > 0 && (
+                            <p className="text-[10px] text-orange-500/70 mt-0.5">
+                              ≈ {((current.stock ?? 0) / (current.weight_value ?? 1)).toFixed(1)} portions
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Auto-Price by Weight toggle */}
                     <div className="flex items-center justify-between bg-card rounded-lg border border-border/50 p-2.5">
                       <div>
                         <p className="text-xs font-semibold">Auto-Price by Weight</p>
-                        <p className="text-[10px] text-muted-foreground">Calculate price = weight × price per kg</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          Price at sale = qty × price per {current.unit_type === 'gram' ? '100g' : 'kg'}
+                        </p>
                       </div>
                       <button
                         type="button"
@@ -516,10 +714,12 @@ function ProductFormModal({ isOpen, isEditing, initialProduct, vendors, categori
                       </button>
                     </div>
 
-                    {/* Price per kg (conditional) */}
+                    {/* Price per kg / 100g (conditional) */}
                     {!!current.auto_price_by_weight && (
                       <div className="space-y-1.5">
-                        <label className="text-xs font-semibold text-muted-foreground">Price per kg (PKR)</label>
+                        <label className="text-xs font-semibold text-muted-foreground">
+                          Price per {current.unit_type === 'gram' ? '100g' : 'kg'} (PKR)
+                        </label>
                         <div className="relative">
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground font-semibold">PKR</span>
                           <Input
@@ -531,7 +731,10 @@ function ProductFormModal({ isOpen, isEditing, initialProduct, vendors, categori
                               setCurrent(p => ({
                                 ...p,
                                 price_per_kg: ppk,
-                                price: (w > 0) ? Math.round(ppk * w) : p.price,
+                                // price = default portion × rate
+                                price: (w > 0 && ppk > 0)
+                                  ? (current.unit_type === 'gram' ? Math.round(ppk * w / 100) : Math.round(ppk * w))
+                                  : p.price,
                               }));
                             }}
                             placeholder="0"
@@ -539,10 +742,22 @@ function ProductFormModal({ isOpen, isEditing, initialProduct, vendors, categori
                             disabled={isSaving}
                           />
                         </div>
-                        {(current.price_per_kg ?? 0) > 0 && (current.weight_value ?? 0) > 0 && (
-                          <p className="text-[11px] text-orange-600 font-medium">
-                            Calculated price: PKR {Math.round((current.price_per_kg ?? 0) * (current.weight_value ?? 0)).toLocaleString('en-PK')}
-                          </p>
+                        {/* Live calculation preview */}
+                        {(current.price_per_kg ?? 0) > 0 && (
+                          <div className="rounded-lg bg-orange-500/8 border border-orange-500/15 p-2.5 space-y-0.5">
+                            {(current.weight_value ?? 0) > 0 && (
+                              <p className="text-[11px] text-orange-700 dark:text-orange-400 font-bold">
+                                Default sell price ({current.weight_value} {current.unit_type}):
+                                PKR {(current.unit_type === 'gram'
+                                  ? Math.round((current.price_per_kg ?? 0) * (current.weight_value ?? 0) / 100)
+                                  : Math.round((current.price_per_kg ?? 0) * (current.weight_value ?? 0))
+                                ).toLocaleString('en-PK')}
+                              </p>
+                            )}
+                            <p className="text-[10px] text-orange-600/70">
+                              In POS: entering qty changes price automatically
+                            </p>
+                          </div>
                         )}
                       </div>
                     )}
@@ -1059,11 +1274,22 @@ export default function Products() {
                         return (
                           <TableRow key={p.id} className="hover:bg-muted/30 transition-colors group">
                             <TableCell className="pl-5">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1.5 flex-wrap">
                                 <div className="font-semibold text-sm">{p.name}</div>
                                 {p.purchase_status === 'to_order' && (
                                   <span className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 shrink-0">
                                     <ShoppingCart size={9} /> To Order
+                                  </span>
+                                )}
+                                {/* Stock source badge (accounting module) */}
+                                {(p as any).stock_source === 'opening_balance' && (p.stock ?? 0) > 0 && (
+                                  <span title="Opening balance stock — no purchase recorded" className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-500 dark:text-slate-400 shrink-0">
+                                    <Archive size={8} /> OB
+                                  </span>
+                                )}
+                                {(p as any).stock_source === 'purchased' && (
+                                  <span title="Opening stock was recorded as a purchase" className="inline-flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-full bg-emerald-100/60 dark:bg-emerald-900/30 border border-emerald-300 dark:border-emerald-700 text-emerald-600 dark:text-emerald-400 shrink-0">
+                                    <CreditCard size={8} /> Paid
                                   </span>
                                 )}
                               </div>
@@ -1402,6 +1628,7 @@ export default function Products() {
         onClose={() => setShowDialog(false)}
         onSaved={load}
       />
+
 
       {/* ── Import Dialog ── */}
       {showImportDialog && createPortal(

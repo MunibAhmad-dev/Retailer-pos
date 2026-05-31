@@ -1,6 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import db from '../db';
-import { Instance } from '../types';
+import prisma from '../db';
 
 /**
  * Authenticates POS instances via their API key.
@@ -10,7 +9,7 @@ import { Instance } from '../types';
  * Returns 403 (not 401) when the instance is blocked so the POS can distinguish
  * "wrong key" from "account blocked" and show an appropriate message.
  */
-export function requireInstance(req: Request, res: Response, next: NextFunction): void {
+export async function requireInstance(req: Request, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.status(401).json({ success: false, error: 'Missing API key' });
@@ -18,9 +17,8 @@ export function requireInstance(req: Request, res: Response, next: NextFunction)
   }
 
   const apiKey = authHeader.slice(7).trim();
-  const instance = db
-    .prepare('SELECT * FROM instances WHERE api_key = ?')
-    .get(apiKey) as Instance | undefined;
+
+  const instance = await prisma.instance.findUnique({ where: { api_key: apiKey } });
 
   if (!instance) {
     res.status(401).json({ success: false, error: 'Invalid API key' });
@@ -36,6 +34,6 @@ export function requireInstance(req: Request, res: Response, next: NextFunction)
     return;
   }
 
-  req.instance = instance;
+  req.instance = instance as any;
   next();
 }

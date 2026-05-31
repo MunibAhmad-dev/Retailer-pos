@@ -72,9 +72,22 @@ const api = {
   // Auth
   verifyPassword: (password: string) => ipcRenderer.invoke('verify-password', password),
 
+  // Software Update
+  getAppVersion:    () => ipcRenderer.invoke('get-app-version'),
+  checkForUpdate:   () => ipcRenderer.invoke('check-for-update'),
+  downloadUpdate:   (url: string, fileName: string) => ipcRenderer.invoke('download-update', url, fileName),
+  installUpdate:    (filePath: string) => ipcRenderer.invoke('install-update', filePath),
+  onUpdateProgress: (cb: (data: { percent: number; downloaded: number; total: number }) => void) => {
+    const sub = (_: any, data: any) => cb(data);
+    ipcRenderer.on('update-download-progress', sub);
+    return () => ipcRenderer.removeListener('update-download-progress', sub);
+  },
+
   // Printing
   printInvoice: (htmlContent: string) => ipcRenderer.invoke('print-invoice', htmlContent),
   saveInvoicePdf: (html: string) => ipcRenderer.invoke('save-invoice-pdf', html),
+  printViaBrowser: (htmlContent: string) => ipcRenderer.invoke('print-via-browser', htmlContent),
+  getPrinters: () => ipcRenderer.invoke('get-printers'),
 
   // Assets
   getLogo: () => ipcRenderer.invoke('get-logo'),
